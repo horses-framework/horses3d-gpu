@@ -10,12 +10,13 @@ module Storage
    public Mesh_t, Element_t, Boundary_t
    public NVARS, NGRADVARS, hasMPIranks, hasBoundaries, isOldStats
    public partitionFileName, boundaryFileName, flowEq
-   public hasExtraGradients, hasMu_NS, hasUt_NS, hasWallY, NSTAT, hasMu_sgs
+   public hasExtraGradients, hasMu_NS, hasUt_NS, hasWtau_NS, hasWallY, NSTAT, hasMu_sgs
 
    integer                          :: NVARS, NGRADVARS
    logical                          :: hasMPIranks, hasBoundaries, isOldStats
    logical                          :: hasExtraGradients = .false.
    logical                          :: hasUt_NS = .false.
+   logical                          :: hasWtau_NS = .false.
    logical                          :: hasMu_NS = .false.
    logical                          :: hasWallY     = .false.
    logical                          :: hasMu_sgs = .false.
@@ -40,6 +41,7 @@ module Storage
       real(kind=RP), pointer     :: Q_z(:,:,:,:)
       real(kind=RP), pointer     :: mu_NS(:,:,:,:)
       real(kind=RP), pointer     :: ut_NS(:,:,:,:)
+      real(kind=RP), pointer     :: wtau_NS(:,:,:,:)
       real(kind=RP), pointer     :: wallY(:,:,:,:)
       real(kind=RP), pointer     :: mu_sgs(:,:,:,:)
       real(kind=RP), pointer     :: stats(:,:,:,:)
@@ -399,7 +401,12 @@ module Storage
                if (hasUt_NS) then
                    allocate( e % ut_NS(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
                    read(fid) e % ut_NS
-               end if 
+               end if
+
+               if (hasWtau_NS) then
+                   allocate( e % wtau_NS(NDIM,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
+                   read(fid) e % wtau_NS
+               end if
 
                if (hasMu_NS) then
                    allocate( e % mu_NS(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )

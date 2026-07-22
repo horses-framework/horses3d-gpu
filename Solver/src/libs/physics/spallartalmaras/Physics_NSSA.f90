@@ -20,6 +20,7 @@
       public  GuermondPopovFlux_ENTROPY
       public  InviscidJacobian
       public  getStressTensor, getFrictionVelocity, getFrictionVelocityWithSign
+      public  getWallShearStressVector
 !
 !     ========
       CONTAINS 
@@ -677,6 +678,31 @@
          u_tau = sqrt(abs(tau_w) / Q(IRHO)) * sign(1.0_RP, tau_w)
 
       End Subroutine getFrictionVelocity
+
+      Subroutine getWallShearStressVector(Q,Q_x,Q_y,Q_z,normal,w_tau)
+         implicit none
+         real(kind=RP), intent(in)      :: Q   (1:NCONS   )
+         real(kind=RP), intent(in)      :: Q_x (1:NGRAD   )
+         real(kind=RP), intent(in)      :: Q_y (1:NGRAD   )
+         real(kind=RP), intent(in)      :: Q_z (1:NGRAD   )
+         real(kind=RP), intent(in)      :: normal (1:NDIM )
+         real(kind=RP), intent(out)     :: w_tau (1:NDIM )
+
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP)                  :: tau (1:NDIM, 1:NDIM   )
+         real(kind=RP)                  :: tau_w_vec(1:NDIM)
+
+         call getStressTensor(Q, Q_x, Q_y, Q_z, tau)
+         tau_w_vec = -1.0_RP * matmul(tau, normal)
+
+         ! keep only the tangential part of the traction vector (remove the wall-normal component)
+         w_tau = tau_w_vec - dot_product(tau_w_vec, normal) * normal
+
+      End Subroutine getWallShearStressVector
 
       Subroutine getFrictionVelocityWithSign(Q,Q_x,Q_y,Q_z,normal,tangent_1,tangent_2,freestream_dir, u_tau)
          implicit none
