@@ -51,7 +51,7 @@ module OutputVariables
       enumerator :: ReSTxx, ReSTxy, ReSTxz, ReSTyy, ReSTyz, ReSTzz
       enumerator :: Vfvec_Vrms, Uf_Vrms, Vf_Vrms, Wf_Vrms
       enumerator :: U_TAU_V, WallY_V, Tauw_V, MU, YPLUS, Cf_V, MUTMINF
-      enumerator :: WTauVec_V, WTAUX_V, WTAUY_V, WTAUZ_V
+      enumerator :: UTauVec_V, UTAUX_V, UTAUY_V, UTAUZ_V
       enumerator :: MU_sgs_V, SENSOR_V
       enumerator :: LASTVARIABLE
    end enum
@@ -135,10 +135,10 @@ module OutputVariables
    character(len=STR_VAR_LEN), parameter  :: UTAUKey       = "u_tau"
    character(len=STR_VAR_LEN), parameter  :: WallYKey      = "wall_distance"
    character(len=STR_VAR_LEN), parameter  :: TauwKey       = "wall_shear"
-   character(len=STR_VAR_LEN), parameter  :: WTauVecKey    = "w_tau"
-   character(len=STR_VAR_LEN), parameter  :: WTauXKey      = "w_tau_x"
-   character(len=STR_VAR_LEN), parameter  :: WTauYKey      = "w_tau_y"
-   character(len=STR_VAR_LEN), parameter  :: WTauZKey      = "w_tau_z"
+   character(len=STR_VAR_LEN), parameter  :: UTauVecKey    = "u_tau_vector"
+   character(len=STR_VAR_LEN), parameter  :: UTauXKey      = "u_tau_x"
+   character(len=STR_VAR_LEN), parameter  :: UTauYKey      = "u_tau_y"
+   character(len=STR_VAR_LEN), parameter  :: UTauZKey      = "u_tau_z"
    character(len=STR_VAR_LEN), parameter  :: muKey         = "mu_ns"
    character(len=STR_VAR_LEN), parameter  :: yplusKey      = "yplus"
    character(len=STR_VAR_LEN), parameter  :: cfKey         = "Cf"
@@ -163,7 +163,7 @@ module OutputVariables
                                                                             VfvecRmsKey, UfRmsKey, VfRmsKey, WfRmsKey, &
                                                                             UTAUKey, WallYKey, TauwKey, muKey, yplusKey, &
                                                                             cfKey, mutminfKey, &
-                                                                            WTauVecKey, WTauXKey, WTauYKey, WTauZKey, &
+                                                                            UTauVecKey, UTauXKey, UTauYKey, UTauZKey, &
                                                                             muSGSKey, sensorKey /)
                                                                         
                                                                         
@@ -713,19 +713,19 @@ module OutputVariables
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * Lreference
 
-               case(WTAUX_V)
+               case(UTAUX_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
                      output(var,i,j,k) =  w_tau(1,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
 
-               case(WTAUY_V)
+               case(UTAUY_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
                      output(var,i,j,k) =  w_tau(2,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
 
-               case(WTAUZ_V)
+               case(UTAUZ_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
                      output(var,i,j,k) =  w_tau(3,i,j,k)
                   end do         ; end do         ; end do
@@ -881,7 +881,7 @@ module OutputVariables
          case(Vfvec_Vrms)
             outputVariablesForVariable = 3
 
-         case(WTauVec_V)
+         case(UTauVec_V)
             outputVariablesForVariable = 3
 
          case default
@@ -947,8 +947,8 @@ module OutputVariables
          case(Vfvec_Vrms)
             output = (/Uf_Vrms, Vf_Vrms, Wf_Vrms/)
 
-         case(WTauVec_V)
-            output = (/WTAUX_V, WTAUY_V, WTAUZ_V/)
+         case(UTauVec_V)
+            output = (/UTAUX_V, UTAUY_V, UTAUZ_V/)
 
          case default
             output = iVar

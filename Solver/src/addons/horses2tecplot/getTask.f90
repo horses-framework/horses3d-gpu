@@ -345,7 +345,7 @@ module getTask
                 select case (trim(addVar))
                     case ("u_tau")
                         hasUt_NS = .true.
-                    case ("w_tau")
+                    case ("u_tau_vector")
                         hasWtau_NS = .true.
                     case ("turb")
                         hasMu_NS = .true.

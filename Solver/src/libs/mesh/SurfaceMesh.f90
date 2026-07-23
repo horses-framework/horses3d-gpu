@@ -131,7 +131,7 @@ Module SurfaceMesh
         sliceTolerance = controlVariables % getValueOrDefault("slice tolerance", 1.0e-4_RP)
         self % saveGradients = controlVariables % logicalValueForKey("surface save gradients") .or. controlVariables % logicalValueForKey("save gradients")
         self % saveUt = controlVariables % logicalValueForKey("surface save utau")
-        self % saveWtau = controlVariables % logicalValueForKey("surface save w_tau")
+        self % saveWtau = controlVariables % logicalValueForKey("surface save utau vector")
         self % saveTurb = controlVariables % logicalValueForKey("surface save turbulent")
 !
 !       get number of surfaces
