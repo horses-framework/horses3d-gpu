@@ -90,6 +90,94 @@ The options are:
 </div>
 
 
+## Surface Solution Files (*.surf.hsol)
+
+`HORSES3D` can save the solution restricted to a set of boundaries (instead of the full volume) at a fixed time interval, while the simulation is running. These *surface solution files* are the recommended way of postprocessing wall quantities such as the friction velocity, the wall shear stress, the skin friction coefficient \(C_f\) or \(y^+\), since they are much smaller than full volume snapshots and can be saved much more frequently.
+
+### Generating surface solution files
+
+Surface saving is configured entirely from the **simulation** control file (the one used to run the solver, not the one used by *horses2plt*). The relevant keywords are:
+
+| Keyword                        | Description                                                                                                                     | Default value |
+|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------|---------------|
+| `boundaries to save`            | *ARRAY*: List of boundary marker names for which a surface solution file is generated, e.g. `[cylinder]`.                        | Not present   |
+| `surface save timestep`         | *REAL*: Simulation-time interval between surface autosaves.                                                                      | Not present   |
+| `surface save gradients`        | *LOGICAL*: Additionally save the velocity gradients (\(\partial u_i/\partial x_j\)) on the surface.                              | `.false.`     |
+| `surface save utau`             | *LOGICAL*: Save the (scalar) friction velocity \(u_\tau\) on no-slip walls.                                                      | `.false.`     |
+| `surface save utau vector`      | *LOGICAL*: Save the friction-velocity **vector** (Cartesian components \(u_{\tau,x}, u_{\tau,y}, u_{\tau,z}\)) on no-slip walls. | `.false.`     |
+| `surface save turbulent`        | *LOGICAL*: Save the wall viscosity (`mu_ns`) and the wall-normal distance (`wall_distance`), needed for \(y^+\).                 | `.false.`     |
+
+Only no-slip wall boundaries actually receive the `utau`/`utau vector`/`turbulent` data; the other flags apply to any saved boundary (walls or slices). `surface save utau` and `surface save utau vector` are independent and can both be active at the same time. Example:
+
+```
+boundaries to save       = [cylinder]
+surface save timestep    = 1e-3
+surface save gradients   = .false.
+surface save turbulent   = .true.
+surface save utau        = .true.
+surface save utau vector = .true.
+```
+
+**Important:** these flags only control what gets *written* to the `.surf.hsol` file at solve time. The corresponding `additional variables` flags used by *horses2plt* (see below) only control what it *expects to read* — they do not create data that was not saved. Requesting a variable in *horses2plt* that was not actually saved by the solver will misalign the reads for every following face and typically causes a crash or an explicit "Array found in file dimensions does not match..." error. Always keep the solver's `surface save ...` flags and *horses2plt*'s `additional variables` in sync, and rebuild/rerun the **solver** binary (not just *horses2plt*) after any code change that affects these fields, since the writing code lives in the shared mesh library.
+
+### Postprocessing surface solution files
+
+Surface files are postprocessed with the same *horses2plt* tool, pointing it at the surface mesh/solution instead of the volume ones:
+
+```
+hmesh file = "MESH/Cylinder_bc001_0000000000.surf.hmesh"
+hsol file  = "RESULTS/surfaces/Cylinder_bc001_0000000906.surf.hsol"
+```
+
+Wall/turbulence-related quantities are not read by default: they must be requested with the `additional variables` keyword, matching what the solver actually saved:
+
+| `additional variables` token | Enables reading                                   | Requires the solver flag(s)                          |
+|-------------------------------|----------------------------------------------------|-------------------------------------------------------|
+| `u_tau`                       | Scalar friction velocity                           | `surface save utau = .true.`                           |
+| `u_tau_vector`                 | Friction-velocity vector (Cartesian components)    | `surface save utau vector = .true.`                    |
+| `turb`                         | Wall viscosity + wall distance (needed for \(y^+\)) | `surface save turbulent = .true.`                      |
+| `les`                          | Sub-grid viscosity (`mu_sgs`)                       | (LES/SGS output, volume files)                          |
+
+```
+additional variables = "[u_tau,u_tau_vector,turb]"
+output variables = Cp, Cf, yplus, wall_distance, u_tau
+```
+
+### Wall/turbulence-related output variables
+
+<div class="multicols" style="column-count: 2;">
+  <ul>
+    <li>\(u\_tau\)</li>
+    <li>\(u\_tau\_x\)</li>
+    <li>\(u\_tau\_y\)</li>
+    <li>\(u\_tau\_z\)</li>
+    <li>\(wall\_shear\)</li>
+    <li>\(Cf\)</li>
+    <li>\(yplus\)</li>
+    <li>\(wall\_distance\)</li>
+    <li>\(mu\_ns\)</li>
+    <li>\(mu\_sgs\)</li>
+  </ul>
+</div>
+
+- **`u_tau`**: friction velocity magnitude, \(u_\tau = \sqrt{|\tau_w|/\rho}\) (velocity units). Requires the `u_tau` additional variable.
+- **`u_tau_x`, `u_tau_y`, `u_tau_z`**: Cartesian components of the friction-velocity vector, same velocity units and sign convention as the local wall shear stress direction (unlike the scalar `u_tau`, which is always reported as a magnitude). By construction, \(\sqrt{u\_tau\_x^2+u\_tau\_y^2+u\_tau\_z^2} = u\_tau\). Requires the `u_tau_vector` additional variable.
+- **Requesting `u_tau` as an output variable is context-dependent**: asking for `output variables = ... u_tau ...` does **not** always produce a single column — it expands automatically depending on which additional variables were activated:
+    - only `u_tau` active &rarr; 1 column: `u_tau`.
+    - only `u_tau_vector` active &rarr; 3 columns: `u_tau_x, u_tau_y, u_tau_z`.
+    - both active &rarr; 4 columns: `u_tau, u_tau_x, u_tau_y, u_tau_z`.
+
+  There is no separate `u_tau_vector` output variable to request; the single `u_tau` key covers every combination.
+- **`wall_shear`**: wall shear stress \(\tau_w = \rho\,u_\tau^2\,\text{sign}(u_\tau)\) (stress units). Requires `u_tau`.
+- **`Cf`**: skin friction coefficient, \(C_f = 2\,\tau_w\) in the code's reference-normalized nondimensional units, equivalent to the standard definition \(C_f = \tau_w/(\tfrac{1}{2}\rho_\infty U_\infty^2)\). Requires `u_tau`. This is **not** algebraically the same as reconstructing `Cf` from `u_tau`/`u_tau_x/y/z` divided by a reference velocity (that reintroduces the *local* density instead of the reference one — see the discussion below).
+- **`yplus`**: wall-normal distance in wall units. Requires `u_tau` and `turb`.
+- **`wall_distance`**: distance from the first fluid solution point to the wall. Requires `turb`.
+- **`mu_ns`**: molecular (+ SGS, if LES) viscosity at the wall. Requires `turb` or `les`.
+
+#### `Cf` vs. a manual `u_tau`-based reconstruction
+
+Because \(u_\tau\) is defined using the **local** density, \(u_\tau=\sqrt{|\tau_w|/\rho_{local}}\), reconstructing a skin friction coefficient by hand as `2*(u_tau/U_ref)^2` (e.g. in ParaView, from `u_tau` or `sqrt(u_tau_x^2+u_tau_y^2+u_tau_z^2)`) computes \(2\,\tau_w/\rho_{local}\), **not** the standard \(C_f = 2\,\tau_w/\rho_\infty\) that the `Cf` output variable already provides directly. The two only coincide where \(\rho_{local}\approx\rho_\infty\), and can differ substantially in regions with strong local compressibility effects (e.g. across a shock, or a stagnation point). Prefer the `Cf` output variable over a manual reconstruction unless you specifically need it normalized by the local density (e.g. to compare against another code that itself uses that convention).
+
 ## Statistics Files (*.stats.hsol)
 Statistics files can generate the standard variables as well as the following variables (being \(S_{ij}\) the components of the Reynolds Stress tensor):
 
