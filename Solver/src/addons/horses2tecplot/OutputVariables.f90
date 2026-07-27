@@ -18,7 +18,7 @@ module OutputVariables
    use SMConstants
    use PhysicsStorage
    use Headers
-   use Storage, only: NVARS, hasMPIranks
+   use Storage, only: NVARS, hasMPIranks, hasUt_NS, hasWtau_NS
 
    private
    public   no_of_outputVariables, preliminarNoOfVariables, askedVariables, getNoOfCommas
@@ -51,7 +51,7 @@ module OutputVariables
       enumerator :: ReSTxx, ReSTxy, ReSTxz, ReSTyy, ReSTyz, ReSTzz
       enumerator :: Vfvec_Vrms, Uf_Vrms, Vf_Vrms, Wf_Vrms
       enumerator :: U_TAU_V, WallY_V, Tauw_V, MU, YPLUS, Cf_V, MUTMINF
-      enumerator :: UTauVec_V, UTAUX_V, UTAUY_V, UTAUZ_V
+      enumerator :: UTAUX_V, UTAUY_V, UTAUZ_V
       enumerator :: MU_sgs_V, SENSOR_V
       enumerator :: LASTVARIABLE
    end enum
@@ -135,7 +135,6 @@ module OutputVariables
    character(len=STR_VAR_LEN), parameter  :: UTAUKey       = "u_tau"
    character(len=STR_VAR_LEN), parameter  :: WallYKey      = "wall_distance"
    character(len=STR_VAR_LEN), parameter  :: TauwKey       = "wall_shear"
-   character(len=STR_VAR_LEN), parameter  :: UTauVecKey    = "u_tau_vector"
    character(len=STR_VAR_LEN), parameter  :: UTauXKey      = "u_tau_x"
    character(len=STR_VAR_LEN), parameter  :: UTauYKey      = "u_tau_y"
    character(len=STR_VAR_LEN), parameter  :: UTauZKey      = "u_tau_z"
@@ -163,7 +162,7 @@ module OutputVariables
                                                                             VfvecRmsKey, UfRmsKey, VfRmsKey, WfRmsKey, &
                                                                             UTAUKey, WallYKey, TauwKey, muKey, yplusKey, &
                                                                             cfKey, mutminfKey, &
-                                                                            UTauVecKey, UTauXKey, UTauYKey, UTauZKey, &
+                                                                            UTauXKey, UTauYKey, UTauZKey, &
                                                                             muSGSKey, sensorKey /)
                                                                         
                                                                         
@@ -881,8 +880,14 @@ module OutputVariables
          case(Vfvec_Vrms)
             outputVariablesForVariable = 3
 
-         case(UTauVec_V)
-            outputVariablesForVariable = 3
+         case(U_TAU_V)
+            if ( hasUt_NS .and. hasWtau_NS ) then
+               outputVariablesForVariable = 4
+            else if ( hasWtau_NS ) then
+               outputVariablesForVariable = 3
+            else
+               outputVariablesForVariable = 1
+            end if
 
          case default
             outputVariablesForVariable = 1
@@ -947,8 +952,14 @@ module OutputVariables
          case(Vfvec_Vrms)
             output = (/Uf_Vrms, Vf_Vrms, Wf_Vrms/)
 
-         case(UTauVec_V)
-            output = (/UTAUX_V, UTAUY_V, UTAUZ_V/)
+         case(U_TAU_V)
+            if ( hasUt_NS .and. hasWtau_NS ) then
+               output = (/U_TAU_V, UTAUX_V, UTAUY_V, UTAUZ_V/)
+            else if ( hasWtau_NS ) then
+               output = (/UTAUX_V, UTAUY_V, UTAUZ_V/)
+            else
+               output = (/U_TAU_V/)
+            end if
 
          case default
             output = iVar
