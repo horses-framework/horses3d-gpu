@@ -200,7 +200,7 @@ module StorageClass
       real(kind=RP), dimension(:,:),       allocatable :: rho
       real(kind=RP), dimension(:,:,:),     allocatable :: mu_NS
       real(kind=RP), dimension(:,:),       allocatable :: u_tau_NS
-      real(kind=RP), dimension(:,:,:),     allocatable :: w_tau_NS ! tangential wall shear stress vector (1:NDIM,:,:)
+      real(kind=RP), dimension(:,:,:),     allocatable :: w_tau_NS ! friction velocity vector, velocity units (1:NDIM,:,:)
       real(kind=RP), dimension(:,:),       allocatable :: wallNodeDistance ! for BC walls, distance to the first fluid node
 #ifdef ACOUSTIC
       real(kind=RP), dimension(:,:,:),     allocatable :: Qbase ! Base flow State vector

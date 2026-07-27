@@ -716,19 +716,19 @@ module OutputVariables
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
                      output(var,i,j,k) =  w_tau(1,i,j,k)
                   end do         ; end do         ; end do
-                  if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
+                  if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
 
                case(UTAUY_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
                      output(var,i,j,k) =  w_tau(2,i,j,k)
                   end do         ; end do         ; end do
-                  if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
+                  if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
 
                case(UTAUZ_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
                      output(var,i,j,k) =  w_tau(3,i,j,k)
                   end do         ; end do         ; end do
-                  if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
+                  if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
 
                case(MU_sgs_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)

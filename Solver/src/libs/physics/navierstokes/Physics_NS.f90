@@ -919,7 +919,7 @@
          real(kind=RP), intent(in)      :: Q_y (1:NGRAD   )
          real(kind=RP), intent(in)      :: Q_z (1:NGRAD   )
          real(kind=RP), intent(in)      :: normal (1:NDIM )
-         real(kind=RP), intent(out)     :: w_tau (1:NDIM )
+         real(kind=RP), intent(out)     :: w_tau (1:NDIM )   ! friction velocity vector (velocity units)
 
 !
 !        ---------------
@@ -928,12 +928,23 @@
 !
          real(kind=RP)                  :: tau (1:NDIM, 1:NDIM   )
          real(kind=RP)                  :: tau_w_vec(1:NDIM)
+         real(kind=RP)                  :: tangential_tau(1:NDIM)
+         real(kind=RP)                  :: tau_w_mag
 
          call getStressTensor(Q, Q_x, Q_y, Q_z, tau)
          tau_w_vec = -1.0_RP * matmul(tau, normal)
 
          ! keep only the tangential part of the traction vector (remove the wall-normal component)
-         w_tau = tau_w_vec - dot_product(tau_w_vec, normal) * normal
+         tangential_tau = tau_w_vec - dot_product(tau_w_vec, normal) * normal
+         tau_w_mag = sqrt(dot_product(tangential_tau, tangential_tau))
+
+         ! rescale the (stress-valued) tangential traction into a friction-velocity vector:
+         ! same direction as the wall shear stress, magnitude equal to sqrt(|tau_w|/rho)
+         if ( tau_w_mag > tiny(1.0_RP) ) then
+            w_tau = tangential_tau * sqrt(tau_w_mag / Q(IRHO)) / tau_w_mag
+         else
+            w_tau = 0.0_RP
+         end if
 
       End Subroutine getWallShearStressVector
 
