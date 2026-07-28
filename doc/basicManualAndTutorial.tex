@@ -608,6 +608,115 @@ The options are:
 \end{itemize}
 \end{multicols}
 
+\subsection{Surface Solution Files (*.surf.hsol)} \label{PostProc:surfhsol}
+
+HORSES3D can save the solution restricted to a set of boundaries (instead of the full volume) at a fixed time interval, while the simulation is running. These \textit{surface solution files} are the recommended way of postprocessing wall quantities such as the friction velocity, the wall shear stress, the skin friction coefficient $C_f$ or $y^+$, since they are much smaller than full volume snapshots and can be saved much more frequently.
+
+\subsubsection{Generating surface solution files}
+
+Surface saving is configured entirely from the \textbf{simulation} control file (the one used to run the solver, not the one used by \textit{horses2plt}). The relevant keywords are:
+
+\begin{longtable}{|p{4cm}|p{10cm}|p{2.2cm}|}
+\caption{Keywords for generating surface solution files.} \label{tab:surfacesave} \\
+\hline
+\multicolumn{1}{|c|}{\textbf{Keyword}} & \multicolumn{1}{c|}{\textbf{Description}} & \multicolumn{1}{c|}{\textbf{Default value}} \\ \hline
+\endfirsthead
+
+boundaries to save 	& \textit{ARRAY}: List of boundary marker names for which a surface solution file is generated, e.g. \textit{[cylinder]}. & Not present \\ \hline
+
+surface save timestep 	& \textit{REAL}: Simulation-time interval between surface autosaves. & Not present \\ \hline
+
+surface save gradients 	& \textit{LOGICAL}: Additionally save the velocity gradients ($\partial u_i/\partial x_j$) on the surface. & \textit{.false.} \\ \hline
+
+surface save utau 	& \textit{LOGICAL}: Save the (scalar) friction velocity $u_\tau$ on no-slip walls. & \textit{.false.} \\ \hline
+
+surface save utau vector 	& \textit{LOGICAL}: Save the friction-velocity \textbf{vector} (Cartesian components $u_{\tau,x}, u_{\tau,y}, u_{\tau,z}$) on no-slip walls. & \textit{.false.} \\ \hline
+
+surface save turbulent 	& \textit{LOGICAL}: Save the wall viscosity (\textit{mu\_ns}) and the wall-normal distance (\textit{wall\_distance}), needed for $y^+$. & \textit{.false.} \\ \hline
+\end{longtable}
+
+Only no-slip wall boundaries actually receive the \textit{utau}/\textit{utau vector}/\textit{turbulent} data; the other flags apply to any saved boundary (walls or slices). \textit{surface save utau} and \textit{surface save utau vector} are independent and can both be active at the same time. Example:
+
+\begin{lstlisting}[language=bash]
+boundaries to save       = [cylinder]
+surface save timestep    = 1e-3
+surface save gradients   = .false.
+surface save turbulent   = .true.
+surface save utau        = .true.
+surface save utau vector = .true.
+\end{lstlisting}
+
+\textbf{Important:} these flags only control what gets \textit{written} to the \textit{.surf.hsol} file at solve time. The corresponding \textit{additional variables} flags used by \textit{horses2plt} (see below) only control what it \textit{expects to read} --- they do not create data that was not saved. Requesting a variable in \textit{horses2plt} that was not actually saved by the solver will misalign the reads for every following face and typically causes a crash or an explicit ``Array found in file dimensions does not match...'' error. Always keep the solver's \textit{surface save ...} flags and \textit{horses2plt}'s \textit{additional variables} in sync, and rebuild/rerun the \textbf{solver} binary (not just \textit{horses2plt}) after any code change that affects these fields, since the writing code lives in the shared mesh library.
+
+\subsubsection{Postprocessing surface solution files}
+
+Surface files are postprocessed with the same \textit{horses2plt} tool, pointing it at the surface mesh/solution instead of the volume ones:
+
+\begin{lstlisting}[language=bash]
+hmesh file = "MESH/Cylinder_bc001_0000000000.surf.hmesh"
+hsol file  = "RESULTS/surfaces/Cylinder_bc001_0000000906.surf.hsol"
+\end{lstlisting}
+
+Wall/turbulence-related quantities are not read by default: they must be requested with the \textit{additional variables} keyword, matching what the solver actually saved:
+
+\begin{longtable}{|p{3.2cm}|p{6.5cm}|p{4.5cm}|}
+\caption{\textit{additional variables} tokens for surface postprocessing.} \label{tab:additionalvariables} \\
+\hline
+\multicolumn{1}{|c|}{\textbf{Token}} & \multicolumn{1}{c|}{\textbf{Enables reading}} & \multicolumn{1}{c|}{\textbf{Requires the solver flag(s)}} \\ \hline
+\endfirsthead
+
+u\_tau 	& Scalar friction velocity & surface save utau = .true. \\ \hline
+
+u\_tau\_vector 	& Friction-velocity vector (Cartesian components) & surface save utau vector = .true. \\ \hline
+
+turb 	& Wall viscosity + wall distance (needed for $y^+$) & surface save turbulent = .true. \\ \hline
+
+les 	& Sub-grid viscosity (\textit{mu\_sgs}) & (LES/SGS output, volume files) \\ \hline
+\end{longtable}
+
+\begin{lstlisting}[language=bash]
+additional variables = "[u_tau,u_tau_vector,turb]"
+output variables = Cp, Cf, yplus, wall_distance, u_tau
+\end{lstlisting}
+
+\subsubsection{Wall/turbulence-related output variables}
+
+\begin{multicols}{2}
+\begin{itemize}
+\item $u\_tau$
+\item $u\_tau\_x$
+\item $u\_tau\_y$
+\item $u\_tau\_z$
+\item $wall\_shear$
+\item $Cf$
+\item $yplus$
+\item $wall\_distance$
+\item $mu\_ns$
+\item $mu\_sgs$
+\end{itemize}
+\end{multicols}
+
+\begin{itemize}
+\item \textbf{u\_tau}: friction velocity magnitude, $u_\tau = \sqrt{|\tau_w|/\rho}$ (velocity units). Requires the \textit{u\_tau} additional variable.
+\item \textbf{u\_tau\_x, u\_tau\_y, u\_tau\_z}: Cartesian components of the friction-velocity vector, same velocity units and sign convention as the local wall shear stress direction (unlike the scalar \textit{u\_tau}, which is always reported as a magnitude). By construction, $\sqrt{u\_tau\_x^2+u\_tau\_y^2+u\_tau\_z^2} = u\_tau$. Requires the \textit{u\_tau\_vector} additional variable.
+\item \textbf{Requesting \textit{u\_tau} as an output variable is context-dependent}: asking for \textit{output variables = ... u\_tau ...} does \textbf{not} always produce a single column --- it expands automatically depending on which additional variables were activated:
+  \begin{itemize}
+  \item only \textit{u\_tau} active $\rightarrow$ 1 column: \textit{u\_tau}.
+  \item only \textit{u\_tau\_vector} active $\rightarrow$ 3 columns: \textit{u\_tau\_x, u\_tau\_y, u\_tau\_z}.
+  \item both active $\rightarrow$ 4 columns: \textit{u\_tau, u\_tau\_x, u\_tau\_y, u\_tau\_z}.
+  \end{itemize}
+  There is no separate \textit{u\_tau\_vector} output variable to request; the single \textit{u\_tau} key covers every combination.
+\item \textbf{wall\_shear}: wall shear stress $\tau_w = \rho\,u_\tau^2\,\text{sign}(u_\tau)$ (stress units). Requires \textit{u\_tau}.
+\item \textbf{Cf}: skin friction coefficient, $C_f = 2\,\tau_w$ in the code's reference-normalized nondimensional units, equivalent to the standard definition $C_f = \tau_w/(\tfrac{1}{2}\rho_\infty U_\infty^2)$. Requires \textit{u\_tau}. This is \textbf{not} algebraically the same as reconstructing \textit{Cf} from \textit{u\_tau}/\textit{u\_tau\_x/y/z} divided by a reference velocity (that reintroduces the \textit{local} density instead of the reference one --- see the discussion below).
+\item \textbf{yplus}: wall-normal distance in wall units. Requires \textit{u\_tau} and \textit{turb}.
+\item \textbf{wall\_distance}: distance from the first fluid solution point to the wall. Requires \textit{turb}.
+\item \textbf{mu\_ns}: molecular (+ SGS, if LES) viscosity at the wall. Requires \textit{turb} or \textit{les}.
+\end{itemize}
+
+\paragraph{Cf vs. a manual u\_tau-based reconstruction}
+
+Because $u_\tau$ is defined using the \textbf{local} density, $u_\tau=\sqrt{|\tau_w|/\rho_{local}}$, reconstructing a skin friction coefficient by hand as \textit{2*(u\_tau/U\_ref)\textasciicircum2} (e.g. in ParaView, from \textit{u\_tau} or \textit{sqrt(u\_tau\_x\textasciicircum2+u\_tau\_y\textasciicircum2+u\_tau\_z\textasciicircum2)}) computes $2\,\tau_w/\rho_{local}$, \textbf{not} the standard $C_f = 2\,\tau_w/\rho_\infty$ that the \textit{Cf} output variable already provides directly. The two only coincide where $\rho_{local}\approx\rho_\infty$, and can differ substantially in regions with strong local compressibility effects (e.g. across a shock, or a stagnation point). Prefer the \textit{Cf} output variable over a manual reconstruction unless you specifically need it normalized by the local density (e.g. to compare against another code that itself uses that convention).
+
 \subsection{Statistics Files (*.stats.hsol)}
 Statistics files generate following variables by default (being Sij the components of the Reynolds Stress tensor):
 
