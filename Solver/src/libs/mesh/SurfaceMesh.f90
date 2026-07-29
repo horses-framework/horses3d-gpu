@@ -747,10 +747,12 @@ Module SurfaceMesh
           end if
       end select
 
+#if defined(NAVIERSTOKES)
       if (saveUt) padding = padding + 1
       if (saveWtau) padding = padding + NDIM
       ! save mu_NS and y, for y+ value calc
       if (saveTurb) padding = padding + 2
+#endif
 !
 !     Create new file
 !     ---------------

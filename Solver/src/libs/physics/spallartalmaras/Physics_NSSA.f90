@@ -707,7 +707,7 @@
 
          ! rescale the (stress-valued) tangential traction into a friction-velocity vector:
          ! same direction as the wall shear stress, magnitude equal to sqrt(|tau_w|/rho)
-         if ( tau_w_mag > tiny(1.0_RP) ) then
+         if ( tau_w_mag > tiny(1.0_RP) .and. Q(IRHO) > tiny(1.0_RP) ) then
             w_tau = tangential_tau * sqrt(tau_w_mag / Q(IRHO)) / tau_w_mag
          else
             w_tau = 0.0_RP
