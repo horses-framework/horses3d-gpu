@@ -18,7 +18,7 @@ module OutputVariables
    use SMConstants
    use PhysicsStorage
    use Headers
-   use Storage, only: NVARS, hasMPIranks, hasUt_NS, hasWtau_NS
+   use Storage, only: NVARS, hasMPIranks, hasUt_NS, hasUTauVec_NS
 
    private
    public   no_of_outputVariables, preliminarNoOfVariables, askedVariables, getNoOfCommas
@@ -301,7 +301,7 @@ module OutputVariables
          real(kind=RP) :: Sym, Asym
          logical       :: hasAdditionalVariables
 
-         hasAdditionalVariables = hasUt_NS .or. hasWtau_NS .or. hasWallY .or. hasMu_NS .or. hasStats .or. hasGradients .or. hasSensor .or. hasMu_sgs
+         hasAdditionalVariables = hasUt_NS .or. hasUTauVec_NS .or. hasWallY .or. hasMu_NS .or. hasStats .or. hasGradients .or. hasSensor .or. hasMu_sgs
 
          do var = 1, noOutput
             if ( hasAdditionalVariables .or. (outputVarNames(var) .le. NO_OF_INVISCID_VARIABLES ) ) then
@@ -313,7 +313,7 @@ module OutputVariables
                            mu_NS => e % mu_NSout, &
                            wallY => e % wallY, &
                            u_tau=> e % ut_NS, &
-                           w_tau=> e % wtau_NS, &
+                           u_tau_vec=> e % u_tau_vec_NS, &
                            mu_sgs => e % mu_sgsout, &
                            stats => e % statsout)
 
@@ -714,19 +714,19 @@ module OutputVariables
 
                case(UTAUX_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
-                     output(var,i,j,k) =  w_tau(1,i,j,k)
+                     output(var,i,j,k) =  u_tau_vec(1,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
 
                case(UTAUY_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
-                     output(var,i,j,k) =  w_tau(2,i,j,k)
+                     output(var,i,j,k) =  u_tau_vec(2,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
 
                case(UTAUZ_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
-                     output(var,i,j,k) =  w_tau(3,i,j,k)
+                     output(var,i,j,k) =  u_tau_vec(3,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
 
@@ -881,9 +881,9 @@ module OutputVariables
             outputVariablesForVariable = 3
 
          case(U_TAU_V)
-            if ( hasUt_NS .and. hasWtau_NS ) then
+            if ( hasUt_NS .and. hasUTauVec_NS ) then
                outputVariablesForVariable = 4
-            else if ( hasWtau_NS ) then
+            else if ( hasUTauVec_NS ) then
                outputVariablesForVariable = 3
             else
                outputVariablesForVariable = 1
@@ -953,9 +953,9 @@ module OutputVariables
             output = (/Uf_Vrms, Vf_Vrms, Wf_Vrms/)
 
          case(U_TAU_V)
-            if ( hasUt_NS .and. hasWtau_NS ) then
+            if ( hasUt_NS .and. hasUTauVec_NS ) then
                output = (/U_TAU_V, UTAUX_V, UTAUY_V, UTAUZ_V/)
-            else if ( hasWtau_NS ) then
+            else if ( hasUTauVec_NS ) then
                output = (/UTAUX_V, UTAUY_V, UTAUZ_V/)
             else
                output = (/U_TAU_V/)

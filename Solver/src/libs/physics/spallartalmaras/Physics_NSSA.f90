@@ -20,7 +20,7 @@
       public  GuermondPopovFlux_ENTROPY
       public  InviscidJacobian
       public  getStressTensor, getFrictionVelocity, getFrictionVelocityWithSign
-      public  getWallShearStressVector
+      public  getFrictionVelocityVector
 !
 !     ========
       CONTAINS 
@@ -679,14 +679,14 @@
 
       End Subroutine getFrictionVelocity
 
-      Subroutine getWallShearStressVector(Q,Q_x,Q_y,Q_z,normal,w_tau)
+      Subroutine getFrictionVelocityVector(Q,Q_x,Q_y,Q_z,normal,u_tau_vec)
          implicit none
          real(kind=RP), intent(in)      :: Q   (1:NCONS   )
          real(kind=RP), intent(in)      :: Q_x (1:NGRAD   )
          real(kind=RP), intent(in)      :: Q_y (1:NGRAD   )
          real(kind=RP), intent(in)      :: Q_z (1:NGRAD   )
          real(kind=RP), intent(in)      :: normal (1:NDIM )
-         real(kind=RP), intent(out)     :: w_tau (1:NDIM )   ! friction velocity vector (velocity units)
+         real(kind=RP), intent(out)     :: u_tau_vec (1:NDIM )   ! friction velocity vector (velocity units)
 
 !
 !        ---------------
@@ -708,12 +708,12 @@
          ! rescale the (stress-valued) tangential traction into a friction-velocity vector:
          ! same direction as the wall shear stress, magnitude equal to sqrt(|tau_w|/rho)
          if ( tau_w_mag > tiny(1.0_RP) .and. Q(IRHO) > tiny(1.0_RP) ) then
-            w_tau = tangential_tau * sqrt(tau_w_mag / Q(IRHO)) / tau_w_mag
+            u_tau_vec = tangential_tau * sqrt(tau_w_mag / Q(IRHO)) / tau_w_mag
          else
-            w_tau = 0.0_RP
+            u_tau_vec = 0.0_RP
          end if
 
-      End Subroutine getWallShearStressVector
+      End Subroutine getFrictionVelocityVector
 
       Subroutine getFrictionVelocityWithSign(Q,Q_x,Q_y,Q_z,normal,tangent_1,tangent_2,freestream_dir, u_tau)
          implicit none
