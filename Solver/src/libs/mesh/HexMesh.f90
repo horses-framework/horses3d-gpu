@@ -3190,7 +3190,7 @@ slavecoord:             DO l = 1, 4
 !        the state vector (Q), and optionally the gradients.
 !     ************************************************************************
 !
-     subroutine HexMesh_SaveSolution(self, iter, time, name, saveGradients, saveSensor_, saveLES_)
+     subroutine HexMesh_SaveSolution(self, iter, time, name, saveGradients, saveSensor_, saveLES_, saveArtVisc_)
          use SolutionFile
          use MPI_Process_Info
          implicit none
@@ -3201,6 +3201,7 @@ slavecoord:             DO l = 1, 4
          logical,             intent(in)        :: saveGradients
          logical, optional,   intent(in)        :: saveSensor_
          logical, optional,   intent(in)        :: saveLES_
+         logical, optional,   intent(in)        :: saveArtVisc_
 !
 !        ---------------
 !        Local variables
@@ -3210,7 +3211,7 @@ slavecoord:             DO l = 1, 4
          integer(kind=AddrInt)            :: pos
          real(kind=RP)                    :: refs(NO_OF_SAVED_REFS)
          real(kind=RP), allocatable       :: Q(:,:,:,:)
-         logical                          :: saveSensor, saveLES
+         logical                          :: saveSensor, saveLES, saveArtVisc
 #if (!defined(NAVIERSTOKES) || !defined(INCNS))
          logical                          :: computeGradients = .true.
 #endif
@@ -3260,6 +3261,11 @@ slavecoord:             DO l = 1, 4
          else
             saveLES = .false.
          end if
+         if (present(saveArtVisc_)) then
+            saveArtVisc = saveArtVisc_
+         else
+            saveArtVisc = .false.
+         end if
 
          if (saveGradients .and. computeGradients) then
             if (saveSensor) then
@@ -3281,7 +3287,8 @@ slavecoord:             DO l = 1, 4
             padding = NCONS
          end if
 
-         if (saveLES) padding = padding + 2
+         if (saveLES)     padding = padding + 2
+         if (saveArtVisc) padding = padding + 1
 !
 !        Write arrays
 !        ------------
@@ -3349,7 +3356,16 @@ slavecoord:             DO l = 1, 4
                write(fid) Q
                deallocate(Q)
 #endif
-          end if 
+          end if
+
+          if (saveArtVisc) then
+#if defined(NAVIERSTOKES) && (!(SPALARTALMARAS))
+               allocate(Q(1,0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+               Q(1,:,:,:) = e % storage % mu_art(:,:,:)
+               write(fid) Q
+               deallocate(Q)
+#endif
+          end if
 
             end associate
          end do

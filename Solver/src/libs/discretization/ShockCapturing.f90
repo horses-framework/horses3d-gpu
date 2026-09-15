@@ -698,6 +698,10 @@ module ShockCapturing
 
          end select
 !
+!        Store artificial viscosity coefficient for output
+!        -------------------------------------------------
+         e % storage % mu_art = mu
+!
 !        Compute the viscous flux
 !        ------------------------
          do k = 0, e % Nxyz(3) ; do j = 0, e % Nxyz(2) ; do i = 0, e % Nxyz(1)

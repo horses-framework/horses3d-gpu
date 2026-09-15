@@ -353,6 +353,8 @@ module getTask
                     case ("les")
                         hasMu_NS = .true.
                         hasMu_sgs     = .true.
+                    case ("artvisc")
+                        hasMu_art = .true.
                     case default
                         write(STD_OUT,'(A,A,A)') "The variable asked, ", trim(addVar), " is not implemented"
                 end select

@@ -53,6 +53,7 @@ module OutputVariables
       enumerator :: U_TAU_V, WallY_V, Tauw_V, MU, YPLUS, Cf_V, MUTMINF
       enumerator :: UTAUX_V, UTAUY_V, UTAUZ_V
       enumerator :: MU_sgs_V, SENSOR_V
+      enumerator :: MU_ART_V
       enumerator :: LASTVARIABLE
    end enum
 
@@ -144,6 +145,7 @@ module OutputVariables
    character(len=STR_VAR_LEN), parameter  :: mutminfKey    = "mutminf"
    character(len=STR_VAR_LEN), parameter  :: muSGSKey      = "mu_sgs"
    character(len=STR_VAR_LEN), parameter  :: sensorKey     = "sensor"
+   character(len=STR_VAR_LEN), parameter  :: muArtKey      = "mu_art"
 
    character(len=STR_VAR_LEN), dimension(NO_OF_VARIABLES), parameter  :: variableNames = (/ QKey,QDOTKey, RHOKey, UKey, VKey, WKey, &
                                                                             PKey, P0Key, RHODOTKey, RHOUDOTKey, RHOVDOTKey, RHOWDOTKey, RHOEDOTKey, &
@@ -163,7 +165,8 @@ module OutputVariables
                                                                             UTAUKey, WallYKey, TauwKey, muKey, yplusKey, &
                                                                             cfKey, mutminfKey, &
                                                                             UTauXKey, UTauYKey, UTauZKey, &
-                                                                            muSGSKey, sensorKey /)
+                                                                            muSGSKey, sensorKey, &
+                                                                            muArtKey /)
                                                                         
                                                                         
                                                                
@@ -301,7 +304,7 @@ module OutputVariables
          real(kind=RP) :: Sym, Asym
          logical       :: hasAdditionalVariables
 
-         hasAdditionalVariables = hasUt_NS .or. hasUTauVec_NS .or. hasWallY .or. hasMu_NS .or. hasStats .or. hasGradients .or. hasSensor .or. hasMu_sgs
+         hasAdditionalVariables = hasUt_NS .or. hasUTauVec_NS .or. hasWallY .or. hasMu_NS .or. hasStats .or. hasGradients .or. hasSensor .or. hasMu_sgs .or. hasMu_art
 
          do var = 1, noOutput
             if ( hasAdditionalVariables .or. (outputVarNames(var) .le. NO_OF_INVISCID_VARIABLES ) ) then
@@ -315,6 +318,7 @@ module OutputVariables
                            u_tau=> e % ut_NS, &
                            u_tau_vec=> e % u_tau_vec_NS, &
                            mu_sgs => e % mu_sgsout, &
+                           mu_art => e % mu_artout, &
                            stats => e % statsout)
 
                select case (outputVarNames(var))
@@ -791,6 +795,11 @@ module OutputVariables
 !
                case(SENSOR_V)
                   output(var,:,:,:) = e % sensor
+
+               case(MU_ART_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) = mu_art(1,i,j,k)
+                  end do         ; end do         ; end do
 
                end select
                end associate

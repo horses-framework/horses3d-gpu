@@ -87,6 +87,7 @@ module StorageClass
 #ifndef ACOUSTIC
       real(kind=RP),           allocatable :: mu_NS(:,:,:,:)       ! (mu, beta, kappa) artificial
       real(kind=RP),           allocatable :: mu_turb_NS(:,:,:)    ! mu of LES
+      real(kind=RP),           allocatable :: mu_art(:,:,:)        ! artificial viscosity (shock capturing)
 #endif
       real(kind=RP),           allocatable :: dF_dgradQ(:,:,:,:,:,:,:) ! NSE Jacobian with respect to gradQ
       type(Statistics_t)                   :: stats                ! NSE statistics
@@ -838,6 +839,7 @@ module StorageClass
 #ifndef ACOUSTIC
          allocate( self % mu_NS(1:3,0:Nx,0:Ny,0:Nz) )
          allocate( self % mu_turb_NS(0:Nx,0:Ny,0:Nz) )
+         allocate( self % mu_art(0:Nx,0:Ny,0:Nz) )
 #endif
 
          if (analyticalJac) call self % constructAnJac      ! TODO: This is actually not specific for NS
@@ -908,6 +910,7 @@ module StorageClass
 #ifndef ACOUSTIC
          self % mu_NS  = 0.0_RP
          self % mu_turb_NS  = 0.0_RP
+         self % mu_art = 0.0_RP
 #endif
 #if defined (SPALARTALMARAS)
          self % S_SA   = 0.0_RP
@@ -1035,6 +1038,7 @@ module StorageClass
 #ifndef ACOUSTIC
          to % mu_NS     = from % mu_NS
          to % mu_turb_NS     = from % mu_turb_NS
+         to % mu_art    = from % mu_art
 #endif
          to % stats     = from % stats
 
@@ -1147,6 +1151,7 @@ module StorageClass
 #ifndef ACOUSTIC
          safedeallocate(self % mu_NS)
          safedeallocate(self % mu_turb_NS)
+         safedeallocate(self % mu_art)
 #endif
          safedeallocate(self % rho)
 

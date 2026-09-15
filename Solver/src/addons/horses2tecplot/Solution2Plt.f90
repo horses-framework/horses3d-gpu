@@ -202,6 +202,7 @@ module Solution2PltModule
          if (hasMu_NS) e % mu_NSout(1:,0:,0:,0:) => e % mu_NS
          if (hasWallY) e % wallYout(1:,0:,0:,0:) => e % wallY
          if (hasMu_sgs) e % mu_sgsout(1:,0:,0:,0:) => e % mu_sgs
+         if (hasMu_art) e % mu_artout(1:,0:,0:,0:) => e % mu_art
 
       end subroutine ProjectStorageGaussPoints
 !
@@ -374,6 +375,7 @@ module Solution2PltModule
             if (hasMu_NS) e % mu_NSout(1:,0:,0:,0:) => e % mu_NS
             if (hasWallY) e % wallYout(1:,0:,0:,0:) => e % wallY
             if (hasMu_sgs) e % mu_sgsout(1:,0:,0:,0:) => e % mu_sgs
+            if (hasMu_art) e % mu_artout(1:,0:,0:,0:) => e % mu_art
 
          else
             allocate( e % Qout(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
@@ -410,7 +412,12 @@ module Solution2PltModule
 
             if (hasMu_sgs) then
                 allocate( e % mu_sgsout(1,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
-                call prolongSolutionToGaussPoints(1, e % Nsol, e % mu_sgs, e % Nout, e % mu_sgsout, Tx, Ty, Tz)            
+                call prolongSolutionToGaussPoints(1, e % Nsol, e % mu_sgs, e % Nout, e % mu_sgsout, Tx, Ty, Tz)
+            end if
+
+            if (hasMu_art) then
+                allocate( e % mu_artout(1,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+                call prolongSolutionToGaussPoints(1, e % Nsol, e % mu_art, e % Nout, e % mu_artout, Tx, Ty, Tz)
             end if
 
             allocate( e % QDot_out(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
@@ -673,7 +680,17 @@ module Solution2PltModule
                do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
                   e % mu_sgsout(:,i,j,k) = e % mu_sgsout(:,i,j,k) + e % mu_sgs(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
                end do            ; end do            ; end do
-            end do            ; end do            ; end do  
+            end do            ; end do            ; end do
+         end if
+
+         if (hasMu_art) then
+            allocate( e % mu_artout(1,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % mu_artout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % mu_artout(:,i,j,k) = e % mu_artout(:,i,j,k) + e % mu_art(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
+            end do            ; end do            ; end do
          end if
 
       end subroutine ProjectStorageHomogeneousPoints

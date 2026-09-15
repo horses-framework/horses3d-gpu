@@ -40,7 +40,7 @@
       TYPE( FTValueDictionary)            :: controlVariables
       TYPE( DGSem )                       :: sem
       TYPE( TimeIntegrator_t )            :: timeIntegrator
-      LOGICAL                             :: success, saveGradients, saveSensor, saveLES
+      LOGICAL                             :: success, saveGradients, saveSensor, saveLES, saveArtVisc
       integer                             :: initial_iteration
       INTEGER                             :: ierr
       real(kind=RP)                       :: initial_time, t_elaps
@@ -188,10 +188,11 @@
 !
       IF(controlVariables % stringValueForKey(solutionFileNameKey,LINE_LENGTH) /= "none")     THEN
          solutionFileName = trim(getFileName(controlVariables % stringValueForKey(solutionFileNameKey,LINE_LENGTH))) // ".hsol"
-         saveGradients    = controlVariables % logicalValueForKey(saveGradientsToSolutionKey)
-         saveSensor       = controlVariables % logicalValueForKey(saveSensorToSolutionKey)
-         saveLES = controlVariables % logicalValueForKey(saveLESToSolutionKey)
-         CALL sem % mesh % SaveSolution(sem % numberOfTimeSteps, timeIntegrator % time, solutionFileName, saveGradients, saveSensor, saveLES)
+         saveGradients = controlVariables % logicalValueForKey(saveGradientsToSolutionKey)
+         saveSensor    = controlVariables % logicalValueForKey(saveSensorToSolutionKey)
+         saveLES       = controlVariables % logicalValueForKey(saveLESToSolutionKey)
+         saveArtVisc   = controlVariables % logicalValueForKey(saveArtViscToSolutionKey)
+         CALL sem % mesh % SaveSolution(sem % numberOfTimeSteps, timeIntegrator % time, solutionFileName, saveGradients, saveSensor, saveLES, saveArtVisc)
          if ( sem % particles % active ) then
             call sem % particles % ExportToVTK ( sem % numberOfTimeSteps, sem % monitors % solution_file )
          end if
