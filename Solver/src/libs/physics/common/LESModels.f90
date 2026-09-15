@@ -316,12 +316,7 @@ module LESModels
          real(kind=RP)  :: U_y(NDIM)
          real(kind=RP)  :: U_z(NDIM)
          !-------------------------------------------------------
-#if !defined(INCNS)
-         !call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-         call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-#else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-#endif
 
 !
 !        Compute symmetric part of the deformation tensor
@@ -432,18 +427,13 @@ module LESModels
          integer        :: i,j
          integer        :: k   ! The third index
          !-------------------------------------------------------
-         
-#if !defined(INCNS)
-         !call getVelocityGradients  (Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-         call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-#else
+
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-#endif
 
          gradV(1,:) = U_x(1:3)
          gradV(2,:) = U_y(1:3)
          gradV(3,:) = U_z(1:3)
-         do i = 1, 3 
+         do i = 1, 3
             do j = 1, 3 
                S(i,j)      = 0.5_RP*(gradV(i,j)+gradV(j,i))
 
@@ -570,14 +560,9 @@ module LESModels
          integer        :: i,j,k
          !-------------------------------------------------------
 
-#if !defined(INCNS)
-         !call getVelocityGradients  (Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-         call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-#else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-#endif
 
-         delta2 = delta*delta 
+         delta2 = delta*delta
          gradV(1,:) = U_x(1:3)
          gradV(2,:) = U_y(1:3)
          gradV(3,:) = U_z(1:3)
