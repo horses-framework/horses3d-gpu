@@ -336,21 +336,15 @@ module getTask
             select case (trim(gradient_variables))
             case ("state")
                call SetGradientVariables(GRADVARS_STATE)
-               write(STD_OUT,'(30X,A,A30,A)') "->", "Gradient variables: ", "State (conserved)"
             case ("entropy")
                call SetGradientVariables(GRADVARS_ENTROPY)
-               write(STD_OUT,'(30X,A,A30,A)') "->", "Gradient variables: ", "Entropy"
             case ("energy")
                call SetGradientVariables(GRADVARS_ENERGY)
-               write(STD_OUT,'(30X,A,A30,A)') "->", "Gradient variables: ", "Energy"
             case default
                write(STD_OUT,'(A,A,A)') "Gradient variables '", trim(gradient_variables), &
                                         "' not recognized, defaulting to state"
                call SetGradientVariables(GRADVARS_STATE)
-               write(STD_OUT,'(30X,A,A30,A)') "->", "Gradient variables: ", "State (conserved) [default]"
             end select
-         else
-            write(STD_OUT,'(30X,A,A30,A)') "->", "Gradient variables: ", "State (conserved) [default]"
          end if
          if (controlVariables % containsKey("flow equations")) then
             flowEq = controlVariables%stringValueForKey("flow equations", LINE_LENGTH)
