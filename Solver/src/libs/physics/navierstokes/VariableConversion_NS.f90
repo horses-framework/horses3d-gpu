@@ -430,9 +430,9 @@ module VariableConversion_NS
          pDivRho = Pressure(Q) / Q(IRHO)
          U = Q(IRHOU:IRHOW) / Q(IRHO)
 
-         U_x = pDivRho * Q_x(IRHOU:IRHOW) + U / pDivRho * Q_x(IRHOE)
-         U_y = pDivRho * Q_y(IRHOU:IRHOW) + U / pDivRho * Q_y(IRHOE)
-         U_z = pDivRho * Q_z(IRHOU:IRHOW) + U / pDivRho * Q_z(IRHOE)
+         U_x = pDivRho * (Q_x(IRHOU:IRHOW) + U * Q_x(IRHOE))
+         U_y = pDivRho * (Q_y(IRHOU:IRHOW) + U * Q_y(IRHOE))
+         U_z = pDivRho * (Q_z(IRHOU:IRHOW) + U * Q_z(IRHOE))
 
       end subroutine getVelocityGradients_Entropy
 
