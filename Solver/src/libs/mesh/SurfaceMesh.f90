@@ -45,6 +45,7 @@ Module SurfaceMesh
         logical                                                 :: saveUt           ! flag use for save friction velocity in bcs
         logical                                                 :: saveUtauVector   ! flag use for save friction-velocity vector in bcs
         logical                                                 :: saveTurb         ! flag use for save wall normal distance, and viscosity
+        logical                                                 :: saveArtVisc      ! flag use for save artificial viscosity coefficient
 
         contains
 
@@ -133,6 +134,7 @@ Module SurfaceMesh
         self % saveUt = controlVariables % logicalValueForKey("surface save utau")
         self % saveUtauVector = controlVariables % logicalValueForKey("surface save utau vector")
         self % saveTurb = controlVariables % logicalValueForKey("surface save turbulent")
+        self % saveArtVisc = controlVariables % logicalValueForKey("save artvisc with solution")
 !
 !       get number of surfaces
 !       ----------------------
@@ -468,7 +470,7 @@ Module SurfaceMesh
         character(len=LINE_LENGTH)                          :: FinalName      !  Final name for particular file
         logical                                             :: saveFWH
         integer, dimension(:), allocatable                  :: elemSide
-        logical                                             :: saveUt, saveUtauVector, saveTurb
+        logical                                             :: saveUt, saveUtauVector, saveTurb, saveArtVisc
 
         if (.not. self % active) return
         saveFWH = controlVariables % logicalValueForKey("acoustic solution save") .or. self % mergeFWHandBC
@@ -476,6 +478,7 @@ Module SurfaceMesh
             saveUt = .false.
             saveUtauVector = .false.
             saveTurb = .false.
+            saveArtVisc = .false.
             if (.not. self % surfaceActive(i)) cycle
             !skip fwh if not requested
             if ( (self % surfaceTypes(i) .eq. SURFACE_TYPE_FWH) .and. (.not. saveFWH) ) cycle
@@ -497,11 +500,12 @@ Module SurfaceMesh
                     saveUtauVector = self % saveUtauVector
                     saveTurb = self % saveTurb
                 end if
+                saveArtVisc = self % saveArtVisc
             end if
             call SurfaceSaveSolution(self % zones(i), mesh, time, iter, FinalName, self % totalFaces(i), &
                                  self % globalFid(1:nf,i), self % faceOffset(1:nf,i), elemSide, &
                                  self % surfaceTypes(i),self % saveGradients, &
-                                 self % mergeFWHandBC, saveUt, saveUtauVector, saveTurb)
+                                 self % mergeFWHandBC, saveUt, saveUtauVector, saveTurb, saveArtVisc)
         end do
 !
     End Subroutine SurfSaveAllSolution
@@ -660,7 +664,7 @@ Module SurfaceMesh
 !/////////////////////////////////////////////////////////////////////////////////////////////
 !         
    Subroutine SurfaceSaveSolution(surface_zone, mesh, time, iter, name, no_of_faces, fGlobID, faceOffset, eSides, surface_type, &
-                                  saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb)
+                                  saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb, saveArtVisc)
 
 !     *******************************************************************
 !        This subroutine saves the solution from the face storage to a binary file
@@ -680,7 +684,7 @@ Module SurfaceMesh
       character(len=*), intent(in)                         :: name
       integer, dimension(:), intent(in)                    :: fGlobID, faceOffset
       integer, dimension(:), intent(in)                    :: eSides
-      logical                                              :: saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb
+      logical                                              :: saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb, saveArtVisc
 
       ! local variables
       integer                                              :: zoneFaceID, meshFaceID, solution_type
@@ -752,6 +756,7 @@ Module SurfaceMesh
       if (saveUtauVector) padding = padding + NDIM
       ! save mu_NS and y, for y+ value calc
       if (saveTurb) padding = padding + 2
+      if (saveArtVisc) padding = padding + 1
 #endif
 !
 !     Create new file
@@ -842,7 +847,15 @@ Module SurfaceMesh
                write(fid) Q
                deallocate(Q)
 #endif
-          end if 
+          end if
+          if (saveArtVisc) then
+#if defined(NAVIERSTOKES)
+               allocate(Q(1,0:Nx,0:Ny))
+               Q(1,:,:) = mesh % elements(f % elementIDs(eSides(zoneFaceID))) % storage % mu_art(0,0,0)
+               write(fid) Q
+               deallocate(Q)
+#endif
+          end if
           safedeallocate(Q)
       end do
 
