@@ -375,9 +375,9 @@ module Storage
                   read(fid) e % Q_z
 
 !                 Call set_getVelocityGradients to make the pointer to the actual subroutine, is needed only for the NS
-!                 Set state as is the default option TODO point to the correct one if its possible (oscar note)
+!                 grad_vars is set from "gradient variables" in the .h2t control file (default: state)
 !                 ---------------------------
-                  call set_getVelocityGradients(GRADVARS_STATE)
+                  call set_getVelocityGradients(grad_vars)
 
                   ! Following block works for NS, CH, NSCH and iNS .... but not iNSCH: change 5 by 6 to use iNSCH (NS won't work)
                   if (NVARS .ge. 5) then

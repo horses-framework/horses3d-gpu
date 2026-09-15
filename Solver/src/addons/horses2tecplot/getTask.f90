@@ -119,12 +119,13 @@ module getTask
 
       subroutine getTaskTypeControl(taskType, meshName, no_of_solutions, solutionNames, solutionTypes, fixedOrder, Nout, basis,mode, oldStats, writeMesh)
          use FTValueDictionaryClass, only: FTValueDictionary
-         use FileReaders           , only: ReadControlFile 
+         use FileReaders           , only: ReadControlFile
          use FileReadingUtilities, only: getCharArrayFromString
          use SolutionFile
          use Storage
          use OutputVariables       , only: outScale, hasVariablesFlag, askedVariables, Lreference
          use Utilities, only: toLower
+         use PhysicsStorage        , only: GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY, SetGradientVariables
          implicit none
          integer,                                 intent(out) :: taskType
          character(len=*),                        intent(out) :: meshName
@@ -149,7 +150,7 @@ module getTask
 		 character(len=LINE_LENGTH)								:: inputResultName
          real(kind=RP)                                          :: r
          integer                                                :: pos, pos2
-         character(len=LINE_LENGTH)                             :: additionalVariablesStr, addVar
+         character(len=LINE_LENGTH)                             :: additionalVariablesStr, addVar, gradient_variables
          character(len=LINE_LENGTH), dimension(:), allocatable  :: additionalVariablesArr
          integer                                                :: i, fID, reason
          integer                                                :: fileType
@@ -328,6 +329,23 @@ module getTask
          oldStats = controlVariables % logicalValueForKey("legacy stats")
          Lreference = controlVariables % getValueOrDefault("reference length (m)", 1.0_RP)
          hasExtraGradients = controlVariables % logicalValueForKey("has gradients")
+
+         if (controlVariables % containsKey("gradient variables")) then
+            gradient_variables = controlVariables % stringValueForKey("gradient variables", LINE_LENGTH)
+            call toLower(gradient_variables)
+            select case (trim(gradient_variables))
+            case ("state")
+               call SetGradientVariables(GRADVARS_STATE)
+            case ("entropy")
+               call SetGradientVariables(GRADVARS_ENTROPY)
+            case ("energy")
+               call SetGradientVariables(GRADVARS_ENERGY)
+            case default
+               write(STD_OUT,'(A,A,A)') "Gradient variables '", trim(gradient_variables), &
+                                        "' not recognized, defaulting to state"
+               call SetGradientVariables(GRADVARS_STATE)
+            end select
+         end if
          if (controlVariables % containsKey("flow equations")) then
             flowEq = controlVariables%stringValueForKey("flow equations", LINE_LENGTH)
             call toLower(flowEq)
