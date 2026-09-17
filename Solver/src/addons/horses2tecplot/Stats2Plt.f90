@@ -120,7 +120,15 @@ module Stats2PltModule
 !
 !        Add the variables
 !        -----------------
-         write(fid,'(A,A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
+         if (NSTAT .gt. 0 .and. statsHasFavre) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz","FUU","FVV","FWW","FUV","FUW","FVW"'
+         else if (NSTAT .gt. 0) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
+         else if (statsHasFavre) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","FUU","FVV","FWW","FUV","FUW","FVW"'
+         else
+            write(fid,'(A)') 'VARIABLES = "x","y","z"'
+         end if
 !
 !        Write each element zone
 !        -----------------------
@@ -167,7 +175,8 @@ module Stats2PltModule
 
          end if
 
-         e % statsout(1:,0:,0:,0:) => e % stats
+         if (NSTAT .gt. 0) e % statsout(1:,0:,0:,0:) => e % stats
+         if (statsHasFavre) e % favreout(1:,0:,0:,0:) => e % favre
 
       end subroutine ProjectStorageGaussPoints
 !
@@ -256,7 +265,15 @@ module Stats2PltModule
 !
 !        Add the variables
 !        -----------------
-         write(fid,'(A,A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
+         if (NSTAT .gt. 0 .and. statsHasFavre) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz","FUU","FVV","FWW","FUV","FUW","FVW"'
+         else if (NSTAT .gt. 0) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
+         else if (statsHasFavre) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","FUU","FVV","FWW","FUV","FUW","FVW"'
+         else
+            write(fid,'(A)') 'VARIABLES = "x","y","z"'
+         end if
 !
 !        Write elements
 !        --------------
@@ -310,11 +327,18 @@ module Stats2PltModule
 !        Project the solution
 !        --------------------
          if ( all( e % Nsol .eq. e % Nout ) ) then
-            e % statsout(1:,0:,0:,0:) => e % stats
-   
+            if (NSTAT .gt. 0) e % statsout(1:,0:,0:,0:) => e % stats
+            if (statsHasFavre) e % favreout(1:,0:,0:,0:) => e % favre
+
          else
-            allocate( e % statsout(1:9,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
-            call prolongSolutionToGaussPoints(9, e % Nsol, e % stats, e % Nout, e % statsout, Tx, Ty, Tz)
+            if (NSTAT .gt. 0) then
+               allocate( e % statsout(1:NSTAT,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+               call prolongSolutionToGaussPoints(NSTAT, e % Nsol, e % stats, e % Nout, e % statsout, Tx, Ty, Tz)
+            end if
+            if (statsHasFavre) then
+               allocate( e % favreout(1:NFAVRE_VARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+               call prolongSolutionToGaussPoints(NFAVRE_VARS, e % Nsol, e % favre, e % Nout, e % favreout, Tx, Ty, Tz)
+            end if
 
          end if
 
@@ -413,7 +437,15 @@ module Stats2PltModule
 !
 !        Add the variables
 !        -----------------
-         write(fid,'(A,A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
+         if (NSTAT .gt. 0 .and. statsHasFavre) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz","FUU","FVV","FWW","FUV","FUW","FVW"'
+         else if (NSTAT .gt. 0) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
+         else if (statsHasFavre) then
+            write(fid,'(A)') 'VARIABLES = "x","y","z","FUU","FVV","FWW","FUV","FUW","FVW"'
+         else
+            write(fid,'(A)') 'VARIABLES = "x","y","z"'
+         end if
 !
 !        Write elements
 !        --------------
@@ -470,14 +502,24 @@ module Stats2PltModule
 !
 !        Project the solution
 !        --------------------
-         allocate( e % statsout(1:9,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
-         e % statsout = 0.0_RP
-
-         do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
-            do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
-               e % statsout(:,i,j,k) = e % statsout(:,i,j,k) + e % stats(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+         if (NSTAT .gt. 0) then
+            allocate( e % statsout(1:NSTAT,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % statsout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % statsout(:,i,j,k) = e % statsout(:,i,j,k) + e % stats(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
             end do            ; end do            ; end do
-         end do            ; end do            ; end do
+         end if
+         if (statsHasFavre) then
+            allocate( e % favreout(1:NFAVRE_VARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % favreout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % favreout(:,i,j,k) = e % favreout(:,i,j,k) + e % favre(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
+            end do            ; end do            ; end do
+         end if
 
       end subroutine ProjectStorageHomogeneousPoints
 !
@@ -503,23 +545,40 @@ module Stats2PltModule
 !        Local variables
 !        ---------------
 !
-         integer                    :: i,j,k,var
+         integer                    :: i,j,k,var,nout_vars,voff
          character(len=LINE_LENGTH) :: formatout
 !
 !        Get output variables
 !        --------------------
-         allocate (e % outputVars(1:9,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) ) 
-         do k = 0, e % Nout(3)   ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
-            e % outputVars(1,i,j,k) = e % statsout(U,i,j,k)
-            e % outputVars(2,i,j,k) = e % statsout(V,i,j,k)
-            e % outputVars(3,i,j,k) = e % statsout(W,i,j,k)
-            e % outputVars(4,i,j,k) = e % statsout(UU,i,j,k) - POW2(e % statsout(U,i,j,k))
-            e % outputVars(5,i,j,k) = e % statsout(VV,i,j,k) - POW2(e % statsout(V,i,j,k))
-            e % outputVars(6,i,j,k) = e % statsout(WW,i,j,k) - POW2(e % statsout(W,i,j,k))
-            e % outputVars(7,i,j,k) = e % statsout(UV,i,j,k) - e % statsout(U,i,j,k) * e % statsout(V,i,j,k)
-            e % outputVars(8,i,j,k) = e % statsout(UW,i,j,k) - e % statsout(U,i,j,k) * e % statsout(W,i,j,k)
-            e % outputVars(9,i,j,k) = e % statsout(VW,i,j,k) - e % statsout(V,i,j,k) * e % statsout(W,i,j,k)
-         end do                  ; end do                ; end do
+         nout_vars = 0
+         if (NSTAT .gt. 0) nout_vars = nout_vars + 9
+         if (statsHasFavre) nout_vars = nout_vars + NFAVRE_VARS
+         allocate (e % outputVars(1:nout_vars,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+         voff = 0
+         if (NSTAT .gt. 0) then
+            do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+               e % outputVars(1,i,j,k) = e % statsout(U,i,j,k)
+               e % outputVars(2,i,j,k) = e % statsout(V,i,j,k)
+               e % outputVars(3,i,j,k) = e % statsout(W,i,j,k)
+               e % outputVars(4,i,j,k) = e % statsout(UU,i,j,k) - POW2(e % statsout(U,i,j,k))
+               e % outputVars(5,i,j,k) = e % statsout(VV,i,j,k) - POW2(e % statsout(V,i,j,k))
+               e % outputVars(6,i,j,k) = e % statsout(WW,i,j,k) - POW2(e % statsout(W,i,j,k))
+               e % outputVars(7,i,j,k) = e % statsout(UV,i,j,k) - e % statsout(U,i,j,k) * e % statsout(V,i,j,k)
+               e % outputVars(8,i,j,k) = e % statsout(UW,i,j,k) - e % statsout(U,i,j,k) * e % statsout(W,i,j,k)
+               e % outputVars(9,i,j,k) = e % statsout(VW,i,j,k) - e % statsout(V,i,j,k) * e % statsout(W,i,j,k)
+            end do ; end do ; end do
+            voff = 9
+         end if
+         if (statsHasFavre) then
+            do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+               e % outputVars(voff+1,i,j,k) = e % favreout(1,i,j,k)
+               e % outputVars(voff+2,i,j,k) = e % favreout(2,i,j,k)
+               e % outputVars(voff+3,i,j,k) = e % favreout(3,i,j,k)
+               e % outputVars(voff+4,i,j,k) = e % favreout(4,i,j,k)
+               e % outputVars(voff+5,i,j,k) = e % favreout(5,i,j,k)
+               e % outputVars(voff+6,i,j,k) = e % favreout(6,i,j,k)
+            end do ; end do ; end do
+         end if
 !
 !        Write variables
 !        ---------------        
