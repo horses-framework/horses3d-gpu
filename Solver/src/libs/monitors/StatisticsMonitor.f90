@@ -6,6 +6,7 @@ module StatisticsMonitor
    use StorageClass
    use StopwatchClass
    use Utilities, only: GreatestCommonDivisor, toLower
+   use MPI_Process_Info
 #ifdef _HAS_MPI_
    use mpi
 #endif
@@ -195,7 +196,6 @@ module StatisticsMonitor
       end subroutine StatisticsMonitor_WriteFile
 
       subroutine StatisticsMonitor_Update(self, mesh, iter, t, solution_file)
-         use MPI_Process_Info
          implicit none
          class(StatisticsMonitor_t) :: self
          class(HexMesh)             :: mesh
@@ -454,7 +454,6 @@ module StatisticsMonitor
 
       subroutine StatisticsMonitor_GetState(self, reset, dump)
          use ParamfileRegions
-         use MPI_Process_Info
          implicit none
          class(StatisticsMonitor_t)    :: self
          logical, intent(out)          :: reset, dump
