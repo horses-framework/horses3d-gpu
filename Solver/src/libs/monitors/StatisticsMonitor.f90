@@ -98,7 +98,7 @@ module StatisticsMonitor
          stats_doReynolds = .true.
          stats_doFavre    = .false.
          averaging        = ""
-         call readCharacterValueInRegion(trim(paramFile), "averaging", averaging, "#define statistics", "#end")
+         call readValueInRegion(trim(paramFile), "averaging", averaging, "#define statistics", "#end")
          call toLower(averaging)
          if (len_trim(averaging) > 0) then
             stats_doReynolds = (index(averaging, "reynolds") > 0)
