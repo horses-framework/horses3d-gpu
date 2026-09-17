@@ -31,7 +31,7 @@
       private
       public  EulerFlux
       public  ViscousFlux_STATE, ViscousFlux_ENTROPY, ViscousFlux_ENERGY
-      public  GuermondPopovFlux_ENTROPY, GuermondPopovFlux_STATE
+      public  GuermondPopovFlux_ENTROPY, GuermondPopovFlux_STATE, GuermondPopovFlux_ENERGY
       public  InviscidJacobian, ComputeEigenvaluesForState
       public  getStressTensor, ViscousJacobian, getFrictionVelocity, getFrictionVelocityWithSign
 !
@@ -616,6 +616,82 @@
          F = mu*F
 
       end subroutine GuermondPopovFlux_STATE
+
+      pure subroutine GuermondPopovFlux_ENERGY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+!
+!        Guermond-Popov (2014) fluxes for ENERGY (primitive [ρ,u,v,w,T]) gradient variables:
+!           FGP = κ[∇ρ, u∇ρ, v∇ρ, w∇ρ, ∇(ρe_i)+½|v|²∇ρ] + μρ[0, ∇ˢv, v·∇ˢv]
+!
+!        Velocity gradients are available directly; ∇ρ = Q_x(IRHO);
+!        energy correction: ρ∂eᵢ/∂x = ρ·Q_x(IRHOE)·cv/gammaM2  (cv=1/(γ-1), gammaM2=γM²)
+!
+         implicit none
+         integer,       intent(in)  :: nEqn
+         integer,       intent(in)  :: nGradEqn
+         real(kind=RP), intent(in)  :: Q   (1:nEqn     )
+         real(kind=RP), intent(in)  :: Q_x (1:nGradEqn)
+         real(kind=RP), intent(in)  :: Q_y (1:nGradEqn)
+         real(kind=RP), intent(in)  :: Q_z (1:nGradEqn)
+         real(kind=RP), intent(in)  :: mu
+         real(kind=RP), intent(in)  :: beta
+         real(kind=RP), intent(in)  :: kappa
+         real(kind=RP), intent(out) :: F(1:nEqn, 1:NDIM)
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP) :: invRho, u(NDIM), u_x(NDIM), u_y(NDIM), u_z(NDIM), e
+         real(kind=RP) :: grad_rho(NDIM)
+         real(kind=RP) :: invGamM2
+
+         invRho   = 1.0_RP / Q(IRHO)
+         u        = Q(IRHOU:IRHOW) * invRho
+         e        = Q(IRHOE) * invRho           ! total specific energy E from conserved state
+         invGamM2 = dimensionless % cv / dimensionless % gammaM2   ! 1/((γ-1)γM²)
+
+         u_x = Q_x(IRHOU:IRHOW)   ! ∂u/∂x, ∂v/∂x, ∂w/∂x — direct from ENERGY grad vars
+         u_y = Q_y(IRHOU:IRHOW)
+         u_z = Q_z(IRHOU:IRHOW)
+
+         grad_rho(IX) = Q_x(IRHO)
+         grad_rho(IY) = Q_y(IRHO)
+         grad_rho(IZ) = Q_z(IRHO)
+!
+!        Add the part related to ∇ˢv
+         F(IRHO, IX) = 0.0_RP
+         F(IRHOU,IX) = Q(IRHO)*u_x(IX)
+         F(IRHOV,IX) = Q(IRHO)*0.5_RP*(u_x(IY)+u_y(IX))
+         F(IRHOW,IX) = Q(IRHO)*0.5_RP*(u_x(IZ)+u_z(IX))
+         F(IRHOE,IX) = F(IRHOU,IX)*u(IX) + F(IRHOV,IX)*u(IY) + F(IRHOW,IX)*u(IZ)
+
+         F(IRHO, IY) = 0.0_RP
+         F(IRHOU,IY) = F(IRHOV,IX)
+         F(IRHOV,IY) = Q(IRHO)*u_y(IY)
+         F(IRHOW,IY) = Q(IRHO)*0.5_RP*(u_y(IZ)+u_z(IY))
+         F(IRHOE,IY) = F(IRHOU,IY)*u(IX) + F(IRHOV,IY)*u(IY) + F(IRHOW,IY)*u(IZ)
+
+         F(IRHO, IZ) = 0.0_RP
+         F(IRHOU,IZ) = F(IRHOW,IX)
+         F(IRHOV,IZ) = F(IRHOW,IY)
+         F(IRHOW,IZ) = Q(IRHO)*u_z(IZ)
+         F(IRHOE,IZ) = F(IRHOU,IZ)*u(IX) + F(IRHOV,IZ)*u(IY) + F(IRHOW,IZ)*u(IZ)
+!
+!        Add the part related to ∇ρ  (e = E as total specific energy)
+         F(:,IX) = F(:,IX) + grad_rho(IX)*[1.0_RP,u(IX),u(IY),u(IZ),e]
+         F(:,IY) = F(:,IY) + grad_rho(IY)*[1.0_RP,u(IX),u(IY),u(IZ),e]
+         F(:,IZ) = F(:,IZ) + grad_rho(IZ)*[1.0_RP,u(IX),u(IY),u(IZ),e]
+!
+!        Correct energy row: add ρ*∂eᵢ/∂x = ρ*Q_x(IRHOE)/(γM²(γ-1))
+!        (E*∂ρ/∂x already added above; correct value is E*∂ρ/∂x + ρ*∂eᵢ/∂x)
+         F(IRHOE,IX) = F(IRHOE,IX) + Q(IRHO) * Q_x(IRHOE) * invGamM2
+         F(IRHOE,IY) = F(IRHOE,IY) + Q(IRHO) * Q_y(IRHOE) * invGamM2
+         F(IRHOE,IZ) = F(IRHOE,IZ) + Q(IRHO) * Q_z(IRHOE) * invGamM2
+!
+!        Multiply by μ
+         F = mu*F
+
+      end subroutine GuermondPopovFlux_ENERGY
 !
 !///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 !
