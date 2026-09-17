@@ -200,7 +200,7 @@ module StatisticsMonitor
          if ( dump .or. ( (mod(iter, self % dump_interval) == 0) .and. (iter > self % starting_iteration .or. t > self % starting_time) ) ) then
             write(fileName,'(A,A,I10.10,A)') trim(solution_file),'.stats.',iter,'.hsol'
             call mesh % SaveStatistics(iter, t, trim(fileName), self % saveGradients)
-            write(STD_OUT,'(A,A,A)') '   *** Saving statistics file as "',trim(fileName),'".'
+            if ( MPI_Process % isRoot ) write(STD_OUT,'(A,A,A)') '   *** Saving statistics file as "',trim(fileName),'".'
          end if
          call Stopwatch % Start("Solver") ! We dont want to measure the time of the statistics dump
 
