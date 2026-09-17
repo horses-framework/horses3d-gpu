@@ -225,10 +225,14 @@ module Storage
          integer                        :: iter
          real(kind=RP)                  :: time
          real(kind=RP), allocatable     :: Qdot(:,:,:,:)
+         real(kind=RP), allocatable     :: grads_tmp(:,:,:,:)
          character(len=1024)  :: msg
          character(len=64)    :: eIDstr
          integer              :: ios
          character(len=256)   :: iomsg_str
+         integer              :: ndim_peek
+         integer              :: pos_peek, stats_reset_pos
+         logical              :: statsHasGrads
 
          self % solutionName = trim(solutionName)
 		 write(STD_OUT,'(10X,A,A)') "Loading Solution File:"
@@ -325,6 +329,9 @@ module Storage
          ! call set_getVelocityGradients(GRADVARS_STATE) ! FIXME: MIGHT BE NEEDED FOR HORSES2PLT
          ! write(STD_OUT,'(15X,A)') " WARNING horses2tecplot.90 :: Velocity Gradients set to default (GRADVARS_STATE)"
       
+         statsHasGrads    = .false.
+         stats_reset_pos  = 0
+
          if ( .not. isOldStats ) then
          ! if ( .not. self % isStatistics ) then
 !
@@ -346,7 +353,12 @@ module Storage
             do eID = 1, self % no_of_elements
                associate ( e => self % elements(eID) )
                write(eIDstr,'(A,I0,A,I0)') "element ", eID, " of ", self % no_of_elements
-               call getSolutionFileArrayDimensions(fid,arrayDimensions,varName=trim(eIDstr))
+               if ( stats_reset_pos .gt. 0 ) then
+                  call getSolutionFileArrayDimensions(fid,arrayDimensions,pos=stats_reset_pos,varName=trim(eIDstr))
+                  stats_reset_pos = 0
+               else
+                  call getSolutionFileArrayDimensions(fid,arrayDimensions,varName=trim(eIDstr))
+               end if
 
                call getNVARS(arrayDimensions(1), self % isStatistics)
 !   
@@ -370,6 +382,35 @@ module Storage
 !              Read data
 !              ---------
                read(fid) e % Q
+
+!              For stats files: detect and skip gradient records if saveGradients was
+!              enabled in the simulation (3 raw arrays per element after Q: UX, UY, UZ)
+               if ( self % isStatistics ) then
+                  if ( eID .eq. 1 .and. self % no_of_elements .gt. 1 ) then
+                     ! Probe: peek at the next integer to decide if gradient records follow.
+                     ! The stats array header for the next element starts with integer 4 (ndim).
+                     inquire(unit=fid, pos=pos_peek)
+                     read(fid, pos=pos_peek) ndim_peek
+                     statsHasGrads = (ndim_peek .ne. 4)
+                     if ( .not. statsHasGrads ) then
+                        ! No gradients: probe consumed 4 bytes of element 2's header.
+                        ! Schedule a positional re-read for the next getSolutionFileArrayDimensions.
+                        stats_reset_pos = pos_peek
+                     end if
+                  end if
+                  if ( statsHasGrads ) then
+                     allocate( grads_tmp(1:NVARS, 0:e%Nsol(1), 0:e%Nsol(2), 0:e%Nsol(3)) )
+                     if ( eID .eq. 1 ) then
+                        ! Reset to pos_peek (undoes the probe's 4-byte advance) before reading UX
+                        read(fid, pos=pos_peek) grads_tmp
+                     else
+                        read(fid) grads_tmp  ! UX
+                     end if
+                     read(fid) grads_tmp  ! UY
+                     read(fid) grads_tmp  ! UZ
+                     deallocate( grads_tmp )
+                  end if
+               end if
 
               ! Qdot goes before gradients when present
               ! for now is not saved anywhere, just to be able to read gradients
