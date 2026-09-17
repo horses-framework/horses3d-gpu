@@ -592,6 +592,11 @@
             CASE (FTVALUECLASS_STRING)
                tmpString = TRANSFER(self % valueStorage, tmpString)
                s         = tmpString(1:SIZE(self % valueStorage))
+               s         = ADJUSTL(s)
+               ! strip leading tabs (ADJUSTL only removes spaces)
+               DO WHILE (LEN_TRIM(s) > 0 .AND. s(1:1) == CHAR(9))
+                  s = s(2:)
+               END DO
                IF ( TRIM(s) == ".true." .OR. TRIM(s) == ".false." .OR. &
                     TRIM(s) == ".TRUE." .OR. TRIM(s) == ".FALSE.")     THEN
                   READ(s,*) logicalValue
