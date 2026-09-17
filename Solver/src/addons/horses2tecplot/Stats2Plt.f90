@@ -3,7 +3,7 @@ module Stats2PltModule
    use SMConstants
    use SolutionFile
    use Headers
-   use InterpolationMatrices 
+   use InterpolationMatrices
    use FileReadingUtilities      , only: getFileName
    use Solution2PltModule        , only: WriteBoundaryToTecplot
    implicit none
@@ -13,16 +13,27 @@ module Stats2PltModule
 
 #define PRECISION_FORMAT "(E13.5)"
 
+   integer, parameter :: NSTATS_OUTVARS = 9
+   integer, parameter :: NFAVRE_OUTVARS = 6
+   ! Canonical output names for Reynolds and Favre stats variables (order matters)
+   character(len=8), parameter :: STATS_OUT_NAMES(NSTATS_OUTVARS) = &
+      ["Umean   ","Vmean   ","Wmean   ","Sxx     ","Syy     ","Szz     ","Sxy     ","Sxz     ","Syz     "]
+   character(len=4), parameter :: FAVRE_OUT_NAMES(NFAVRE_OUTVARS) = &
+      ["FUU ","FVV ","FWW ","FUV ","FUW ","FVW "]
+   ! Per-run output filter; set by buildStatsFilter() before each file write
+   logical :: statsVarInclude(NSTATS_OUTVARS) = .true.
+   logical :: favreVarInclude(NFAVRE_OUTVARS) = .true.
+
    contains
       subroutine Stats2Plt(meshName, solutionName, fixedOrder, basis, Nout)
          use getTask
-         implicit none  
+         implicit none
          character(len=*), intent(in)     :: meshName
          character(len=*), intent(in)     :: solutionName
          integer,          intent(in)     :: basis
          logical,          intent(in)     :: fixedOrder
          integer,          intent(in)     :: Nout(3)
-   
+
          write(STD_OUT,'(/)')
          call SubSection_Header("Job description")
 
@@ -35,7 +46,7 @@ module Stats2PltModule
                write(STD_OUT,'(30X,A,A30,I0,A,I0,A,I0,A)') "->" , "Output order: [",&
                                                 Nout(1),",",Nout(2),",",Nout(3),"]."
                call Stats2Plt_GaussPoints_FixedOrder(meshName, solutionName, Nout)
-   
+
             else
                write(STD_OUT,'(30X,A3,A)') "->", " Export to Gauss points"
                call Stats2Plt_GaussPoints(meshName, solutionName)
@@ -43,7 +54,7 @@ module Stats2PltModule
             end if
 
          case(EXPORT_HOMOGENEOUS)
-            
+
             write(STD_OUT,'(30X,A3,A)') "->", " Export to homogeneous points"
             write(STD_OUT,'(30X,A,A30,I0,A,I0,A,I0,A)') "->" , "Output order: [",&
                                         Nout(1),",",Nout(2),",",Nout(3),"]."
@@ -65,7 +76,7 @@ module Stats2PltModule
          use NodalStorageClass
          use SharedSpectralBasis
          use OutputVariables
-         implicit none  
+         implicit none
          character(len=*), intent(in)     :: meshName
          character(len=*), intent(in)     :: solutionName
 !
@@ -118,17 +129,10 @@ module Stats2PltModule
          write(title,'(A,A,A,A,A)') '"Generated from ',trim(meshName),' and ',trim(solutionName),'"'
          write(fid,'(A,A)') "TITLE = ", trim(title)
 !
-!        Add the variables
-!        -----------------
-         if (NSTAT .gt. 0 .and. statsHasFavre) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz","FUU","FVV","FWW","FUV","FUW","FVW"'
-         else if (NSTAT .gt. 0) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
-         else if (statsHasFavre) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","FUU","FVV","FWW","FUV","FUW","FVW"'
-         else
-            write(fid,'(A)') 'VARIABLES = "x","y","z"'
-         end if
+!        Add the variables (filtered by output variables if set)
+!        -------------------------------------------------------
+         call buildStatsFilter()
+         write(fid,'(A)') trim(buildVarsHeader())
 !
 !        Write each element zone
 !        -----------------------
@@ -137,7 +141,7 @@ module Stats2PltModule
 !
 !           Write the tecplot file
 !           ----------------------
-            call WriteElementToTecplot(fid, e, mesh % refs) 
+            call WriteElementToTecplot(fid, e, mesh % refs)
             end associate
          end do
 !
@@ -152,7 +156,7 @@ module Stats2PltModule
 !        Close the file
 !        --------------
          close(fid)
-      
+
       end subroutine Stats2Plt_GaussPoints
 
       subroutine ProjectStorageGaussPoints(e, spA, N1, N2)
@@ -164,7 +168,7 @@ module Stats2PltModule
          type(NodalStorage_t), intent(in) :: spA(0:)
          integer           , intent(in) :: N1(3)
          integer           , intent(in) :: N2(3)
-         
+
          e % Nout = e % Nsol
          if ( all(e % Nmesh .eq. e % Nout) ) then
             e % xOut(1:,0:,0:,0:) => e % x
@@ -192,7 +196,7 @@ module Stats2PltModule
          use NodalStorageClass
          use SharedSpectralBasis
          use OutputVariables
-         implicit none  
+         implicit none
          character(len=*), intent(in)     :: meshName
          character(len=*), intent(in)     :: solutionName
          integer,          intent(in)     :: Nout(3)
@@ -263,17 +267,10 @@ module Stats2PltModule
          write(title,'(A,A,A,A,A)') '"Generated from ',trim(meshName),' and ',trim(solutionName),'"'
          write(fid,'(A,A)') "TITLE = ", trim(title)
 !
-!        Add the variables
-!        -----------------
-         if (NSTAT .gt. 0 .and. statsHasFavre) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz","FUU","FVV","FWW","FUV","FUW","FVW"'
-         else if (NSTAT .gt. 0) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
-         else if (statsHasFavre) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","FUU","FVV","FWW","FUV","FUW","FVW"'
-         else
-            write(fid,'(A)') 'VARIABLES = "x","y","z"'
-         end if
+!        Add the variables (filtered by output variables if set)
+!        -------------------------------------------------------
+         call buildStatsFilter()
+         write(fid,'(A)') trim(buildVarsHeader())
 !
 !        Write elements
 !        --------------
@@ -314,7 +311,7 @@ module Stats2PltModule
          real(kind=RP),       intent(in)  :: Tz(0:e % Nout(3), 0:e % Nsol(3))
 !
 !        Project mesh
-!        ------------         
+!        ------------
          if ( all(e % Nmesh .eq. e % Nout) ) then
             e % xOut(1:,0:,0:,0:) => e % x
 
@@ -356,7 +353,7 @@ module Stats2PltModule
          use NodalStorageClass
          use SharedSpectralBasis
          use OutputVariables
-         implicit none  
+         implicit none
          character(len=*), intent(in)     :: meshName
          character(len=*), intent(in)     :: solutionName
          integer,          intent(in)     :: Nout(3)
@@ -435,17 +432,10 @@ module Stats2PltModule
          write(title,'(A,A,A,A,A)') '"Generated from ',trim(meshName),' and ',trim(solutionName),'"'
          write(fid,'(A,A)') "TITLE = ", trim(title)
 !
-!        Add the variables
-!        -----------------
-         if (NSTAT .gt. 0 .and. statsHasFavre) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz","FUU","FVV","FWW","FUV","FUW","FVW"'
-         else if (NSTAT .gt. 0) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","Umean","Vmean","Wmean","Sxx","Syy","Szz","Sxy","Sxz","Syz"'
-         else if (statsHasFavre) then
-            write(fid,'(A)') 'VARIABLES = "x","y","z","FUU","FVV","FWW","FUV","FUW","FVW"'
-         else
-            write(fid,'(A)') 'VARIABLES = "x","y","z"'
-         end if
+!        Add the variables (filtered by output variables if set)
+!        -------------------------------------------------------
+         call buildStatsFilter()
+         write(fid,'(A)') trim(buildVarsHeader())
 !
 !        Write elements
 !        --------------
@@ -489,7 +479,7 @@ module Stats2PltModule
          integer     :: i, j, k, iVar, l, m, n
 !
 !        Project mesh
-!        ------------         
+!        ------------
          allocate( e % xOut(1:3,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
          e % xOut = 0.0_RP
 
@@ -530,7 +520,7 @@ module Stats2PltModule
 !
 !/////////////////////////////////////////////////////////////////////////////
 !
-      subroutine WriteElementToTecplot(fid,e,refs)
+      subroutine WriteElementToTecplot(fid, e, refs)
          use Storage
          use NodalStorageClass
          use prolongMeshAndSolution
@@ -538,54 +528,72 @@ module Stats2PltModule
          use StatisticsMonitor
          implicit none
          integer,            intent(in)    :: fid
-         type(Element_t),    intent(inout) :: e 
+         type(Element_t),    intent(inout) :: e
          real(kind=RP),      intent(in)    :: refs(NO_OF_SAVED_REFS)
 !
 !        ---------------
 !        Local variables
 !        ---------------
 !
-         integer                    :: i,j,k,var,nout_vars,voff
+         integer                    :: i, j, k, var, nout_vars, vi
+         integer                    :: statsIdx(NSTATS_OUTVARS), favreIdx(NFAVRE_OUTVARS)
+         real(kind=RP)              :: stats9(NSTATS_OUTVARS)
          character(len=LINE_LENGTH) :: formatout
 !
-!        Get output variables
-!        --------------------
-         nout_vars = 0
-         if (NSTAT .gt. 0) nout_vars = nout_vars + 9
-         if (statsHasFavre) nout_vars = nout_vars + NFAVRE_VARS
-         allocate (e % outputVars(1:nout_vars,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
-         voff = 0
-         if (NSTAT .gt. 0) then
-            do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
-               e % outputVars(1,i,j,k) = e % statsout(U,i,j,k)
-               e % outputVars(2,i,j,k) = e % statsout(V,i,j,k)
-               e % outputVars(3,i,j,k) = e % statsout(W,i,j,k)
-               e % outputVars(4,i,j,k) = e % statsout(UU,i,j,k) - POW2(e % statsout(U,i,j,k))
-               e % outputVars(5,i,j,k) = e % statsout(VV,i,j,k) - POW2(e % statsout(V,i,j,k))
-               e % outputVars(6,i,j,k) = e % statsout(WW,i,j,k) - POW2(e % statsout(W,i,j,k))
-               e % outputVars(7,i,j,k) = e % statsout(UV,i,j,k) - e % statsout(U,i,j,k) * e % statsout(V,i,j,k)
-               e % outputVars(8,i,j,k) = e % statsout(UW,i,j,k) - e % statsout(U,i,j,k) * e % statsout(W,i,j,k)
-               e % outputVars(9,i,j,k) = e % statsout(VW,i,j,k) - e % statsout(V,i,j,k) * e % statsout(W,i,j,k)
-            end do ; end do ; end do
-            voff = 9
-         end if
-         if (statsHasFavre) then
-            do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
-               e % outputVars(voff+1,i,j,k) = e % favreout(1,i,j,k)
-               e % outputVars(voff+2,i,j,k) = e % favreout(2,i,j,k)
-               e % outputVars(voff+3,i,j,k) = e % favreout(3,i,j,k)
-               e % outputVars(voff+4,i,j,k) = e % favreout(4,i,j,k)
-               e % outputVars(voff+5,i,j,k) = e % favreout(5,i,j,k)
-               e % outputVars(voff+6,i,j,k) = e % favreout(6,i,j,k)
-            end do ; end do ; end do
-         end if
+!        Precompute output column indices (0 = not selected)
+!        ---------------------------------------------------
+         vi = 0
+         do var = 1, NSTATS_OUTVARS
+            if (NSTAT .gt. 0 .and. statsVarInclude(var)) then
+               vi = vi + 1 ; statsIdx(var) = vi
+            else
+               statsIdx(var) = 0
+            end if
+         end do
+         do var = 1, NFAVRE_OUTVARS
+            if (statsHasFavre .and. favreVarInclude(var)) then
+               vi = vi + 1 ; favreIdx(var) = vi
+            else
+               favreIdx(var) = 0
+            end if
+         end do
+         nout_vars = vi
+
+         allocate(e % outputVars(1:nout_vars, 0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)))
+
+         do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+
+            if (NSTAT .gt. 0) then
+               stats9(1) = e % statsout(U, i,j,k)
+               stats9(2) = e % statsout(V, i,j,k)
+               stats9(3) = e % statsout(W, i,j,k)
+               stats9(4) = e % statsout(UU,i,j,k) - POW2(e % statsout(U,i,j,k))
+               stats9(5) = e % statsout(VV,i,j,k) - POW2(e % statsout(V,i,j,k))
+               stats9(6) = e % statsout(WW,i,j,k) - POW2(e % statsout(W,i,j,k))
+               stats9(7) = e % statsout(UV,i,j,k) - e % statsout(U,i,j,k)*e % statsout(V,i,j,k)
+               stats9(8) = e % statsout(UW,i,j,k) - e % statsout(U,i,j,k)*e % statsout(W,i,j,k)
+               stats9(9) = e % statsout(VW,i,j,k) - e % statsout(V,i,j,k)*e % statsout(W,i,j,k)
+               do var = 1, NSTATS_OUTVARS
+                  if (statsIdx(var) .gt. 0) &
+                     e % outputVars(statsIdx(var), i,j,k) = stats9(var)
+               end do
+            end if
+
+            if (statsHasFavre) then
+               do var = 1, NFAVRE_OUTVARS
+                  if (favreIdx(var) .gt. 0) &
+                     e % outputVars(favreIdx(var), i,j,k) = e % favreout(var, i,j,k)
+               end do
+            end if
+
+         end do ; end do ; end do
 !
-!        Write variables
-!        ---------------        
+!        Write zone header and data
+!        --------------------------
          write(fid,'(A,I0,A,I0,A,I0,A)') "ZONE I=",e % Nout(1)+1,", J=",e % Nout(2)+1, &
                                             ", K=",e % Nout(3)+1,", F=POINT"
 
-         formatout = getFormat()
+         formatout = getFormat(3 + nout_vars)
 
          do k = 0, e % Nout(3)   ; do j = 0, e % Nout(2)    ; do i = 0, e % Nout(1)
             write(fid,trim(formatout)) e % xOut(:,i,j,k), e % outputVars(:,i,j,k)
@@ -593,14 +601,113 @@ module Stats2PltModule
 
       end subroutine WriteElementToTecplot
 
-      character(len=LINE_LENGTH) function getFormat()
-         use OutputVariables
+      character(len=LINE_LENGTH) function getFormat(ncols)
          implicit none
-
+         integer, intent(in) :: ncols
          getFormat = ""
-
-         write(getFormat,'(A,I0,A,A)') "(",12,PRECISION_FORMAT,")"
-
+         write(getFormat,'(A,I0,A,A)') "(",ncols,PRECISION_FORMAT,")"
       end function getFormat
-      
+!
+!/////////////////////////////////////////////////////////////////////////////
+!
+!     Variable filtering
+!     ------------------
+!
+!/////////////////////////////////////////////////////////////////////////////
+!
+      subroutine buildStatsFilter()
+         use OutputVariables, only: hasVariablesFlag, askedVariables, getNoOfCommas
+         use Storage,         only: NSTAT, statsHasFavre
+         implicit none
+         integer            :: n, pos, pos2, i
+         character(len=16)  :: tok
+
+         ! Default: include all available variables (existing behaviour when no filter)
+         statsVarInclude = (NSTAT .gt. 0)
+         favreVarInclude = statsHasFavre
+
+         if (.not. hasVariablesFlag) return
+
+         ! User specified a list: start with nothing, include only what is requested
+         statsVarInclude = .false.
+         favreVarInclude = .false.
+
+         n = getNoOfCommas(trim(askedVariables)) + 1
+         pos = 0
+         do i = 1, n
+            tok = ""
+            if (i .lt. n) then
+               pos2 = index(trim(askedVariables(pos+1:)), ",") + pos
+               read(askedVariables(pos+1:pos2), *, err=99, end=99) tok
+               pos = pos2
+            else
+               read(askedVariables(pos+1:), *, err=99, end=99) tok
+            end if
+            tok = adjustl(trim(tok))
+            call applyStatsToken(tok)
+            99 continue
+         end do
+
+      end subroutine buildStatsFilter
+
+      subroutine applyStatsToken(tok)
+         implicit none
+         character(len=*), intent(in) :: tok
+         integer :: i
+
+         ! Check against Reynolds stat names (Umean, Vmean, Wmean, Sxx, ..., Syz)
+         do i = 1, NSTATS_OUTVARS
+            if (trim(tok) .eq. trim(STATS_OUT_NAMES(i))) then
+               statsVarInclude(i) = .true.
+               return
+            end if
+         end do
+
+         ! Check against Favre stat names (FUU, FVV, FWW, FUV, FUW, FVW)
+         do i = 1, NFAVRE_OUTVARS
+            if (trim(tok) .eq. trim(FAVRE_OUT_NAMES(i))) then
+               favreVarInclude(i) = .true.
+               return
+            end if
+         end do
+
+         ! Shorthands
+         select case (trim(tok))
+         case ("Vmean", "V")         ! mean velocity vector
+            statsVarInclude(1:3) = .true.
+         case ("Sij")                ! all Reynolds stresses
+            statsVarInclude(4:9) = .true.
+         case ("Fij")                ! all Favre stresses
+            favreVarInclude = .true.
+         case ("all")                ! everything
+            statsVarInclude = .true.
+            favreVarInclude = .true.
+         end select
+         ! Variables not meaningful for stats files (rho, p, Mach, etc.) are silently ignored
+
+      end subroutine applyStatsToken
+
+      character(len=512) function buildVarsHeader()
+         use Storage, only: NSTAT, statsHasFavre
+         implicit none
+         integer :: i
+
+         buildVarsHeader = 'VARIABLES = "x","y","z"'
+         if (NSTAT .gt. 0) then
+            do i = 1, NSTATS_OUTVARS
+               if (statsVarInclude(i)) then
+                  buildVarsHeader = trim(buildVarsHeader) // ',"' // trim(STATS_OUT_NAMES(i)) // '"'
+               end if
+            end do
+         end if
+         if (statsHasFavre) then
+            do i = 1, NFAVRE_OUTVARS
+               if (favreVarInclude(i)) then
+                  buildVarsHeader = trim(buildVarsHeader) // ',"' // trim(FAVRE_OUT_NAMES(i)) // '"'
+               end if
+            end do
+         end if
+
+      end function buildVarsHeader
+
 end module Stats2PltModule
