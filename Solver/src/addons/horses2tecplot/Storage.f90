@@ -226,6 +226,7 @@ module Storage
          real(kind=RP)                  :: time
          real(kind=RP), allocatable     :: Qdot(:,:,:,:)
          character(len=1024)  :: msg
+         character(len=64)    :: eIDstr
 
          self % solutionName = trim(solutionName)
 		 write(STD_OUT,'(10X,A,A)') "Loading Solution File:"
@@ -321,9 +322,26 @@ module Storage
       
          if ( .not. isOldStats ) then
          ! if ( .not. self % isStatistics ) then
+!
+!           Print diagnostic for optional variables requested from the file
+!           If a flag is set but the variable is absent, binary reads will desync
+!           -------------------------------------------------------------------
+            if (hasUt_NS .or. hasUTauVec_NS .or. hasMu_NS .or. hasWallY .or. hasMu_sgs .or. hasMu_art) then
+               write(STD_OUT,'(30X,A)') "-> Additional variables requested from file:"
+               if (hasUt_NS)      write(STD_OUT,'(30X,A)') "      u_tau"
+               if (hasUTauVec_NS) write(STD_OUT,'(30X,A)') "      u_tau_vector"
+               if (hasMu_NS)      write(STD_OUT,'(30X,A)') "      turb (mu_NS + wallY)"
+               if (hasMu_sgs)     write(STD_OUT,'(30X,A)') "      mu_sgs (LES)"
+               if (hasMu_art)     write(STD_OUT,'(30X,A)') "      mu_art (artvisc)"
+               write(STD_OUT,'(30X,A)') "   NOTE: if any of these were not saved in the simulation,"
+               write(STD_OUT,'(30X,A)') "   the file will be read out of sync and the next error will"
+               write(STD_OUT,'(30X,A)') "   report a dimension mismatch instead of a missing variable."
+            end if
+
             do eID = 1, self % no_of_elements
                associate ( e => self % elements(eID) )
-               call getSolutionFileArrayDimensions(fid,arrayDimensions)
+               write(eIDstr,'(A,I0,A,I0)') "element ", eID, " of ", self % no_of_elements
+               call getSolutionFileArrayDimensions(fid,arrayDimensions,varName=trim(eIDstr))
 
                call getNVARS(arrayDimensions(1), self % isStatistics)
 !   
