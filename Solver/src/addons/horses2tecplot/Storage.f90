@@ -227,6 +227,8 @@ module Storage
          real(kind=RP), allocatable     :: Qdot(:,:,:,:)
          character(len=1024)  :: msg
          character(len=64)    :: eIDstr
+         integer              :: ios
+         character(len=256)   :: iomsg_str
 
          self % solutionName = trim(solutionName)
 		 write(STD_OUT,'(10X,A,A)') "Loading Solution File:"
@@ -416,37 +418,79 @@ module Storage
 
                end if
                if (self % hasSensor) then
-                   read(fid) e % sensor
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % sensor
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A,A)') "ERROR: 'sensor' not found in solution file. I/O: ", trim(iomsg_str)
+                      error stop
+                   end if
                end if
 
                if (hasUt_NS) then
                    allocate( e % ut_NS(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
-                   read(fid) e % ut_NS
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % ut_NS
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A)') "ERROR: 'u_tau' not found in solution file."
+                      write(STD_OUT,'(A)') "       The file was not saved with 'u_tau'. Remove 'u_tau' from 'additional variables'."
+                      write(STD_OUT,'(A,A)') "       I/O message: ", trim(iomsg_str)
+                      error stop
+                   end if
                end if
 
                if (hasUTauVec_NS) then
                    allocate( e % u_tau_vec_NS(NDIM,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
-                   read(fid) e % u_tau_vec_NS
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % u_tau_vec_NS
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A)') "ERROR: 'u_tau_vector' not found in solution file."
+                      write(STD_OUT,'(A)') "       Remove 'u_tau_vector' from 'additional variables'."
+                      write(STD_OUT,'(A,A)') "       I/O message: ", trim(iomsg_str)
+                      error stop
+                   end if
                end if
 
                if (hasMu_NS) then
                    allocate( e % mu_NS(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
-                   read(fid) e % mu_NS
-               end if 
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % mu_NS
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A)') "ERROR: 'turb' (mu_NS) not found in solution file."
+                      write(STD_OUT,'(A)') "       Remove 'turb' from 'additional variables'."
+                      write(STD_OUT,'(A,A)') "       I/O message: ", trim(iomsg_str)
+                      error stop
+                   end if
+               end if
 
                if (hasWallY) then
                    allocate( e % wallY(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
-                   read(fid) e % wallY
-               end if 
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % wallY
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A)') "ERROR: 'wallY' not found in solution file."
+                      write(STD_OUT,'(A)') "       Remove 'turb' from 'additional variables'."
+                      write(STD_OUT,'(A,A)') "       I/O message: ", trim(iomsg_str)
+                      error stop
+                   end if
+               end if
 
                if (hasMu_sgs) then
                    allocate( e % mu_sgs(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
-                   read(fid) e % mu_sgs
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % mu_sgs
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A)') "ERROR: 'mu_sgs' (LES) not found in solution file."
+                      write(STD_OUT,'(A)') "       Remove 'les' from 'additional variables'."
+                      write(STD_OUT,'(A,A)') "       I/O message: ", trim(iomsg_str)
+                      error stop
+                   end if
                end if
 
                if (hasMu_art) then
                    allocate( e % mu_art(1,0:e % Nsol(1),0:e % Nsol(2),0:e % Nsol(3)) )
-                   read(fid) e % mu_art
+                   read(fid, iostat=ios, iomsg=iomsg_str) e % mu_art
+                   if (ios .ne. 0) then
+                      write(STD_OUT,'(A)') "ERROR: 'mu_art' (artvisc) not found in solution file."
+                      write(STD_OUT,'(A)') "       The simulation must be run with 'save artvisc with solution = .true.'."
+                      write(STD_OUT,'(A)') "       For volume files: add this key to the simulation control file and re-run."
+                      write(STD_OUT,'(A)') "       For surface files: use 'save artvisc with solution = .true.' in the BC section."
+                      write(STD_OUT,'(A,A)') "       I/O message: ", trim(iomsg_str)
+                      error stop
+                   end if
                end if
 
                end associate
