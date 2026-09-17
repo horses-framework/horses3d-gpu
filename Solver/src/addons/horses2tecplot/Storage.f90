@@ -286,7 +286,10 @@ module Storage
 
          self % isSurface = (dimensionsSize .eq. 3)
 
-         self % hasGradients = self % hasGradients .or. hasExtraGradients
+         if ( self % isStatistics .and. hasExtraGradients ) then
+            write(STD_OUT,'(30X,A)') "-> WARNING: 'has gradients = .true.' ignored for statistics files (no gradients stored)."
+         end if
+         self % hasGradients = self % hasGradients .or. (hasExtraGradients .and. .not. self % isStatistics)
 !
 !        Get node type
 !        -------------
@@ -376,7 +379,7 @@ module Storage
                    deallocate(Qdot)
                end if
 
-               if ( self % hasGradients ) then
+               if ( self % hasGradients .and. .not. self % isStatistics ) then
 !
 !                 Allocate memory for the gradients
 !                 ---------------------------------
