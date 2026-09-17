@@ -63,11 +63,10 @@ program horses2plt
             write(STD_OUT,'(/,/)')
             if (oldStats) then
                 call Section_Header("Statistics legacy file conversion")
-                call Stats2Plt(meshName, solutionNames(iSol), fixedOrder, basis, Nout)
             else
                 call Section_Header("Statistics file conversion")
-                call Solution2Plt(meshName, solutionNames(iSol), fixedOrder, basis, Nout, mode)        
-            end if 
+            end if
+            call Stats2Plt(meshName, solutionNames(iSol), fixedOrder, basis, Nout)
 
          end select
       end do
