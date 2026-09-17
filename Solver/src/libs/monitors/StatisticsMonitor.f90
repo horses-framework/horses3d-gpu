@@ -195,6 +195,7 @@ module StatisticsMonitor
       end subroutine StatisticsMonitor_WriteFile
 
       subroutine StatisticsMonitor_Update(self, mesh, iter, t, solution_file)
+         use MPI_Process_Info
          implicit none
          class(StatisticsMonitor_t) :: self
          class(HexMesh)             :: mesh
