@@ -303,10 +303,25 @@ module OutputVariables
          integer       :: var, i, j, k
          real(kind=RP) :: Sym, Asym
          logical       :: hasAdditionalVariables
+         logical, save :: stats_warning_printed = .false.
 
          hasAdditionalVariables = hasUt_NS .or. hasUTauVec_NS .or. hasWallY .or. hasMu_NS .or. hasStats .or. hasGradients .or. hasSensor .or. hasMu_sgs .or. hasMu_art
 
          do var = 1, noOutput
+!           Guard: stats-dependent variables (Vmean, ReST, Vrms) require a statistics file.
+!           Without it, e % statsout is an unassociated pointer -> SIGSEGV at nil.
+            if (.not. hasStats .and. &
+                outputVarNames(var) .ge. Vvec_Vmean .and. &
+                outputVarNames(var) .le. Wf_Vrms) then
+               if (.not. stats_warning_printed) then
+                  write(STD_OUT,'(30X,A)') "WARNING: Statistics output variables (Sij/Vmean/Vrms) requested"
+                  write(STD_OUT,'(30X,A)') "         but the solution file is not a statistics file."
+                  write(STD_OUT,'(30X,A)') "         These variables will be output as zero."
+                  stats_warning_printed = .true.
+               end if
+               output(var,:,:,:) = 0.0_RP
+               cycle
+            end if
             if ( hasAdditionalVariables .or. (outputVarNames(var) .le. NO_OF_INVISCID_VARIABLES ) ) then
                associate ( Q   => e % Qout, &
                            QDot=> e % QDot_out, &
