@@ -5,14 +5,15 @@ module StatisticsMonitor
    use HexMeshClass
    use StorageClass
    use StopwatchClass
-   use Utilities, only: GreatestCommonDivisor
+   use Utilities, only: GreatestCommonDivisor, toLower
 #ifdef _HAS_MPI_
    use mpi
 #endif
 
    private
    public     StatisticsMonitor_t, U, V, W, UU, VV, WW, UV, UW, VW
-   public     NO_OF_VARIABLES_Sij, NO_OF_VARIABLES
+   public     NO_OF_VARIABLES_Sij, NO_OF_VARIABLES, NO_OF_FAVRE_VARS
+   public     stats_doReynolds, stats_doFavre
 !
 !  Commands for the parameter file
 !  -------------------------------
@@ -33,6 +34,7 @@ module StatisticsMonitor
 !  --------------------------
    integer            :: NO_OF_VARIABLES
    integer, parameter :: NO_OF_VARIABLES_Sij = 9
+   integer, parameter :: NO_OF_FAVRE_VARS    = 6
    integer, parameter ::  U  = 1
    integer, parameter ::  V  = 2
    integer, parameter ::  W  = 3
@@ -42,6 +44,8 @@ module StatisticsMonitor
    integer, parameter ::  UV = 7
    integer, parameter ::  UW = 8
    integer, parameter ::  VW = 9
+   logical, save      :: stats_doReynolds = .true.
+   logical, save      :: stats_doFavre    = .false.
 
    type StatisticsMonitor_t
       integer        :: state
@@ -71,7 +75,7 @@ module StatisticsMonitor
       subroutine StatisticsMonitor_Construct(self, mesh, saveGradients)
          use ParamfileRegions
          use PhysicsStorage, only: NCONS, NGRAD
-         use HexMeshClass,   only: no_of_stats_variables
+         use HexMeshClass,   only: no_of_stats_variables, no_of_reynolds_variables, no_of_favre_variables
          implicit none
          class(StatisticsMonitor_t)    :: self
          class(HexMesh)                :: mesh
@@ -80,15 +84,33 @@ module StatisticsMonitor
          real(kind=RP), allocatable    :: t0
          integer                       :: eID
          character(len=LINE_LENGTH)    :: paramFile
+         character(len=LINE_LENGTH)    :: averaging
 
-         NO_OF_VARIABLES = NO_OF_VARIABLES_Sij + NCONS
          self % saveGradients = saveGradients
-         if (saveGradients) NO_OF_VARIABLES = NO_OF_VARIABLES + NGRAD * NDIM
-         no_of_stats_variables = NO_OF_VARIABLES
 !
 !        Search for the parameters in the case file
 !        ------------------------------------------
          call get_command_argument(1, paramFile)
+!
+!        Read averaging mode (must be before the early-return below)
+!        ------------------------------------------------------------
+         stats_doReynolds = .true.
+         stats_doFavre    = .false.
+         averaging        = ""
+         call readCharacterValueInRegion(trim(paramFile), "averaging", averaging, "#define statistics", "#end")
+         call toLower(averaging)
+         if (len_trim(averaging) > 0) then
+            stats_doReynolds = (index(averaging, "reynolds") > 0)
+            stats_doFavre    = (index(averaging, "favre")    > 0)
+            if (.not. stats_doReynolds .and. .not. stats_doFavre) stats_doReynolds = .true.
+         end if
+
+         no_of_reynolds_variables = merge(NO_OF_VARIABLES_Sij, 0, stats_doReynolds)
+         no_of_favre_variables    = merge(NO_OF_FAVRE_VARS,    0, stats_doFavre)
+
+         NO_OF_VARIABLES = no_of_reynolds_variables + NCONS + no_of_favre_variables
+         if (saveGradients) NO_OF_VARIABLES = NO_OF_VARIABLES + NGRAD * NDIM
+         no_of_stats_variables = NO_OF_VARIABLES
 !
 !        Search if the #define statistics section is defined
 !        ---------------------------------------------------
@@ -228,6 +250,7 @@ module StatisticsMonitor
 
       subroutine StatisticsMonitor_UpdateValues(self, mesh)
          use PhysicsStorage
+         use HexMeshClass, only: no_of_reynolds_variables, no_of_favre_variables
          implicit none
          class(StatisticsMonitor_t)    :: self
          class(HexMesh)              :: mesh
@@ -240,19 +263,17 @@ module StatisticsMonitor
          integer  :: i, j, k, eq
          real(RP) :: ratio, inv_nsamples_plus_1
          real(RP) :: rfactor1, rfactor2
+         integer  :: nR, nF
          integer, dimension(5) :: limits
 
 #ifdef NAVIERSTOKES
-         !  if gradients are not saved, limits(2) is equal to limits(5), the latter wont be used
-            !limits(1) = NO_OF_VARIABLES_Sij + IRHO
-            !limits(2) = NO_OF_VARIABLES_Sij + NCONS
-            !limits(3) = NO_OF_VARIABLES_Sij + NCONS + NGRAD
-            !limits(4) = NO_OF_VARIABLES_Sij + NCONS + 2*NGRAD
-            !limits(5) = NO_OF_VARIABLES
+            nR = no_of_reynolds_variables
+            nF = no_of_favre_variables
 
             inv_nsamples_plus_1 = 1.0_RP / (self % no_of_samples + 1)
             ratio = self % no_of_samples * inv_nsamples_plus_1
-            
+
+            if (stats_doReynolds) then
             !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio) async(1)
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(3) private(rfactor1, rfactor2)
@@ -267,7 +288,7 @@ module StatisticsMonitor
 
                   mesh % elements(eID) % storage % stats % data(W,i,j,k)  = mesh % elements(eID) % storage % stats % data(W,i,j,k) &
                                                                           * ratio + mesh % elements(eID) % storage % Q(IRHOW,i,j,k) * rfactor1
-               
+
                   mesh % elements(eID) % storage % stats % data(UU,i,j,k) = mesh % elements(eID) % storage % stats % data(UU,i,j,k) &
                                                                           * ratio + POW2( mesh % elements(eID) % storage % Q(IRHOU,i,j,k) ) * rfactor2
 
@@ -281,11 +302,10 @@ module StatisticsMonitor
             end do
             !$acc end parallel loop
 
-
             !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio) async(2)
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(3) private(rfactor2)
-               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)                                                                          
+               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)
                   rfactor2 = inv_nsamples_plus_1 / POW2( mesh % elements(eID) % storage % Q(IRHO,i,j,k) )
 
                   mesh % elements(eID) % storage % stats % data(UV,i,j,k) = mesh % elements(eID) % storage % stats % data(UV,i,j,k) * ratio &
@@ -300,66 +320,91 @@ module StatisticsMonitor
                end do                  ; end do                   ; end do
             end do
             !$acc end parallel loop
+            end if ! stats_doReynolds
 
-            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio) async(3)
+            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio, nR) async(3)
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(4)
-               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)   ; do eq = 1, NCONS                                                                       
+               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)   ; do eq = 1, NCONS
 
-                  mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij) + eq,i,j,k) = mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij) + eq,i,j,k) * ratio &
+                  mesh % elements(eID) % storage % stats % data(nR + eq,i,j,k) = mesh % elements(eID) % storage % stats % data(nR + eq,i,j,k) * ratio &
                                                                                            + mesh % elements(eID) % storage % Q(eq,i,j,k) * inv_nsamples_plus_1
                end do                  ; end do                   ; end do          ; end do
             end do
             !$acc end parallel loop
 
-                  
+            if (stats_doFavre) then
+            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio, nR) async(7)
+            do eID = 1, size(mesh % elements)
+               !$acc loop vector collapse(3) private(rfactor1)
+               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)
+                  rfactor1 = inv_nsamples_plus_1 / mesh % elements(eID) % storage % Q(IRHO,i,j,k)
+                  ! FUU = <(rho*u)^2 / rho> -> allows Favre stress <rho*u''u''> = FUU - <rho*u>^2/<rho>
+                  mesh % elements(eID) % storage % stats % data(nR+NCONS+1,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+1,i,j,k) * ratio &
+                     + POW2( mesh % elements(eID) % storage % Q(IRHOU,i,j,k) ) * rfactor1
+                  ! FVV
+                  mesh % elements(eID) % storage % stats % data(nR+NCONS+2,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+2,i,j,k) * ratio &
+                     + POW2( mesh % elements(eID) % storage % Q(IRHOV,i,j,k) ) * rfactor1
+                  ! FWW
+                  mesh % elements(eID) % storage % stats % data(nR+NCONS+3,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+3,i,j,k) * ratio &
+                     + POW2( mesh % elements(eID) % storage % Q(IRHOW,i,j,k) ) * rfactor1
+                  ! FUV
+                  mesh % elements(eID) % storage % stats % data(nR+NCONS+4,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+4,i,j,k) * ratio &
+                     + mesh % elements(eID) % storage % Q(IRHOU,i,j,k) * mesh % elements(eID) % storage % Q(IRHOV,i,j,k) * rfactor1
+                  ! FUW
+                  mesh % elements(eID) % storage % stats % data(nR+NCONS+5,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+5,i,j,k) * ratio &
+                     + mesh % elements(eID) % storage % Q(IRHOU,i,j,k) * mesh % elements(eID) % storage % Q(IRHOW,i,j,k) * rfactor1
+                  ! FVW
+                  mesh % elements(eID) % storage % stats % data(nR+NCONS+6,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+6,i,j,k) * ratio &
+                     + mesh % elements(eID) % storage % Q(IRHOV,i,j,k) * mesh % elements(eID) % storage % Q(IRHOW,i,j,k) * rfactor1
+               end do                  ; end do                   ; end do
+            end do
+            !$acc end parallel loop
+            end if ! stats_doFavre
+
             if (self % saveGradients) then
-            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio) async(4)
+            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio, nR, nF) async(4)
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(4)
-               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)    ; do eq = 1, NGRAD                                                                 
+               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)    ; do eq = 1, NGRAD
 
-                     mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij + NCONS)+ eq,i,j,k) = mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij + NCONS)+eq,i,j,k) * ratio &
+                     mesh % elements(eID) % storage % stats % data(nR+NCONS+nF+eq,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+nF+eq,i,j,k) * ratio &
                                                                                                 + mesh % elements(eID) % storage % U_x(eq,i,j,k) * inv_nsamples_plus_1
 
                end do                  ; end do                   ; end do          ; end do
             end do
             !$acc end parallel loop
 
-            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio) async(5)
+            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio, nR, nF) async(5)
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(4)
-               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)    ; do eq = 1, NGRAD                                                                 
+               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)    ; do eq = 1, NGRAD
 
-                     mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij + NCONS + NGRAD)+eq,i,j,k) = mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij + NCONS + NGRAD)+eq,i,j,k) * ratio &
+                     mesh % elements(eID) % storage % stats % data(nR+NCONS+nF+NGRAD+eq,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+nF+NGRAD+eq,i,j,k) * ratio &
                                                                                                 + mesh % elements(eID) % storage % U_y(eq,i,j,k) * inv_nsamples_plus_1
                end do                  ; end do                   ; end do          ; end do
             end do
             !$acc end parallel loop
 
-            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio) async(6)
+            !$acc parallel loop gang vector_length(128) present(mesh) firstprivate(inv_nsamples_plus_1, ratio, nR, nF) async(6)
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(4)
-               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)    ; do eq = 1, NGRAD                                                                 
+               do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2)    ; do i = 0, mesh % elements(eID) % Nxyz(1)    ; do eq = 1, NGRAD
 
-                     mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij + NCONS + 2*NGRAD)+eq,i,j,k) = mesh % elements(eID) % storage % stats % data((NO_OF_VARIABLES_Sij + NCONS + 2*NGRAD)+eq,i,j,k) * ratio &
+                     mesh % elements(eID) % storage % stats % data(nR+NCONS+nF+2*NGRAD+eq,i,j,k) = mesh % elements(eID) % storage % stats % data(nR+NCONS+nF+2*NGRAD+eq,i,j,k) * ratio &
                                                                                                 + mesh % elements(eID) % storage % U_z(eq,i,j,k) * inv_nsamples_plus_1
                end do                  ; end do                   ; end do          ; end do
             end do
             !$acc end parallel loop
 
-            end if 
+            end if
 
             !$acc wait
-#endif 
+#endif
 
 #ifdef INCNS
-         !  if gradients are not saved, limits(2) is equal to limits(5), the latter wont be used
-            limits(1) = NO_OF_VARIABLES_Sij + INSRHO
-            limits(2) = NO_OF_VARIABLES_Sij + NCONS
-            limits(3) = NO_OF_VARIABLES_Sij + NCONS + NGRAD
-            limits(4) = NO_OF_VARIABLES_Sij + NCONS + 2*NGRAD
-            limits(5) = NO_OF_VARIABLES
+            nR = no_of_reynolds_variables
+            nF = no_of_favre_variables
 
             inv_nsamples_plus_1 = 1.0_RP / (self % no_of_samples + 1)
             ratio = self % no_of_samples * inv_nsamples_plus_1
@@ -371,26 +416,36 @@ module StatisticsMonitor
                do k = 0, e % Nxyz(3)   ; do j = 0, e % Nxyz(2)    ; do i = 0, e % Nxyz(1)
                   rfactor1 = inv_nsamples_plus_1 / e % storage % Q(INSRHO,i,j,k)
                   rfactor2 = inv_nsamples_plus_1 / POW2( e % storage % Q(INSRHO,i,j,k) )
-                  data(U,i,j,k)  = data(U,i,j,k)  * ratio + e % storage % Q(INSRHOU,i,j,k) * rfactor1
-                  data(V,i,j,k)  = data(V,i,j,k)  * ratio + e % storage % Q(INSRHOV,i,j,k) * rfactor1
-                  data(W,i,j,k)  = data(W,i,j,k)  * ratio + e % storage % Q(INSRHOW,i,j,k) * rfactor1
-                  data(UU,i,j,k) = data(UU,i,j,k) * ratio + POW2( e % storage % Q(INSRHOU,i,j,k) ) * rfactor2
-                  data(VV,i,j,k) = data(VV,i,j,k) * ratio + POW2( e % storage % Q(INSRHOV,i,j,k) ) * rfactor2
-                  data(WW,i,j,k) = data(WW,i,j,k) * ratio + POW2( e % storage % Q(INSRHOW,i,j,k) ) * rfactor2
-                  data(UV,i,j,k) = data(UV,i,j,k) * ratio + e % storage % Q(INSRHOU,i,j,k) * e % storage % Q(INSRHOV,i,j,k) * rfactor2
-                  data(UW,i,j,k) = data(UW,i,j,k) * ratio + e % storage % Q(INSRHOU,i,j,k) * e % storage % Q(INSRHOW,i,j,k) * rfactor2
-                  data(VW,i,j,k) = data(VW,i,j,k) * ratio + e % storage % Q(INSRHOV,i,j,k) * e % storage % Q(INSRHOW,i,j,k) * rfactor2
-                  data(limits(1):limits(2),i,j,k) = data(limits(1):limits(2),i,j,k) * ratio + e % storage % Q(:,i,j,k) * inv_nsamples_plus_1
+                  if (stats_doReynolds) then
+                     data(U,i,j,k)  = data(U,i,j,k)  * ratio + e % storage % Q(INSRHOU,i,j,k) * rfactor1
+                     data(V,i,j,k)  = data(V,i,j,k)  * ratio + e % storage % Q(INSRHOV,i,j,k) * rfactor1
+                     data(W,i,j,k)  = data(W,i,j,k)  * ratio + e % storage % Q(INSRHOW,i,j,k) * rfactor1
+                     data(UU,i,j,k) = data(UU,i,j,k) * ratio + POW2( e % storage % Q(INSRHOU,i,j,k) ) * rfactor2
+                     data(VV,i,j,k) = data(VV,i,j,k) * ratio + POW2( e % storage % Q(INSRHOV,i,j,k) ) * rfactor2
+                     data(WW,i,j,k) = data(WW,i,j,k) * ratio + POW2( e % storage % Q(INSRHOW,i,j,k) ) * rfactor2
+                     data(UV,i,j,k) = data(UV,i,j,k) * ratio + e % storage % Q(INSRHOU,i,j,k) * e % storage % Q(INSRHOV,i,j,k) * rfactor2
+                     data(UW,i,j,k) = data(UW,i,j,k) * ratio + e % storage % Q(INSRHOU,i,j,k) * e % storage % Q(INSRHOW,i,j,k) * rfactor2
+                     data(VW,i,j,k) = data(VW,i,j,k) * ratio + e % storage % Q(INSRHOV,i,j,k) * e % storage % Q(INSRHOW,i,j,k) * rfactor2
+                  end if
+                  data(nR+1:nR+NCONS,i,j,k) = data(nR+1:nR+NCONS,i,j,k) * ratio + e % storage % Q(:,i,j,k) * inv_nsamples_plus_1
+                  if (stats_doFavre) then
+                     data(nR+NCONS+1,i,j,k) = data(nR+NCONS+1,i,j,k) * ratio + POW2( e % storage % Q(INSRHOU,i,j,k) ) * rfactor1
+                     data(nR+NCONS+2,i,j,k) = data(nR+NCONS+2,i,j,k) * ratio + POW2( e % storage % Q(INSRHOV,i,j,k) ) * rfactor1
+                     data(nR+NCONS+3,i,j,k) = data(nR+NCONS+3,i,j,k) * ratio + POW2( e % storage % Q(INSRHOW,i,j,k) ) * rfactor1
+                     data(nR+NCONS+4,i,j,k) = data(nR+NCONS+4,i,j,k) * ratio + e % storage % Q(INSRHOU,i,j,k) * e % storage % Q(INSRHOV,i,j,k) * rfactor1
+                     data(nR+NCONS+5,i,j,k) = data(nR+NCONS+5,i,j,k) * ratio + e % storage % Q(INSRHOU,i,j,k) * e % storage % Q(INSRHOW,i,j,k) * rfactor1
+                     data(nR+NCONS+6,i,j,k) = data(nR+NCONS+6,i,j,k) * ratio + e % storage % Q(INSRHOV,i,j,k) * e % storage % Q(INSRHOW,i,j,k) * rfactor1
+                  end if
                   if (self % saveGradients) then
-                      data(limits(2)+1:limits(3),i,j,k) = data(limits(2)+1:limits(3),i,j,k) * ratio + e % storage % U_x(:,i,j,k) * inv_nsamples_plus_1
-                      data(limits(3)+1:limits(4),i,j,k) = data(limits(3)+1:limits(4),i,j,k) * ratio + e % storage % U_y(:,i,j,k) * inv_nsamples_plus_1
-                      data(limits(4)+1:limits(5),i,j,k) = data(limits(4)+1:limits(5),i,j,k) * ratio + e % storage % U_z(:,i,j,k) * inv_nsamples_plus_1
-                  end if 
+                      data(nR+NCONS+nF+1:nR+NCONS+nF+NGRAD,i,j,k)           = data(nR+NCONS+nF+1:nR+NCONS+nF+NGRAD,i,j,k)           * ratio + e % storage % U_x(:,i,j,k) * inv_nsamples_plus_1
+                      data(nR+NCONS+nF+NGRAD+1:nR+NCONS+nF+2*NGRAD,i,j,k)   = data(nR+NCONS+nF+NGRAD+1:nR+NCONS+nF+2*NGRAD,i,j,k)   * ratio + e % storage % U_y(:,i,j,k) * inv_nsamples_plus_1
+                      data(nR+NCONS+nF+2*NGRAD+1:nR+NCONS+nF+3*NGRAD,i,j,k) = data(nR+NCONS+nF+2*NGRAD+1:nR+NCONS+nF+3*NGRAD,i,j,k) * ratio + e % storage % U_z(:,i,j,k) * inv_nsamples_plus_1
+                  end if
                end do                  ; end do                   ; end do
 
                end associate
             end do
-#endif 
+#endif
 
          self % no_of_samples = self % no_of_samples + 1
          
