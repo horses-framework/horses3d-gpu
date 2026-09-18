@@ -132,6 +132,7 @@ module Stats2PltModule
 !        Add the variables (filtered by output variables if set)
 !        -------------------------------------------------------
          call buildStatsFilter()
+         call printStatsOutputVariables()
          write(fid,'(A)') trim(buildVarsHeader())
 !
 !        Write each element zone
@@ -270,6 +271,7 @@ module Stats2PltModule
 !        Add the variables (filtered by output variables if set)
 !        -------------------------------------------------------
          call buildStatsFilter()
+         call printStatsOutputVariables()
          write(fid,'(A)') trim(buildVarsHeader())
 !
 !        Write elements
@@ -435,6 +437,7 @@ module Stats2PltModule
 !        Add the variables (filtered by output variables if set)
 !        -------------------------------------------------------
          call buildStatsFilter()
+         call printStatsOutputVariables()
          write(fid,'(A)') trim(buildVarsHeader())
 !
 !        Write elements
@@ -686,6 +689,30 @@ module Stats2PltModule
          ! Variables not meaningful for stats files (rho, p, Mach, etc.) are silently ignored
 
       end subroutine applyStatsToken
+
+      subroutine printStatsOutputVariables()
+         use Storage, only: NSTAT, statsHasFavre
+         implicit none
+         integer :: i
+
+         write(STD_OUT,'(/)')
+         call Section_Header("Output variables")
+         write(STD_OUT,'(/)')
+         call SubSection_Header("Selected output variables")
+
+         if (NSTAT .gt. 0) then
+            do i = 1, NSTATS_OUTVARS
+               if (statsVarInclude(i)) write(STD_OUT,'(30X,A,A)') "* ", trim(STATS_OUT_NAMES(i))
+            end do
+         end if
+
+         if (statsHasFavre) then
+            do i = 1, NFAVRE_OUTVARS
+               if (favreVarInclude(i)) write(STD_OUT,'(30X,A,A)') "* ", trim(FAVRE_OUT_NAMES(i))
+            end do
+         end if
+
+      end subroutine printStatsOutputVariables
 
       character(len=512) function buildVarsHeader()
          use Storage, only: NSTAT, statsHasFavre
