@@ -179,22 +179,47 @@ output variables = Cp, Cf, yplus, wall_distance, u_tau
 Because \(u_\tau\) is defined using the **local** density, \(u_\tau=\sqrt{|\tau_w|/\rho_{local}}\), reconstructing a skin friction coefficient by hand as `2*(u_tau/U_ref)^2` (e.g. in ParaView, from `u_tau` or `sqrt(u_tau_x^2+u_tau_y^2+u_tau_z^2)`) computes \(2\,\tau_w/\rho_{local}\), **not** the standard \(C_f = 2\,\tau_w/\rho_\infty\) that the `Cf` output variable already provides directly. The two only coincide where \(\rho_{local}\approx\rho_\infty\), and can differ substantially in regions with strong local compressibility effects (e.g. across a shock, or a stagnation point). Prefer the `Cf` output variable over a manual reconstruction unless you specifically need it normalized by the local density (e.g. to compare against another code that itself uses that convention).
 
 ## Statistics Files (*.stats.hsol)
-Statistics files can generate the standard variables as well as the following variables (being \(S_{ij}\) the components of the Reynolds Stress tensor):
+Statistics files can generate the following variables (being \(R_{ij}\) the components of the Reynolds Stress tensor):
 
 <div class="multicols" style="column-count: 3;">
   <ul>
-    <li>\(umean\)</li>
-    <li>\(vmean\)</li>
-    <li>\(wmean\)</li>
-    <li>\(S_{xx}\)</li>
-    <li>\(S_{yy}\)</li>
-    <li>\(S_{zz}\)</li>
-    <li>\(S_{xy}\)</li>
-    <li>\(S_{xz}\)</li>
-    <li>\(S_{yz}\)</li>
+    <li>\(Umean\)</li>
+    <li>\(Vmean\)</li>
+    <li>\(Wmean\)</li>
+    <li>\(R_{xx}\)</li>
+    <li>\(R_{yy}\)</li>
+    <li>\(R_{zz}\)</li>
+    <li>\(R_{xy}\)</li>
+    <li>\(R_{xz}\)</li>
+    <li>\(R_{yz}\)</li>
   </ul>
 </div>
 
+If the simulation was run with Favre (density-weighted) averaging, the following variables are also available, being \(F_{ij}\) the components of the Favre stress tensor:
+
+<div class="multicols" style="column-count: 3;">
+  <ul>
+    <li>\(F_{xx}\)</li>
+    <li>\(F_{yy}\)</li>
+    <li>\(F_{zz}\)</li>
+    <li>\(F_{xy}\)</li>
+    <li>\(F_{xz}\)</li>
+    <li>\(F_{yz}\)</li>
+  </ul>
+</div>
+
+As with standard solution files, the variables to export can be restricted with **-{}-output-variables=** (or the `output variables` keyword). The following shorthands are also accepted:
+
+| Token           | Expands to                                    |
+|-----------------|------------------------------------------------|
+| `Vmean` or `V`  | `Umean, Vmean, Wmean`                           |
+| `Rij`           | `Rxx, Ryy, Rzz, Rxy, Rxz, Ryz`                  |
+| `Fij`           | `Fxx, Fyy, Fzz, Fxy, Fxz, Fyz`                  |
+| `all`           | Every Reynolds and (if available) Favre variable |
+
+```
+output variables = Vmean, Rij
+```
 
 
 ## Extract geometry
