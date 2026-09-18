@@ -135,7 +135,7 @@ module OutputVariables
    character(len=STR_VAR_LEN), parameter  :: WfRmsKey       = "wfrms"
    character(len=STR_VAR_LEN), parameter  :: UTAUKey       = "u_tau"
    character(len=STR_VAR_LEN), parameter  :: WallYKey      = "wall_distance"
-   character(len=STR_VAR_LEN), parameter  :: TauwKey       = "wall_shear"
+   character(len=STR_VAR_LEN), parameter  :: TauwKey       = "tau"
    character(len=STR_VAR_LEN), parameter  :: UTauXKey      = "u_tau_x"
    character(len=STR_VAR_LEN), parameter  :: UTauYKey      = "u_tau_y"
    character(len=STR_VAR_LEN), parameter  :: UTauZKey      = "u_tau_z"

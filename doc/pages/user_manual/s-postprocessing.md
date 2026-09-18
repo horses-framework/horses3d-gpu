@@ -151,7 +151,7 @@ output variables = Cp, Cf, yplus, wall_distance, u_tau
     <li>\(u\_tau\_x\)</li>
     <li>\(u\_tau\_y\)</li>
     <li>\(u\_tau\_z\)</li>
-    <li>\(wall\_shear\)</li>
+    <li>\(tau\)</li>
     <li>\(tau\_x\)</li>
     <li>\(tau\_y\)</li>
     <li>\(tau\_z\)</li>
@@ -171,8 +171,8 @@ output variables = Cp, Cf, yplus, wall_distance, u_tau
     - both active &rarr; 4 columns: `u_tau, u_tau_x, u_tau_y, u_tau_z`.
 
   There is no separate `u_tau_vector` output variable to request; the single `u_tau` key covers every combination.
-- **`wall_shear`**: wall shear stress \(\tau_w = \rho\,u_\tau^2\,\text{sign}(u_\tau)\) (stress units). Requires `u_tau`.
-- **`tau_x`, `tau_y`, `tau_z`**: Cartesian components of the wall-shear-stress vector, \(\tau_i = \rho\,|\vec{u}_\tau|\,u_{\tau,i}\) (stress units), i.e. the vectorial counterpart of `wall_shear`, pointing in the same direction as the friction-velocity vector. Requires the `u_tau_vector` additional variable (no separate solver-side flag is needed beyond what `u_tau_x/y/z` already requires).
+- **`tau`**: wall shear stress \(\tau_w = \rho\,u_\tau^2\,\text{sign}(u_\tau)\) (stress units). Requires `u_tau`.
+- **`tau_x`, `tau_y`, `tau_z`**: Cartesian components of the wall-shear-stress vector, \(\tau_i = \rho\,|\vec{u}_\tau|\,u_{\tau,i}\) (stress units), i.e. the vectorial counterpart of `tau`, pointing in the same direction as the friction-velocity vector. Requires the `u_tau_vector` additional variable (no separate solver-side flag is needed beyond what `u_tau_x/y/z` already requires).
 - **`Cf`**: skin friction coefficient, \(C_f = 2\,\tau_w\) in the code's reference-normalized nondimensional units, equivalent to the standard definition \(C_f = \tau_w/(\tfrac{1}{2}\rho_\infty U_\infty^2)\). Requires `u_tau`. This is **not** algebraically the same as reconstructing `Cf` from `u_tau`/`u_tau_x/y/z` divided by a reference velocity (that reintroduces the *local* density instead of the reference one — see the discussion below).
 - **`yplus`**: wall-normal distance in wall units. Requires `u_tau` and `turb`.
 - **`wall_distance`**: distance from the first fluid solution point to the wall. Requires `turb`.
