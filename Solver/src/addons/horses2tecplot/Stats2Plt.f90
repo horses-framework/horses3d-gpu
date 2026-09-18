@@ -17,9 +17,9 @@ module Stats2PltModule
    integer, parameter :: NFAVRE_OUTVARS = 6
    ! Canonical output names for Reynolds and Favre stats variables (order matters)
    character(len=8), parameter :: STATS_OUT_NAMES(NSTATS_OUTVARS) = &
-      ["Umean   ","Vmean   ","Wmean   ","Sxx     ","Syy     ","Szz     ","Sxy     ","Sxz     ","Syz     "]
+      ["Umean   ","Vmean   ","Wmean   ","Rxx     ","Ryy     ","Rzz     ","Rxy     ","Rxz     ","Ryz     "]
    character(len=4), parameter :: FAVRE_OUT_NAMES(NFAVRE_OUTVARS) = &
-      ["FUU ","FVV ","FWW ","FUV ","FUW ","FVW "]
+      ["Fxx ","Fyy ","Fzz ","Fxy ","Fxz ","Fyz "]
    ! Per-run output filter; set by buildStatsFilter() before each file write
    logical :: statsVarInclude(NSTATS_OUTVARS) = .true.
    logical :: favreVarInclude(NFAVRE_OUTVARS) = .true.
@@ -675,7 +675,7 @@ module Stats2PltModule
          select case (trim(tok))
          case ("Vmean", "V")         ! mean velocity vector
             statsVarInclude(1:3) = .true.
-         case ("Sij")                ! all Reynolds stresses
+         case ("Rij")                ! all Reynolds stresses
             statsVarInclude(4:9) = .true.
          case ("Fij")                ! all Favre stresses
             favreVarInclude = .true.
