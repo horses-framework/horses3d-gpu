@@ -137,6 +137,9 @@ Wall/turbulence-related quantities are not read by default: they must be request
 | `u_tau_vector`                 | Friction-velocity vector (Cartesian components)    | `surface save utau vector = .true.`                    |
 | `turb`                         | Wall viscosity + wall distance (needed for \(y^+\)) | `surface save turbulent = .true.`                      |
 | `les`                          | Sub-grid viscosity (`mu_sgs`)                       | (LES/SGS output, volume files)                          |
+| `artvisc`                      | Artificial viscosity (`mu_art`)                     | `save artvisc with solution = .true.`                   |
+
+**Watch out for `artvisc`:** unlike `u_tau`/`u_tau_vector`/`turb`, there is no dedicated `surface save artvisc` keyword — surface saving reuses the **general, volume-wide** `save artvisc with solution` flag. If that flag is `.true.` in the simulation control file (even if you only care about volume output), every saved surface face gets an extra trailing value, and you **must** add `artvisc` to `additional variables` in *horses2plt* to keep the reads in sync, even if you never request `mu_art` as an output variable. Forgetting it causes exactly the kind of "Array dimensions mismatch" desync described above, typically surfacing on the *second* element (the first element's own reads still land on the right bytes; the leftover unread value only breaks the read from there on).
 
 ```
 additional variables = "[u_tau,u_tau_vector,turb]"

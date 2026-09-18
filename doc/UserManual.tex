@@ -2020,7 +2020,11 @@ u\_tau\_vector 	& Friction-velocity vector (Cartesian components) & surface save
 turb 	& Wall viscosity + wall distance (needed for $y^+$) & surface save turbulent = .true. \\ \hline
 
 les 	& Sub-grid viscosity (\textit{mu\_sgs}) & (LES/SGS output, volume files) \\ \hline
+
+artvisc 	& Artificial viscosity (\textit{mu\_art}) & save artvisc with solution = .true. \\ \hline
 \end{longtable}
+
+\textbf{Watch out for \textit{artvisc}:} unlike \textit{u\_tau}/\textit{u\_tau\_vector}/\textit{turb}, there is no dedicated \textit{surface save artvisc} keyword --- surface saving reuses the \textbf{general, volume-wide} \textit{save artvisc with solution} flag. If that flag is \textit{.true.} in the simulation control file (even if you only care about volume output), every saved surface face gets an extra trailing value, and you \textbf{must} add \textit{artvisc} to \textit{additional variables} in \textit{horses2plt} to keep the reads in sync, even if you never request \textit{mu\_art} as an output variable. Forgetting it causes an ``Array dimensions mismatch'' desync, typically surfacing on the \textbf{second} element (the first element's own reads still land on the right bytes; the leftover unread value only breaks the read from there on).
 
 \begin{lstlisting}[language=bash]
 additional variables = "[u_tau,u_tau_vector,turb]"
