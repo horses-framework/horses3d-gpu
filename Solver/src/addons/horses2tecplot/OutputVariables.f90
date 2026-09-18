@@ -222,18 +222,24 @@ module OutputVariables
 
             if ( preliminarNoOfVariables .eq. 1 ) then
                read(askedVariables(pos+1:len_trim(askedVariables)),*) inputVar
-               preliminarVariables(1) = outputVariableForName(adjustl(trim(inputVar)))
+               inputVar = adjustl(trim(inputVar))
+               preliminarVariables(1) = outputVariableForName(inputVar)
+               call warnIfUnrecognizedVariable(inputVar, preliminarVariables(1))
             else
                do i = 1, preliminarNoOfVariables-1
                   pos2 = index(trim(askedVariables(pos+1:)),",") + pos
                   read(askedVariables(pos+1:pos2),*) inputVar
-                  preliminarVariables(i) = outputVariableForName(adjustl(trim(inputVar)))
+                  inputVar = adjustl(trim(inputVar))
+                  preliminarVariables(i) = outputVariableForName(inputVar)
+                  call warnIfUnrecognizedVariable(inputVar, preliminarVariables(i))
                   pos = pos2
                end do
-            
+
                pos = index(trim(askedVariables),",",BACK=.true.)
-               preliminarVariables(preliminarNoOfVariables) = outputVariableForName(TRIM(ADJUSTL(askedVariables(pos+1:))))
-               
+               inputVar = TRIM(ADJUSTL(askedVariables(pos+1:)))
+               preliminarVariables(preliminarNoOfVariables) = outputVariableForName(inputVar)
+               call warnIfUnrecognizedVariable(inputVar, preliminarVariables(preliminarNoOfVariables))
+
             end if
          end if
 !
@@ -285,6 +291,21 @@ module OutputVariables
          end if
 
       end subroutine getOutputVariables
+
+      subroutine warnIfUnrecognizedVariable(token, resolvedVar)
+         implicit none
+         character(len=*), intent(in) :: token
+         integer,          intent(in) :: resolvedVar
+
+         if (resolvedVar .eq. -1) then
+            if (len_trim(token) .gt. 0) then
+               write(STD_OUT,'(30X,A,A,A)') "-> WARNING: output variable '", trim(token), "' is not recognized. Skipping."
+            else
+               write(STD_OUT,'(30X,A)') "-> WARNING: empty output variable token found (check for a stray comma). Skipping."
+            end if
+         end if
+
+      end subroutine warnIfUnrecognizedVariable
 
       subroutine ComputeOutputVariables(noOutput, outputVarNames, N, e, output, refs, hasGradients, hasStats, hasSensor)
          use SolutionFile
@@ -936,6 +957,13 @@ module OutputVariables
                outputVariablesForVariable = 1
             end if
 
+         case(-1)
+!
+!           Unrecognized/empty token (e.g. a stray comma in 'output variables'):
+!           contributes no columns instead of corrupting the output list.
+!           ---------------------------------------------------------------
+            outputVariablesForVariable = 0
+
          case default
             outputVariablesForVariable = 1
 
@@ -1007,6 +1035,11 @@ module OutputVariables
             else
                output = (/U_TAU_V/)
             end if
+
+         case(-1)
+!
+!           Unrecognized/empty token: no columns to fill (output has size 0).
+!           ------------------------------------------------------------------
 
          case default
             output = iVar
