@@ -201,7 +201,10 @@ module Stats2PltModule
          end if
 
          if (NSTAT .gt. 0) e % statsout(1:,0:,0:,0:) => e % stats
-         if (statsHasFavre) e % favreout(1:,0:,0:,0:) => e % favre
+         if (statsHasFavre) then
+            e % favreout(1:,0:,0:,0:) => e % favre
+            e % Qout(1:,0:,0:,0:) => e % Q
+         end if
 
       end subroutine ProjectStorageGaussPoints
 !
@@ -359,7 +362,10 @@ module Stats2PltModule
 !        --------------------
          if ( all( e % Nsol .eq. e % Nout ) ) then
             if (NSTAT .gt. 0) e % statsout(1:,0:,0:,0:) => e % stats
-            if (statsHasFavre) e % favreout(1:,0:,0:,0:) => e % favre
+            if (statsHasFavre) then
+               e % favreout(1:,0:,0:,0:) => e % favre
+               e % Qout(1:,0:,0:,0:) => e % Q
+            end if
 
          else
             if (NSTAT .gt. 0) then
@@ -369,6 +375,8 @@ module Stats2PltModule
             if (statsHasFavre) then
                allocate( e % favreout(1:NFAVRE_VARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
                call prolongSolutionToGaussPoints(NFAVRE_VARS, e % Nsol, e % favre, e % Nout, e % favreout, Tx, Ty, Tz)
+               allocate( e % Qout(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+               call prolongSolutionToGaussPoints(NVARS, e % Nsol, e % Q, e % Nout, e % Qout, Tx, Ty, Tz)
             end if
 
          end if
@@ -556,6 +564,14 @@ module Stats2PltModule
                   e % favreout(:,i,j,k) = e % favreout(:,i,j,k) + e % favre(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
                end do            ; end do            ; end do
             end do            ; end do            ; end do
+
+            allocate( e % Qout(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % Qout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % Qout(:,i,j,k) = e % Qout(:,i,j,k) + e % Q(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
+            end do            ; end do            ; end do
          end if
 
       end subroutine ProjectStorageHomogeneousPoints
@@ -586,6 +602,7 @@ module Stats2PltModule
       subroutine ComputeStatsOutputVars(e, nout_vars)
          use Storage
          use StatisticsMonitor
+         use PhysicsStorage, only: IRHO, IRHOU, IRHOV, IRHOW
          implicit none
          type(Element_t),    intent(inout) :: e
          integer,            intent(out)   :: nout_vars
@@ -597,6 +614,8 @@ module Stats2PltModule
          integer                    :: i, j, k, var, vi
          integer                    :: statsIdx(NSTATS_OUTVARS), favreIdx(NFAVRE_OUTVARS)
          real(kind=RP)              :: stats9(NSTATS_OUTVARS)
+         real(kind=RP)              :: favre6(NFAVRE_OUTVARS)
+         real(kind=RP)              :: rhoMean, rhouMean, rhovMean, rhowMean
 !
 !        Precompute output column indices (0 = not selected)
 !        ---------------------------------------------------
@@ -638,9 +657,25 @@ module Stats2PltModule
             end if
 
             if (statsHasFavre) then
+!
+!              Recover the Favre stresses from the raw second moments:
+!              <rho*ui''*uj''> = <(rho*ui)*(rho*uj)/rho> - <rho*ui>*<rho*uj>/<rho>
+!              -------------------------------------------------------------------
+               rhoMean  = e % Qout(IRHO ,i,j,k)
+               rhouMean = e % Qout(IRHOU,i,j,k)
+               rhovMean = e % Qout(IRHOV,i,j,k)
+               rhowMean = e % Qout(IRHOW,i,j,k)
+
+               favre6(1) = e % favreout(1,i,j,k) - POW2(rhouMean)/rhoMean
+               favre6(2) = e % favreout(2,i,j,k) - POW2(rhovMean)/rhoMean
+               favre6(3) = e % favreout(3,i,j,k) - POW2(rhowMean)/rhoMean
+               favre6(4) = e % favreout(4,i,j,k) - rhouMean*rhovMean/rhoMean
+               favre6(5) = e % favreout(5,i,j,k) - rhouMean*rhowMean/rhoMean
+               favre6(6) = e % favreout(6,i,j,k) - rhovMean*rhowMean/rhoMean
+
                do var = 1, NFAVRE_OUTVARS
                   if (favreIdx(var) .gt. 0) &
-                     e % outputVars(favreIdx(var), i,j,k) = e % favreout(var, i,j,k)
+                     e % outputVars(favreIdx(var), i,j,k) = favre6(var)
                end do
             end if
 
