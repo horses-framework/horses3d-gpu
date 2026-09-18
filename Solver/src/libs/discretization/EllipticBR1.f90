@@ -320,8 +320,17 @@ module EllipticBR1
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)            
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            select case (grad_vars)
+            case (GRADVARS_ENTROPY)
+               call NSGradientVariables_ENTROPY(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+               call NSGradientVariables_ENTROPY(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            case (GRADVARS_ENERGY)
+               call NSGradientVariables_ENERGY(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+               call NSGradientVariables_ENERGY(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            case default
+               call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+               call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            end select
 #endif
 
             jacobian = f % geom % jacobian(i,j)
@@ -385,8 +394,17 @@ module EllipticBR1
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)    
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            select case (grad_vars)
+            case (GRADVARS_ENTROPY)
+               call NSGradientVariables_ENTROPY(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+               call NSGradientVariables_ENTROPY(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            case (GRADVARS_ENERGY)
+               call NSGradientVariables_ENERGY(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+               call NSGradientVariables_ENERGY(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            case default
+               call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+               call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            end select
 #endif
 
             !$acc loop seq
