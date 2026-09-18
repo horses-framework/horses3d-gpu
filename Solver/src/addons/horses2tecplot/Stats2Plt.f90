@@ -95,7 +95,7 @@ module Stats2PltModule
 !        Read the mesh and solution data
 !        -------------------------------
          call mesh % ReadMesh(meshName)
-         call mesh % ReadSolution(SolutionName)
+         call mesh % ReadSolution(SolutionName, outputExtension=".tec")
          no_of_elements = mesh % no_of_elements
 !
 !        Transform zones to the output variables
@@ -216,7 +216,7 @@ module Stats2PltModule
 !        Read the mesh and solution data
 !        -------------------------------
          call mesh % ReadMesh(meshName)
-         call mesh % ReadSolution(SolutionName)
+         call mesh % ReadSolution(SolutionName, outputExtension=".tec")
 !
 !        Allocate the output spectral basis
 !        ----------------------------------
@@ -376,7 +376,7 @@ module Stats2PltModule
 !        Read the mesh and solution data
 !        -------------------------------
          call mesh % ReadMesh(meshName)
-         call mesh % ReadSolution(SolutionName)
+         call mesh % ReadSolution(SolutionName, outputExtension=".tec")
 !
 !        Set homogeneous nodes
 !        ---------------------

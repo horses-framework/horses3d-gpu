@@ -212,11 +212,13 @@ module Storage
 
       end subroutine Mesh_ReadMesh
 
-      subroutine Mesh_ReadSolution(self,solutionName)
+      subroutine Mesh_ReadSolution(self,solutionName,outputExtension)
          use Headers
+         use FileReadingUtilities, only: getFileName
          implicit none
          class(Mesh_t)         :: self
          character(len=*), intent(in)     :: solutionName
+         character(len=*), intent(in), optional :: outputExtension
 !
 !        ---------------
 !        Local variables
@@ -232,6 +234,7 @@ module Storage
          real(kind=RP), allocatable     :: Qdot(:,:,:,:)
          real(kind=RP), allocatable     :: grads_tmp(:,:,:,:)
          character(len=1024)  :: msg
+         character(len=LINE_LENGTH) :: displayName
          character(len=64)    :: eIDstr
          integer              :: ios
          character(len=256)   :: iomsg_str
@@ -634,7 +637,12 @@ module Storage
 !
 !        Describe the solution
 !        ---------------------
-         write(msg,'(A,A,A)') 'Solution file "',trim(solutionName),'":'
+         if (present(outputExtension)) then
+            displayName = trim(getFileName(solutionName)) // trim(outputExtension)
+         else
+            displayName = trim(solutionName)
+         end if
+         write(msg,'(A,A,A)') 'Solution file "',trim(displayName),'":'
          write(STD_OUT,'(/)')
          call SubSection_Header(trim(msg))
 
