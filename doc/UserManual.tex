@@ -2035,7 +2035,7 @@ output variables = Cp, Cf, yplus, wall_distance, u_tau
 \item $u\_tau\_x$
 \item $u\_tau\_y$
 \item $u\_tau\_z$
-\item $wall\_shear$
+\item $tau$
 \item $tau\_x$
 \item $tau\_y$
 \item $tau\_z$
@@ -2057,8 +2057,8 @@ output variables = Cp, Cf, yplus, wall_distance, u_tau
   \item both active $\rightarrow$ 4 columns: \textit{u\_tau, u\_tau\_x, u\_tau\_y, u\_tau\_z}.
   \end{itemize}
   There is no separate \textit{u\_tau\_vector} output variable to request; the single \textit{u\_tau} key covers every combination.
-\item \textbf{wall\_shear}: wall shear stress $\tau_w = \rho\,u_\tau^2\,\text{sign}(u_\tau)$ (stress units). Requires \textit{u\_tau}.
-\item \textbf{tau\_x, tau\_y, tau\_z}: Cartesian components of the wall-shear-stress vector, $\tau_i = \rho\,|\vec{u}_\tau|\,u_{\tau,i}$ (stress units), i.e. the vectorial counterpart of \textit{wall\_shear}, pointing in the same direction as the friction-velocity vector. Requires the \textit{u\_tau\_vector} additional variable (no separate solver-side flag is needed beyond what \textit{u\_tau\_x/y/z} already requires).
+\item \textbf{tau}: wall shear stress $\tau_w = \rho\,u_\tau^2\,\text{sign}(u_\tau)$ (stress units). Requires \textit{u\_tau}.
+\item \textbf{tau\_x, tau\_y, tau\_z}: Cartesian components of the wall-shear-stress vector, $\tau_i = \rho\,|\vec{u}_\tau|\,u_{\tau,i}$ (stress units), i.e. the vectorial counterpart of \textit{tau}, pointing in the same direction as the friction-velocity vector. Requires the \textit{u\_tau\_vector} additional variable (no separate solver-side flag is needed beyond what \textit{u\_tau\_x/y/z} already requires).
 \item \textbf{Cf}: skin friction coefficient, $C_f = 2\,\tau_w$ in the code's reference-normalized nondimensional units, equivalent to the standard definition $C_f = \tau_w/(\tfrac{1}{2}\rho_\infty U_\infty^2)$. Requires \textit{u\_tau}. This is \textbf{not} algebraically the same as reconstructing \textit{Cf} from \textit{u\_tau}/\textit{u\_tau\_x/y/z} divided by a reference velocity (that reintroduces the \textit{local} density instead of the reference one --- see the discussion below).
 \item \textbf{yplus}: wall-normal distance in wall units. Requires \textit{u\_tau} and \textit{turb}.
 \item \textbf{wall\_distance}: distance from the first fluid solution point to the wall. Requires \textit{turb}.
