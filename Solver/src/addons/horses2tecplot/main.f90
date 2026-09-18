@@ -66,7 +66,7 @@ program horses2plt
             else
                 call Section_Header("Statistics file conversion")
             end if
-            call Stats2Plt(meshName, solutionNames(iSol), fixedOrder, basis, Nout)
+            call Stats2Plt(meshName, solutionNames(iSol), fixedOrder, basis, Nout, mode)
 
          end select
       end do
