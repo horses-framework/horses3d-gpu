@@ -9,6 +9,7 @@ module VariableConversion_NS
    public   Pressure, Temperature, TemperatureDeriv, PressureDot
    public   get_laminar_mu_kappa, SutherlandsLaw
    public   NSGradientVariables_STATE
+   public   NSGradientVariables_selector
    public   NSGradientVariables_ENTROPY
    public   NSGradientVariables_ENERGY
    public   getPrimitiveVariables, getEntropyVariables
@@ -267,6 +268,63 @@ module VariableConversion_NS
          U(IRHOE) = dimensionless % gammaM2 * p*invRho  ! Temperature
 
       end subroutine NSGradientVariables_ENERGY
+!
+! /////////////////////////////////////////////////////////////////////
+!
+!  =====================================================================
+!  GRADVARS_DISPATCH -- gradient-variable dispatch: START HERE
+!  =====================================================================
+!
+!  Device-side equivalent of the host GetGradients procedure pointer. Every
+!  place that converts the state into gradient variables must go through a
+!  selector, otherwise parts of the discretization end up working in different
+!  variable sets and the scheme is silently inconsistent (this has already
+!  happened once: volume in entropy, viscous flux in state).
+!
+!  There are two front doors:
+!     NSGradientVariables_selector  (this file)  -- Q  ->  gradient variables
+!     ViscousFlux_selector_0D       (Physics_NS) -- viscous flux in those variables
+!
+!  TO ADD A NEW GRADIENT-VARIABLE SET: add a case to both selectors and to
+!  SetGradientVariables (PhysicsStorage_NS). Callers need no changes.
+!
+!  TO FIND EVERY DEPENDENT SITE:
+!
+!        grep -rn "GRADVARS_DISPATCH" Solver/src
+!
+!  Not every site can call a selector. Those are tagged
+!  "GRADVARS_DISPATCH (hardcoded)" with the reason, and are listed here so the
+!  list stays discoverable from the front door:
+!
+!     * Physics_NS.f90 : getStressTensor
+!         Computes genuinely different mathematics per set (it reconstructs the
+!         velocity gradient from whichever variables were differentiated), so it
+!         is not a dispatch onto sibling routines and cannot delegate.
+!         IF YOU ADD A VARIABLE SET YOU MUST EDIT IT TOO.
+!
+!  If a caller needs this idea but with different mathematics, do NOT inline a
+!  select case at the call site: add a sibling selector next to this one with a
+!  descriptive name (NSGradientVariables_selector_<PURPOSE>) so every variant
+!  stays in one place and one grep finds them all.
+!  =====================================================================
+!
+      pure subroutine NSGradientVariables_selector( nEqn, nGrad, Q, U )
+         !$acc routine seq
+         implicit none
+         integer,       intent(in)  :: nEqn, nGrad
+         real(kind=RP), intent(in)  :: Q(nEqn)
+         real(kind=RP), intent(out) :: U(nGrad)
+
+         select case (grad_vars)
+         case (GRADVARS_ENTROPY)
+            call NSGradientVariables_ENTROPY(nEqn, nGrad, Q, U)
+         case (GRADVARS_ENERGY)
+            call NSGradientVariables_ENERGY(nEqn, nGrad, Q, U)
+         case default
+            call NSGradientVariables_STATE(nEqn, nGrad, Q, U)
+         end select
+
+      end subroutine NSGradientVariables_selector
 !
 ! /////////////////////////////////////////////////////////////////////
 !

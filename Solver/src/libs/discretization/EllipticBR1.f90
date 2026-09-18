@@ -320,8 +320,14 @@ module EllipticBR1
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)            
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+!
+!           GRADVARS_DISPATCH -- see NSGradientVariables_selector.
+!           Must use the same variable set as the volume gradient
+!           (HexMesh_ComputeLocalGradientNS), or the volume and lifting terms
+!           are computed in different variables and the result is wrong.
+!           ------------------------------------------------------------------
+            call NSGradientVariables_selector(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+            call NSGradientVariables_selector(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
 #endif
 
             jacobian = f % geom % jacobian(i,j)
@@ -385,8 +391,14 @@ module EllipticBR1
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)    
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+!
+!           GRADVARS_DISPATCH -- see NSGradientVariables_selector.
+!           Must use the same variable set as the volume gradient
+!           (HexMesh_ComputeLocalGradientNS), or the volume and lifting terms
+!           are computed in different variables and the result is wrong.
+!           ------------------------------------------------------------------
+            call NSGradientVariables_selector(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+            call NSGradientVariables_selector(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
 #endif
 
             !$acc loop seq

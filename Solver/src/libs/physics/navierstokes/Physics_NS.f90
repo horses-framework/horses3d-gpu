@@ -31,6 +31,7 @@
       private
       public  EulerFlux
       public  ViscousFlux_STATE, ViscousFlux_ENTROPY, ViscousFlux_ENERGY
+      public  ViscousFlux_selector_0D
       public  GuermondPopovFlux_ENTROPY
       public  InviscidJacobian, ComputeEigenvaluesForState
       public  getStressTensor, ViscousJacobian, getFrictionVelocity, getFrictionVelocityWithSign
@@ -412,6 +413,44 @@
          F(IRHOE,IZ) = F(IRHOU,IZ) * u(IX) + F(IRHOV,IZ) * u(IY) + F(IRHOW,IZ) * u(IZ) + kappa  * nablaT(IZ)
 
       end subroutine ViscousFlux_ENERGY
+!
+!///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+!
+      pure subroutine ViscousFlux_selector_0D(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+!
+!        ---------------------------------------------------------------------
+!        GRADVARS_DISPATCH -- second of the two front doors.
+!
+!        Point-wise viscous flux, evaluated in whichever gradient variables the
+!        gradients were computed in. Mirrors NSGradientVariables_selector, so
+!        callers never need to know which set is active.
+!
+!        See the GRADVARS_DISPATCH block above NSGradientVariables_selector in
+!        VariableConversion_NS.f90 for the full convention and the list of
+!        sites that cannot delegate.   grep -rn "GRADVARS_DISPATCH" Solver/src
+!        ---------------------------------------------------------------------
+!
+         !$acc routine seq
+         implicit none
+         integer,       intent(in)  :: nEqn
+         integer,       intent(in)  :: nGradEqn
+         real(kind=RP), intent(in)  :: Q   (1:nEqn        )
+         real(kind=RP), intent(in)  :: Q_x (1:nGradEqn    )
+         real(kind=RP), intent(in)  :: Q_y (1:nGradEqn    )
+         real(kind=RP), intent(in)  :: Q_z (1:nGradEqn    )
+         real(kind=RP), intent(in)  :: mu, beta, kappa
+         real(kind=RP), intent(out) :: F   (1:nEqn, 1:NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENTROPY)
+            call ViscousFlux_ENTROPY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         case (GRADVARS_ENERGY)
+            call ViscousFlux_ENERGY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         case default
+            call ViscousFlux_STATE(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         end select
+
+      end subroutine ViscousFlux_selector_0D
 
       pure subroutine GuermondPopovFlux_ENTROPY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
 !
@@ -835,7 +874,19 @@
          real(kind=RP) :: T , muOfT
          real(kind=RP) :: divV, p_div_rho
          real(kind=RP) :: U_x(NDIM), U_y(NDIM), U_z(NDIM), invRho, invRho2, uDivRho(NDIM), u(NDIM)
-
+!
+!        GRADVARS_DISPATCH (hardcoded) -- CANNOT delegate to a selector.
+!
+!        Unlike the selectors, this is not a 3-way dispatch onto sibling
+!        routines: each branch reconstructs the velocity gradient with genuinely
+!        different mathematics, depending on which variables were differentiated
+!        upstream. There is no common signature to factor out.
+!
+!        IF YOU ADD A GRADIENT-VARIABLE SET, YOU MUST ADD A BRANCH HERE TOO --
+!        omitting it silently yields a wrong stress tensor rather than an error.
+!        Front door / full convention: NSGradientVariables_selector in
+!        VariableConversion_NS.f90.    grep -rn "GRADVARS_DISPATCH" Solver/src
+!        ----------------------------------------------------------------------
          select case(grad_vars)
          case(GRADVARS_STATE)
 

@@ -84,6 +84,10 @@ module StorageClass
 #ifdef INCNS
       real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_iNS  ! iNS State vector to calculate the gradient
 #endif
+#ifdef NAVIERSTOKES
+      real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_NS   ! NS gradient variables to differentiate (entropy/energy)
+      real(kind=RP), dimension(:,:,:,:,:), allocatable :: AviscContravariantFlux ! Shock-capturing artificial viscous flux
+#endif
 #ifndef ACOUSTIC
       real(kind=RP),           allocatable :: mu_NS(:,:,:,:)       ! (mu, beta, kappa) artificial
       real(kind=RP),           allocatable :: mu_turb_NS(:,:,:)    ! mu of LES
@@ -822,6 +826,10 @@ module StorageClass
 #ifdef INCNS
          allocate(self % Q_grad_iNS(1:NCONS, 0:Nx, 0:Ny, 0:Nz))
 #endif
+#ifdef NAVIERSTOKES
+         allocate(self % Q_grad_NS(1:NGRAD, 0:Nx, 0:Ny, 0:Nz))
+         allocate(self % AviscContravariantFlux(1:NCONS, 0:Nx, 0:Ny, 0:Nz, 1:NDIM))
+#endif
 #if defined (SPALARTALMARAS)
          ALLOCATE( self % S_SA  (NCONS,0:Nx,0:Ny,0:Nz) )
 #endif
@@ -903,6 +911,10 @@ module StorageClass
          self % rho    = 0.0_RP
 #ifdef INCNS
          self % Q_grad_iNS = 0.0_RP
+#endif
+#ifdef NAVIERSTOKES
+         self % Q_grad_NS = 0.0_RP
+         self % AviscContravariantFlux = 0.0_RP
 #endif
 #ifndef ACOUSTIC
          self % mu_NS  = 0.0_RP
@@ -1024,6 +1036,10 @@ module StorageClass
 #ifdef INCNS
          to % Q_grad_iNS = from % Q_grad_iNS
 #endif
+#ifdef NAVIERSTOKES
+         to % Q_grad_NS = from % Q_grad_NS
+         to % AviscContravariantFlux = from % AviscContravariantFlux
+#endif
 #if defined (SPALARTALMARAS)
          to % S_SA   = from % S_SA
 #endif
@@ -1130,6 +1146,10 @@ module StorageClass
 
 #ifdef INCNS
          safedeallocate(self % Q_grad_iNS)
+#endif
+#ifdef NAVIERSTOKES
+         safedeallocate(self % Q_grad_NS)
+         safedeallocate(self % AviscContravariantFlux)
 #endif
 #if defined (SPALARTALMARAS)
          safedeallocate(self % S_SA)
