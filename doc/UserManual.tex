@@ -1957,21 +1957,47 @@ The options are:
 \end{multicols}
 
 \subsection{Statistics Files (*.stats.hsol)}
-Statistics files can generate the standard variables as well as the following variables (being $S_{ij}$ the components of the Reynolds Stress tensor):
+Statistics files can generate the following variables (being $R_{ij}$ the components of the Reynolds Stress tensor):
 
 \begin{multicols}{3}
 \begin{itemize}
-\item $umean$
-\item $vmean$
-\item $wmean$
-\item $S_{xx}$
-\item $S_{yy}$
-\item $S_{zz}$
-\item $S_{xy}$
-\item $S_{xz}$
-\item $S_{yz}$
+\item $Umean$
+\item $Vmean$
+\item $Wmean$
+\item $R_{xx}$
+\item $R_{yy}$
+\item $R_{zz}$
+\item $R_{xy}$
+\item $R_{xz}$
+\item $R_{yz}$
 \end{itemize}
 \end{multicols}
+
+If the simulation was run with Favre (density-weighted) averaging, the following variables are also available, being $F_{ij}$ the components of the Favre stress tensor:
+
+\begin{multicols}{3}
+\begin{itemize}
+\item $F_{xx}$
+\item $F_{yy}$
+\item $F_{zz}$
+\item $F_{xy}$
+\item $F_{xz}$
+\item $F_{yz}$
+\end{itemize}
+\end{multicols}
+
+As with standard solution files, the variables to export can be restricted with \textit{output variables}. The following shorthands are also accepted:
+
+\begin{itemize}
+\item \textbf{Vmean} or \textbf{V}: expands to \textit{Umean, Vmean, Wmean}.
+\item \textbf{Rij}: expands to \textit{Rxx, Ryy, Rzz, Rxy, Rxz, Ryz}.
+\item \textbf{Fij}: expands to \textit{Fxx, Fyy, Fzz, Fxy, Fxz, Fyz}.
+\item \textbf{all}: every Reynolds and (if available) Favre variable.
+\end{itemize}
+
+\begin{lstlisting}[language=bash]
+output variables = Vmean, Rij
+\end{lstlisting}
 
 \section{Extract geometry}
 Under construction.
