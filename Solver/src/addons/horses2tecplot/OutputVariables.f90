@@ -52,6 +52,7 @@ module OutputVariables
       enumerator :: Vfvec_Vrms, Uf_Vrms, Vf_Vrms, Wf_Vrms
       enumerator :: U_TAU_V, WallY_V, Tauw_V, MU, YPLUS, Cf_V, MUTMINF
       enumerator :: UTAUX_V, UTAUY_V, UTAUZ_V
+      enumerator :: TAUX_V, TAUY_V, TAUZ_V
       enumerator :: MU_sgs_V, SENSOR_V
       enumerator :: LASTVARIABLE
    end enum
@@ -138,6 +139,9 @@ module OutputVariables
    character(len=STR_VAR_LEN), parameter  :: UTauXKey      = "u_tau_x"
    character(len=STR_VAR_LEN), parameter  :: UTauYKey      = "u_tau_y"
    character(len=STR_VAR_LEN), parameter  :: UTauZKey      = "u_tau_z"
+   character(len=STR_VAR_LEN), parameter  :: TauXKey       = "tau_x"
+   character(len=STR_VAR_LEN), parameter  :: TauYKey       = "tau_y"
+   character(len=STR_VAR_LEN), parameter  :: TauZKey       = "tau_z"
    character(len=STR_VAR_LEN), parameter  :: muKey         = "mu_ns"
    character(len=STR_VAR_LEN), parameter  :: yplusKey      = "yplus"
    character(len=STR_VAR_LEN), parameter  :: cfKey         = "Cf"
@@ -163,6 +167,7 @@ module OutputVariables
                                                                             UTAUKey, WallYKey, TauwKey, muKey, yplusKey, &
                                                                             cfKey, mutminfKey, &
                                                                             UTauXKey, UTauYKey, UTauZKey, &
+                                                                            TauXKey, TauYKey, TauZKey, &
                                                                             muSGSKey, sensorKey /)
                                                                         
                                                                         
@@ -729,6 +734,24 @@ module OutputVariables
                      output(var,i,j,k) =  u_tau_vec(3,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = output(var,:,:,:) * refs(V_REF)
+
+               case(TAUX_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) =  Q(IRHO,i,j,k) * norm2(u_tau_vec(:,i,j,k)) * u_tau_vec(1,i,j,k)
+                  end do         ; end do         ; end do
+                  if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
+
+               case(TAUY_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) =  Q(IRHO,i,j,k) * norm2(u_tau_vec(:,i,j,k)) * u_tau_vec(2,i,j,k)
+                  end do         ; end do         ; end do
+                  if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
+
+               case(TAUZ_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) =  Q(IRHO,i,j,k) * norm2(u_tau_vec(:,i,j,k)) * u_tau_vec(3,i,j,k)
+                  end do         ; end do         ; end do
+                  if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
 
                case(MU_sgs_V)
                   do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
