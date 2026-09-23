@@ -10,6 +10,7 @@ module Storage
    public Mesh_t, Element_t, Boundary_t
    public NVARS, NGRADVARS, hasMPIranks, hasBoundaries, isOldStats
    public partitionFileName, boundaryFileName, flowEq
+   public gradVarsOfSolution, SetGradientVariablesOfSolution
    public hasExtraGradients, hasMu_NS, hasUt_NS, hasWallY, NSTAT, hasMu_sgs
 
    integer                          :: NVARS, NGRADVARS
@@ -20,6 +21,7 @@ module Storage
    logical                          :: hasWallY     = .false.
    logical                          :: hasMu_sgs = .false.
    character(len=LINE_LENGTH)       :: boundaryFileName, partitionFileName, flowEq
+   integer                          :: gradVarsOfSolution = GRADVARS_STATE   ! Gradient variables of the saved gradients
    integer, parameter               :: NSTAT = 9
 
    type Element_t
@@ -311,9 +313,7 @@ module Storage
 !        ----------------
          fid = putSolutionFileInReadDataMode(solutionName)
 
-         ! call set_getVelocityGradients(GRADVARS_STATE) ! FIXME: MIGHT BE NEEDED FOR HORSES2PLT
-         ! write(STD_OUT,'(15X,A)') " WARNING horses2tecplot.90 :: Velocity Gradients set to default (GRADVARS_STATE)"
-      
+
          if ( .not. isOldStats ) then
          ! if ( .not. self % isStatistics ) then
             do eID = 1, self % no_of_elements
@@ -369,10 +369,10 @@ module Storage
                   read(fid) e % Q_y
                   read(fid) e % Q_z
 
-!                 Call set_getVelocityGradients to make the pointer to the actual subroutine, is needed only for the NS
-!                 grad_vars is set from "gradient variables" in the .h2t control file (default: state)
-!                 ---------------------------
-                  call set_getVelocityGradients(grad_vars)
+!                 Call set_getVelocityGradients to make the pointer to the actual subroutine, is needed only for the NS.
+!                 The saved gradients are those of the gradient variables used by the solver (--gradient-variables)
+!                 ----------------------------------------------------------------------------------------------------
+                  call set_getVelocityGradients(gradVarsOfSolution)
 
                   ! Following block works for NS, CH, NSCH and iNS .... but not iNSCH: change 5 by 6 to use iNSCH (NS won't work)
                   if (NVARS .ge. 5) then
@@ -574,4 +574,40 @@ module Storage
       end select
           
       End Subroutine getNVARS
+!
+!////////////////////////////////////////////////////////////////////////
+!
+      subroutine SetGradientVariablesOfSolution(gradVarsName)
+!
+!        **********************************************************
+!        Sets the gradient variables of the gradients stored in the
+!        solution file: "state", "entropy" or "energy".
+!        **********************************************************
+!
+         use Utilities, only: toLower
+         implicit none
+         character(len=*), intent(in) :: gradVarsName
+         character(len=LINE_LENGTH)   :: name
+
+         name = gradVarsName
+         call toLower(name)
+
+         select case (trim(name))
+         case ("state")
+            gradVarsOfSolution = GRADVARS_STATE
+         case ("entropy")
+            gradVarsOfSolution = GRADVARS_ENTROPY
+         case ("energy")
+            gradVarsOfSolution = GRADVARS_ENERGY
+         case default
+            write(STD_OUT,'(A,A,A)') 'Gradient variables "', trim(gradVarsName), '" not recognized.'
+            write(STD_OUT,'(A)') "Options:"
+            write(STD_OUT,'(A)') "   * state"
+            write(STD_OUT,'(A)') "   * entropy"
+            write(STD_OUT,'(A)') "   * energy"
+            errorMessage(STD_OUT)
+            error stop
+         end select
+
+      end subroutine SetGradientVariablesOfSolution
 end module Storage
