@@ -515,6 +515,7 @@
 !
 !        where vt²=uu+vv+ww.
 !
+         !$acc routine seq
          implicit none
          integer,       intent(in)  :: nEqn
          integer,       intent(in)  :: nGradEqn
