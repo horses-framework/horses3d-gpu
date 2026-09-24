@@ -1110,6 +1110,7 @@ slavecoord:             DO l = 1, 4
          !-local-variables----------------------------------------------------
          integer            :: mpifID, fID, thisSide, domain
          integer            :: i, j, counter
+         integer            :: eIDmax
          !--------------------------------------------------------------------
 
          if ( .not. MPI_Process % doMPIAction ) return
@@ -1137,8 +1138,9 @@ slavecoord:             DO l = 1, 4
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
                thisSide = self % MPIfaces % faces(domain) % elementSide(mpifID)
+               eIDmax = maxval(self % faces(fID) % elementIDs)   ! plain integer: nvfortran 26.3 ICEs on the expression inside the associate (MPI builds)
                associate( f => self % faces(fID))
-               associate( e => self % elements(maxval(f % elementIDs)) )
+               associate( e => self % elements(eIDmax) )
 
 
                self % MPIfaces % faces(domain) % Nsend(counter:counter+1  ) = e % Nxyz(axisMap(:,f % elementSide(thisSide)))
@@ -2242,6 +2244,7 @@ slavecoord:             DO l = 1, 4
          integer  :: Nxyz(NDIM)
          integer  :: domain, MPI_NDOFS(MPI_Process % nProcs), mpifID
          integer  :: num_of_Faces, ii
+         integer  :: eIDmax
          integer, parameter :: other(2) = [2, 1]
          !--------------------------------------------------------------
 
@@ -2338,8 +2341,9 @@ slavecoord:             DO l = 1, 4
                   fID  = self % MPIfaces % faces(domain) % faceIDs(mpifID)
                   side = self % MPIfaces % faces(domain) % elementSide(mpifID)   ! face side 1/2
 
+                  eIDmax = maxval(self % faces(fID) % elementIDs)   ! plain integer: nvfortran 26.3 ICEs on the expression inside the associate (MPI builds)
                   associate( f => self % faces(fID) )
-                  associate( e => self % elements(maxval(f % elementIDs)) )
+                  associate( e => self % elements(eIDmax) )
 
                   sideL = f % elementSide(side)                                  ! element side 1/2/3/4/5/6
 
