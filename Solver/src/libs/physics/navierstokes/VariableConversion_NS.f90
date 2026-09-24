@@ -490,9 +490,17 @@ module VariableConversion_NS
          pDivRho = Pressure(Q) / Q(IRHO)
          U = Q(IRHOU:IRHOW) / Q(IRHO)
 
-         U_x = pDivRho * Q_x(IRHOU:IRHOW) + U / pDivRho * Q_x(IRHOE)
-         U_y = pDivRho * Q_y(IRHOU:IRHOW) + U / pDivRho * Q_y(IRHOE)
-         U_z = pDivRho * Q_z(IRHOU:IRHOW) + U / pDivRho * Q_z(IRHOE)
+!
+!        With W(2:4) = rho*u/p and W(5) = -rho/p, u = -W(2:4)/W(5), hence
+!        grad u = (p/rho) * (grad W(2:4) + u * grad W(5)), the same expression
+!        ViscousFlux_ENTROPY and getStressTensor use. (Previously the last term
+!        was u / (p/rho) * grad W(5): wrong unless p/rho = 1, which in HORSES
+!        units means T = gamma*M**2. It fed the GMM and "div v" sensors, the
+!        NS artificial viscosity, the LES models and horses2plt.)
+!        ---------------------------------------------------------------------
+         U_x = pDivRho * (Q_x(IRHOU:IRHOW) + U * Q_x(IRHOE))
+         U_y = pDivRho * (Q_y(IRHOU:IRHOW) + U * Q_y(IRHOE))
+         U_z = pDivRho * (Q_z(IRHOU:IRHOW) + U * Q_z(IRHOE))
 
       end subroutine getVelocityGradients_Entropy
 !
