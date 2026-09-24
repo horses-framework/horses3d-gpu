@@ -1214,6 +1214,7 @@ module SCsensorClass
 !     Local variables
 !     ---------------
       real(RP) :: ux(3), uy(3), uz(3)
+      real(RP) :: pLoc
 
 
       select case (varType)
@@ -1248,12 +1249,12 @@ module SCsensorClass
          s = Pressure(Q) * Q(IRHO)
 
       case (SC_RHO_GRAD_ID)
-         if ( grad_vars == GRADVARS_STATE ) then
+         if ( grad_vars == GRADVARS_ENTROPY ) then
+            ! W5 = -rho/p  =>  d(rho)/dx ≈ -p * dW5/dx  (leading-order approx, pressure smooth)
+            pLoc = Pressure(Q)
+            s = POW2(pLoc * U_x(IRHOE)) + POW2(pLoc * U_y(IRHOE)) + POW2(pLoc * U_z(IRHOE))
+         else ! STATE or ENERGY: d(rho)/dx stored directly in U_x(IRHO)
             s = POW2(U_x(IRHO)) + POW2(U_y(IRHO)) + POW2(U_z(IRHO))
-         elseif ( grad_vars == GRADVARS_ENERGY ) then
-            s = POW2(U_x(IRHO)) + POW2(U_y(IRHO)) + POW2(U_z(IRHO))
-         else ! grad_vars == GRADVARS_ENTROPY
-            s = POW2(dot_product(Q, U_x)) + POW2(dot_product(Q, U_y)) + POW2(dot_product(Q, U_z))
          end if
 
       case (SC_DIVV_ID)
