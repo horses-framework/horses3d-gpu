@@ -1109,17 +1109,21 @@ slavecoord:             DO l = 1, 4
 #ifdef _HAS_MPI_
          !-local-variables----------------------------------------------------
          integer            :: mpifID, fID, thisSide, domain
-         integer            :: i, j, counter
+         integer            :: i, j, counter, ierr
+         integer, allocatable :: all_reqs(:)
          !--------------------------------------------------------------------
 
          if ( .not. MPI_Process % doMPIAction ) return
+
+         allocate(all_reqs(2 * MPI_Process % nProcs))
+         all_reqs = MPI_REQUEST_NULL
 !
 !        ***************************
 !        Perform the receive request
 !        ***************************
 !
          do domain = 1, MPI_Process % nProcs
-            call self % MPIfaces % faces(domain) % RecvN(domain)
+            call self % MPIfaces % faces(domain) % RecvN(domain, all_reqs(domain))
          end do
 !
 !        *************
@@ -1155,7 +1159,20 @@ slavecoord:             DO l = 1, 4
 !           Send solution
 !           -------------
 !
-            call self % MPIfaces % faces(domain) % SendN(domain)
+            call self % MPIfaces % faces(domain) % SendN(domain, all_reqs(MPI_Process % nProcs + domain))
+         end do
+!
+!        ********************************************
+!        Wait for all posted operations (recv + send)
+!        ********************************************
+!
+         call MPI_Waitall(2 * MPI_Process % nProcs, all_reqs, MPI_STATUSES_IGNORE, ierr)
+         deallocate(all_reqs)
+!
+!        The receives are complete: clear the stored handles so the later
+!        wait in the Gather/connectivity routines returns immediately
+         do domain = 1, MPI_Process % nProcs
+            self % MPIfaces % faces(domain) % Nrecv_req = MPI_REQUEST_NULL
          end do
 #endif
       end subroutine HexMesh_UpdateMPIFacesPolynomial
@@ -1175,9 +1192,13 @@ slavecoord:             DO l = 1, 4
 !
          integer            :: mpifID, fID, thisSide, domain
          integer            :: i, j, counter, linear_idx, faceSize
-         integer  :: ierr, dummyreq
+         integer  :: ierr, m
+         integer, allocatable :: all_reqs(:)
 
          if ( .not. MPI_Process % doMPIAction ) return
+
+         allocate(all_reqs(2 * MPI_Process % nProcs))
+         all_reqs = MPI_REQUEST_NULL
 !
 !        ***************************
 !        Perform the receive request
@@ -1195,16 +1216,16 @@ slavecoord:             DO l = 1, 4
 !           ---------------
 !
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
-            !$acc parallel loop gang present(self) copyin(nEqn) private(fID,thisSide,faceSize) wait(1)
+            !$acc parallel loop gang present(self) copyin(nEqn,domain) private(fID,thisSide,faceSize, i, j, m) wait(1)
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
                thisSide = self % MPIfaces % faces(domain) % elementSide(mpifID)
                faceSize = (self % faces(fID) % Nf(2) + 1) * (self % faces(fID) % Nf(1) + 1) * nEqn  ! Total size of the face data block
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx = ((mpifID - 1) * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % MPIfaces % faces(domain) % Qsend(linear_idx:linear_idx+nEqn-1) = self % faces(fID) % storage(thisSide) % Q(1:nEqn,i,j)
-               end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1) ; do m = 1, nEqn 
+                  linear_idx = ((mpifID - 1) * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % MPIfaces % faces(domain) % Qsend(linear_idx) = self % faces(fID) % storage(thisSide) % Q(m,i,j)
+               end do               ; end do        ; end do 
             end do
             !$acc end parallel loop
 
@@ -1213,9 +1234,22 @@ slavecoord:             DO l = 1, 4
 !           Send solution
 !           -------------
 !
-            call self % MPIfaces % faces(domain) % RecvQ(domain, nEqn)
-            call self % MPIfaces % faces(domain) % SendQ(domain, nEqn)
+            call self % MPIfaces % faces(domain) % RecvQ(domain, nEqn, all_reqs(domain))
+            call self % MPIfaces % faces(domain) % SendQ(domain, nEqn, all_reqs(MPI_Process % nProcs + domain))
 
+         end do
+!
+!        ********************************************
+!        Wait for all posted operations (recv + send)
+!        ********************************************
+!
+         call MPI_Waitall(2 * MPI_Process % nProcs, all_reqs, MPI_STATUSES_IGNORE, ierr)
+         deallocate(all_reqs)
+!
+!        The receives are complete: clear the stored handles so the later
+!        wait in the Gather/connectivity routines returns immediately
+         do domain = 1, MPI_Process % nProcs
+            self % MPIfaces % faces(domain) % Qrecv_req = MPI_REQUEST_NULL
          end do
 
 #endif
@@ -1235,9 +1269,13 @@ slavecoord:             DO l = 1, 4
          integer            :: mpifID, fID, thisSide, domain
          integer            :: i, j, counter, linear_idx_x, linear_idx_y, linear_idx_z, faceSize
          integer, parameter :: otherSide(2) = (/2,1/)
-         integer  :: ierr, dummyreq
+         integer  :: ierr, m
+         integer, allocatable :: all_reqs(:)
 
          if ( .not. MPI_Process % doMPIAction ) return
+
+         allocate(all_reqs(2 * MPI_Process % nProcs))
+         all_reqs = MPI_REQUEST_NULL
 !
 !        ***************************
 !        Perform the receive request
@@ -1251,34 +1289,47 @@ slavecoord:             DO l = 1, 4
          do domain = 1, MPI_Process % nProcs
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
 
-            !$acc parallel loop gang present(self) copyin(nEqn) wait(1)
+            !$acc parallel loop gang present(self) copyin(nEqn,domain) private(fID,thisSide,faceSize, m, i, j) wait(1)
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
                thisSide = self % MPIfaces % faces(domain) % elementSide(mpifID)
                faceSize = (self % faces(fID) % Nf(2) + 1) * (self % faces(fID) % Nf(1) + 1) * nEqn  ! Total size of the face data block
 
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)      
-                  linear_idx_x = ((mpifID - 1) * 3 * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % MPIfaces % faces(domain) % U_xyzsend(linear_idx_x:linear_idx_x+nEqn-1) = self % faces(fID) % storage(thisSide) % U_x(1:nEqn,i,j)
-               end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx_x)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1) ; do m = 1, nEqn     
+                  linear_idx_x = ((mpifID - 1) * 3 * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % MPIfaces % faces(domain) % U_xyzsend(linear_idx_x) = self % faces(fID) % storage(thisSide) % U_x(m,i,j)
+               end do               ; end do               ; end do
 
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx_y = ((mpifID - 1) * 3 * faceSize) + faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % MPIfaces % faces(domain) % U_xyzsend(linear_idx_y:linear_idx_y+nEqn-1) = self % faces(fID) % storage(thisSide) % U_y(1:nEqn,i,j)
-               end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx_y)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1) ; do m = 1, nEqn 
+                  linear_idx_y = ((mpifID - 1) * 3 * faceSize) + faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % MPIfaces % faces(domain) % U_xyzsend(linear_idx_y) = self % faces(fID) % storage(thisSide) % U_y(m,i,j)
+               end do               ; end do               ; end do
 
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx_z = ((mpifID - 1) * 3 * faceSize) + 2 * faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % MPIfaces % faces(domain) % U_xyzsend(linear_idx_z:linear_idx_z+nEqn-1) = self % faces(fID) % storage(thisSide) % U_z(1:nEqn,i,j)
-               end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx_z)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1) ; do m = 1, nEqn 
+                  linear_idx_z = ((mpifID - 1) * 3 * faceSize) + 2 * faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % MPIfaces % faces(domain) % U_xyzsend(linear_idx_z) = self % faces(fID) % storage(thisSide) % U_z(m,i,j)
+               end do               ; end do               ; end do
             end do
             !$acc end parallel loop
 
-            call self % MPIfaces % faces(domain) % RecvU_xyz(domain, nEqn)
-            call self % MPIfaces % faces(domain) % SendU_xyz(domain, nEqn)
+            call self % MPIfaces % faces(domain) % RecvU_xyz(domain, nEqn, all_reqs(domain))
+            call self % MPIfaces % faces(domain) % SendU_xyz(domain, nEqn, all_reqs(MPI_Process % nProcs + domain))
+         end do
+!
+!        ********************************************
+!        Wait for all posted operations (recv + send)
+!        ********************************************
+!
+         call MPI_Waitall(2 * MPI_Process % nProcs, all_reqs, MPI_STATUSES_IGNORE, ierr)
+         deallocate(all_reqs)
+!
+!        The receives are complete: clear the stored handles so the later
+!        wait in the Gather/connectivity routines returns immediately
+         do domain = 1, MPI_Process % nProcs
+            self % MPIfaces % faces(domain) % gradQrecv_req = MPI_REQUEST_NULL
          end do
 
 #endif
@@ -1298,17 +1349,21 @@ slavecoord:             DO l = 1, 4
 !        ---------------
 !
          integer            :: mpifID, fID, thisSide, domain
-         integer            :: i, j, counter
+         integer            :: i, j, counter, ierr
+         integer, allocatable :: all_reqs(:)
          integer, parameter :: otherSide(2) = (/2,1/)
 
          if ( .not. MPI_Process % doMPIAction ) return
+
+         allocate(all_reqs(2 * MPI_Process % nProcs))
+         all_reqs = MPI_REQUEST_NULL
 !
 !        ***************************
 !        Perform the receive request
 !        ***************************
 !
          do domain = 1, MPI_Process % nProcs
-            call self % MPIfaces % faces(domain) % RecvAviscFlux(domain, nEqn)
+            call self % MPIfaces % faces(domain) % RecvAviscFlux(domain, nEqn, all_reqs(domain))
          end do
 !
 !        ***********
@@ -1340,7 +1395,20 @@ slavecoord:             DO l = 1, 4
 !           Send solution
 !           -------------
 !
-            call self % MPIfaces % faces(domain) % SendAviscFlux(domain, nEqn)
+            call self % MPIfaces % faces(domain) % SendAviscFlux(domain, nEqn, all_reqs(MPI_Process % nProcs + domain))
+         end do
+!
+!        ********************************************
+!        Wait for all posted operations (recv + send)
+!        ********************************************
+!
+         call MPI_Waitall(2 * MPI_Process % nProcs, all_reqs, MPI_STATUSES_IGNORE, ierr)
+         deallocate(all_reqs)
+!
+!        The receives are complete: clear the stored handles so the later
+!        wait in the Gather/connectivity routines returns immediately
+         do domain = 1, MPI_Process % nProcs
+            self % MPIfaces % faces(domain) % AviscFluxRecv_req = MPI_REQUEST_NULL
          end do
 #endif
       end subroutine HexMesh_UpdateMPIFacesAviscFlux
@@ -1360,17 +1428,21 @@ slavecoord:             DO l = 1, 4
 !        ---------------
 !
          integer            :: mpifID, fID, thisSide, domain
-         integer            :: i, j, counter
+         integer            :: i, j, counter, ierr
+         integer, allocatable :: all_reqs(:)
          integer, parameter :: otherSide(2) = (/2,1/)
 
          if ( .not. MPI_Process % doMPIAction ) return
+
+         allocate(all_reqs(2 * MPI_Process % nProcs))
+         all_reqs = MPI_REQUEST_NULL
 !
 !        ***************************
 !        Perform the receive request
 !        ***************************
 !
          do domain = 1, MPI_Process % nProcs
-            call self % MPIfaces % faces(domain) % RecvQ(domain, nEqn)
+            call self % MPIfaces % faces(domain) % RecvQ(domain, nEqn, all_reqs(domain))
          end do
 !
 !        *************
@@ -1401,7 +1473,20 @@ slavecoord:             DO l = 1, 4
 !           Send solution
 !           -------------
 !
-            call self % MPIfaces % faces(domain) % SendQ(domain, nEqn)
+            call self % MPIfaces % faces(domain) % SendQ(domain, nEqn, all_reqs(MPI_Process % nProcs + domain))
+         end do
+!
+!        ********************************************
+!        Wait for all posted operations (recv + send)
+!        ********************************************
+!
+         call MPI_Waitall(2 * MPI_Process % nProcs, all_reqs, MPI_STATUSES_IGNORE, ierr)
+         deallocate(all_reqs)
+!
+!        The receives are complete: clear the stored handles so the later
+!        wait in the Gather/connectivity routines returns immediately
+         do domain = 1, MPI_Process % nProcs
+            self % MPIfaces % faces(domain) % Qrecv_req = MPI_REQUEST_NULL
          end do
 #endif
       end subroutine HexMesh_UpdateMPIFacesBaseSolution
@@ -1420,7 +1505,7 @@ slavecoord:             DO l = 1, 4
 !        ---------------
 !
          integer            :: mpifID, fID, thisSide, domain
-         integer            :: i, j, counter, linear_idx, faceSize
+         integer            :: i, j, counter, linear_idx, faceSize, m
          integer, parameter :: otherSide(2) = (/2,1/)
 
          if ( .not. MPI_Process % doMPIAction ) return
@@ -1438,16 +1523,16 @@ slavecoord:             DO l = 1, 4
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
             call self % MPIfaces % faces(domain) % WaitForSolution
 
-            !$acc parallel loop gang present(self) copyin(nEqn)
+            !$acc parallel loop gang present(self) copyin(nEqn,domain,otherSide) private(fID,thisSide,faceSize, m, i, j)
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
                thisSide = self % MPIfaces % faces(domain) % elementSide(mpifID)
                faceSize = (self % faces(fID) % Nf(2) + 1) * (self % faces(fID) % Nf(1) + 1) * nEqn  ! Total size of the face data block
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx = ((mpifID - 1) * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % faces(fID) % storage(otherSide(thisSide)) % Q(1:nEqn,i,j) = self % MPIfaces % faces(domain) % Qrecv(linear_idx:linear_idx+nEqn-1)
-               end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)  ; do m = 1, nEqn
+                  linear_idx = ((mpifID - 1) * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % faces(fID) % storage(otherSide(thisSide)) % Q(m,i,j) = self % MPIfaces % faces(domain) % Qrecv(linear_idx)
+               end do               ; end do               ; end do
             end do
             !$acc end parallel loop
          end do
@@ -1464,7 +1549,7 @@ slavecoord:             DO l = 1, 4
 !        Local variables
 !        ---------------
 !
-         integer            :: mpifID, fID, thisSide, domain
+         integer            :: mpifID, fID, thisSide, domain, m
          integer            :: i, j, counter, linear_idx_x, linear_idx_y, linear_idx_z, faceSize
          integer, parameter :: otherSide(2) = (/2,1/)
 
@@ -1497,27 +1582,27 @@ slavecoord:             DO l = 1, 4
 !
 !            call self % MPIfaces % faces(domain) % WaitForGradients
 
-            !$acc parallel loop gang present(self)
+            !$acc parallel loop gang present(self) copyin(nEqn,domain,otherSide) private(fID,thisSide,faceSize, m, i, j)
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
                thisSide = self % MPIfaces % faces(domain) % elementSide(mpifID)
                faceSize = (self % faces(fID) % Nf(2) + 1) * (self % faces(fID) % Nf(1) + 1) * nEqn  ! Total size of the face data block
 
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx_x = ((mpifID - 1) * 3 * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % faces(fID) % storage(otherSide(thisSide)) % U_x(1:nEqn,i,j) = self % MPIfaces % faces(domain) % U_xyzrecv(linear_idx_x:linear_idx_x+nEqn-1)
-               end do               ; end do
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx_y = ((mpifID - 1) * 3 * faceSize) + faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % faces(fID) % storage(otherSide(thisSide)) % U_y(1:nEqn,i,j) = self % MPIfaces % faces(domain) % U_xyzrecv(linear_idx_y:linear_idx_y+nEqn-1)
-               end do               ; end do
-               !$acc loop vector collapse(2)
-               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)
-                  linear_idx_z = ((mpifID - 1) * 3 * faceSize) + 2 * faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + 1
-                  self % faces(fID) % storage(otherSide(thisSide)) % U_z(1:nEqn,i,j) = self % MPIfaces % faces(domain) % U_xyzrecv(linear_idx_z:linear_idx_z+nEqn-1)
-               end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx_x)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)  ; do m = 1, nEqn
+                  linear_idx_x = ((mpifID - 1) * 3 * faceSize) + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % faces(fID) % storage(otherSide(thisSide)) % U_x(m,i,j) = self % MPIfaces % faces(domain) % U_xyzrecv(linear_idx_x)
+               end do               ; end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx_y)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)  ; do m = 1, nEqn
+                  linear_idx_y = ((mpifID - 1) * 3 * faceSize) + faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % faces(fID) % storage(otherSide(thisSide)) % U_y(m,i,j) = self % MPIfaces % faces(domain) % U_xyzrecv(linear_idx_y)
+               end do               ; end do               ; end do
+               !$acc loop vector collapse(3) private(linear_idx_z)
+               do j = 0, self % faces(fID) % Nf(2)  ; do i = 0, self % faces(fID) % Nf(1)  ; do m = 1, nEqn
+                  linear_idx_z = ((mpifID - 1) * 3 * faceSize) + 2 * faceSize + (j * (self % faces(fID) % Nf(1) + 1) + i) * nEqn + m
+                  self % faces(fID) % storage(otherSide(thisSide)) % U_z(m,i,j) = self % MPIfaces % faces(domain) % U_xyzrecv(linear_idx_z)
+               end do               ; end do               ; end do
             end do
             !$acc end parallel loop
          end do
