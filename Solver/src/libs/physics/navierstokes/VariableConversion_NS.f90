@@ -15,7 +15,7 @@ module VariableConversion_NS
    public   getPrimitiveVariables, getEntropyVariables
    public   getRoeVariables, GetNSViscosity, getVelocityGradients, getTemperatureGradient, getConservativeGradients
    public   set_getVelocityGradients
-   public   getVelocityGradients_State
+   public   getVelocityGradients_State, getVelocityGradients_selector
   
 
    interface getTemperatureGradient
@@ -285,8 +285,10 @@ module VariableConversion_NS
 !     NSGradientVariables_selector  (this file)  -- Q  ->  gradient variables
 !     ViscousFlux_selector_0D       (Physics_NS) -- viscous flux in those variables
 !
-!  TO ADD A NEW GRADIENT-VARIABLE SET: add a case to both selectors and to
-!  SetGradientVariables (PhysicsStorage_NS). Callers need no changes.
+!  TO ADD A NEW GRADIENT-VARIABLE SET: add a case to both selectors, to
+!  getVelocityGradients_selector (this file, used by device code such as the
+!  LES models) and to SetGradientVariables (PhysicsStorage_NS). Callers need no
+!  changes.
 !
 !  TO FIND EVERY DEPENDENT SITE:
 !
@@ -493,6 +495,30 @@ module VariableConversion_NS
          U_z = pDivRho * Q_z(IRHOU:IRHOW) + U / pDivRho * Q_z(IRHOE)
 
       end subroutine getVelocityGradients_Entropy
+!
+!     GRADVARS_DISPATCH -- device-callable equivalent of the getVelocityGradients
+!     procedure pointer (which cannot be called from an OpenACC region). Use it
+!     wherever velocity gradients are needed from the stored U_x/U_y/U_z inside
+!     device code, e.g. the LES models: those gradients are grad W for the
+!     selected "gradient variables", not grad Q.
+!     ---------------------------------------------------------------------------
+      pure subroutine getVelocityGradients_selector(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)  :: Q(NCONS)
+         real(kind=RP), intent(in)  :: Q_x(NGRAD), Q_y(NGRAD), Q_z(NGRAD)
+         real(kind=RP), intent(out) :: U_x(NDIM), U_y(NDIM), U_z(NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENTROPY)
+            call getVelocityGradients_Entropy(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         case (GRADVARS_ENERGY)
+            call getVelocityGradients_Energy(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         case default
+            call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         end select
+
+      end subroutine getVelocityGradients_selector
 
 !
 !/////////////////////////////////////////////////////////////////////////////
