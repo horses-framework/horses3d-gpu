@@ -43,13 +43,7 @@ MODULE HexMeshClass
       public      no_of_stats_variables, HexMesh_ProlongSolToFaces, HexMesh_ProlongGradientsToFaces
       public      HexMesh_UpdateMPIFacesSolution, HexMesh_UpdateMPIFacesGradients
       public      HexMesh_GatherMPIFacesSolution, HexMesh_GatherMPIFacesGradients
-      public      HexMesh_ComputeLocalGradientNS
-#ifdef INCNS
-      public      HexMesh_ComputeLocalGradientiNS
-#endif
-#if defined(CAHNHILLIARD)
-      public      HexMesh_ComputeLocalGradientCH, HexMesh_ComputeLocalGradientMU
-#endif
+      public      HexMesh_ComputeLocalGradient
 !
 !     ---------------
 !     Mesh definition
@@ -4481,8 +4475,10 @@ slavecoord:             DO l = 1, 4
 
          !$acc enter data copyin(self % elements(eID) % isInsideBody)
          !$acc enter data copyin(self % elements(eID) % STL)
-#ifdef INCNS
-         !$acc enter data copyin(self % elements(eID) % storage % Q_grad_iNS) !iNS state to calculate the gradient
+#ifdef FLOW
+         if (allocated(self % elements(eID) % storage % Q_grad)) then
+            !$acc enter data copyin(self % elements(eID) % storage % Q_grad) ! Gradient variables to calculate the gradient
+         end if
 #endif
 #ifdef CAHNHILLIARD
          !$acc enter data copyin(self % elements(eID) % storage % c)     ! CHE concentration
@@ -4496,10 +4492,8 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % elements(eID) % storage % mu_z)  ! CHE chemical potential z-gradient
          !$acc enter data copyin(self % elements(eID) % storage % v)     ! CHE flow field velocity
          !$acc enter data copyin(self % elements(eID) % storage % G_CH)  ! CHE auxiliary storage
-         !$acc enter data copyin(self % elements(eID) % storage % Q_grad_CH) !CH state to calculate the gradient
 #endif
 #ifdef MULTIPHASE
-      !$acc enter data copyin(self % elements(eID) % storage % Q_grad_mu) ! Multiphase state to calculate the gradient
       !$acc enter data copyin(self % elements(eID) % storage % invMa2)    ! Storage for the density*artificial compressibility factor
 #endif
 
@@ -4651,8 +4645,10 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % faceSide)
          !$acc exit data delete(self % elements(eID) % storage)
          !$acc exit data delete(self % elements(eID) % geom)
-#ifdef INCNS
-         !$acc exit data delete(self % elements(eID) % storage % Q_grad_iNS) !iNS state to calculate the gradient
+#ifdef FLOW
+         if (allocated(self % elements(eID) % storage % Q_grad)) then
+            !$acc exit data delete(self % elements(eID) % storage % Q_grad) ! Gradient variables to calculate the gradient
+         end if
 #endif
 #ifdef CAHNHILLIARD
          !$acc exit data delete(self % elements(eID) % storage % c)     ! CHE concentration
@@ -4666,10 +4662,8 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % storage % mu_z)  ! CHE chemical potential z-gradient
          !$acc exit data delete(self % elements(eID) % storage % v)     ! CHE flow field velocity
          !$acc exit data delete(self % elements(eID) % storage % G_CH)  ! CHE auxiliary storage
-         !$acc exit data delete(self % elements(eID) % storage % Q_grad_CH) !CH state to calculate the gradient
 #endif
 #ifdef MULTIPHASE
-         !$acc exit data delete(self % elements(eID) % storage % Q_grad_mu) ! Multiphase state to calculate the gradient'
          !$acc exit data delete(self % elements(eID) % storage % invMa2)    ! Storage for the density*artificial compressibility factor
 #endif
 
@@ -5657,106 +5651,110 @@ call elementMPIList % destruct
 
    end subroutine HexMesh_UpdateHOArrays
 
-   subroutine HexMesh_ComputeLocalGradientNS(self, set_mu)
+!
+!////////////////////////////////////////////////////////////////////////
+!
+!     -----------------------------------------------------------------------------
+!     Computes the local (element-wise) gradients of the gradient variables using
+!     the DG differentiation matrix. The gradients are stored in U_x, U_y, U_z.
+!
+!        * gradVars = GRADVARS_STATE: the gradients of the first nGradEqn entries
+!          of the state, Q, are computed directly (no conversion, no scratch).
+!        * Otherwise: the state is first transformed into the requested gradient
+!          variables (GradientVariables_Selector), which are stored in the
+!          scratch array Q_grad, and the gradients of Q_grad are computed.
+!     -----------------------------------------------------------------------------
+!
+   subroutine HexMesh_ComputeLocalGradient(self, nEqn, nGradEqn, gradVars)
       implicit none
       !-arguments-----------------------------------------
-      type(HexMesh), intent(inout)    :: self
-      logical, intent(in)             :: set_mu
-      !-local-variables-----------------------------------
-      integer :: eID
-
+      type(HexMesh), intent(inout)   :: self
+      integer,       intent(in)      :: nEqn
+      integer,       intent(in)      :: nGradEqn
+      integer,       intent(in)      :: gradVars
       !--------------------------------------------------
+
+      if ( gradVars == GRADVARS_STATE ) then
+         call HexMesh_ComputeLocalGradient_State(self, nGradEqn)
+      else
+         call HexMesh_ComputeLocalGradient_GradVars(self, nEqn, nGradEqn, gradVars)
+      end if
+
+   end subroutine HexMesh_ComputeLocalGradient
+
+   subroutine HexMesh_ComputeLocalGradient_State(self, nGradEqn)
+      implicit none
+      !-arguments-----------------------------------------
+      type(HexMesh), intent(inout)   :: self
+      integer,       intent(in)      :: nGradEqn
+      !-local-variables-----------------------------------
+      integer :: eID, nStored
+      !--------------------------------------------------
+      if ( size(self % elements) == 0 ) return
+!
+!     Number of variables stored in Q (e.g. the multiphase solver computes
+!     the concentration gradient from the first entry of the flow state)
+!     --------------------------------------------------------------------
+      nStored = size(self % elements(1) % storage % Q, 1)
+
 !$omp do schedule(runtime)
       !$acc parallel loop gang vector_length(128) present(self) async(1)
-         do eID = 1 , size(self % elements)
-            call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q)
-         end do
+      do eID = 1 , size(self % elements)
+         call HexElement_ComputeLocalGradient(self % elements(eID), nStored, nGradEqn, self % elements(eID) % storage % Q)
+      end do
       !$acc end parallel loop
-!$omp end do nowait
+!$omp end do
 
-   end subroutine HexMesh_ComputeLocalGradientNS
+   end subroutine HexMesh_ComputeLocalGradient_State
 
-#ifdef INCNS
-   subroutine HexMesh_ComputeLocalGradientiNS(self)
-      use VariableConversion
+   subroutine HexMesh_ComputeLocalGradient_GradVars(self, nEqn, nGradEqn, gradVars)
       implicit none
       !-arguments-----------------------------------------
       type(HexMesh), intent(inout)   :: self
+      integer,       intent(in)      :: nEqn
+      integer,       intent(in)      :: nGradEqn
+      integer,       intent(in)      :: gradVars
       !-local-variables-----------------------------------
       integer :: eID, i, j, k
-
       !--------------------------------------------------
+#ifdef FLOW
+      if ( nGradEqn /= NGRAD ) then
+         write(STD_OUT,'(A,I0,A)') "Gradient variables are only available for the flow equations (nGradEqn = ", nGradEqn, ")."
+         errorMessage(STD_OUT)
+         error stop
+      end if
+
 !$omp do schedule(runtime)
       !$acc parallel loop gang vector_length(128) present(self) async(1)
       do eID = 1 , size(self % elements)
-
-         !$acc loop vector collapse(3) 
+!
+!        Transform the state into the gradient variables
+!        -----------------------------------------------
+         !$acc loop vector collapse(3)
          do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
-            call iNSGradientVariables(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_iNS(:,i,j,k))
-         end do         ; end do         ; end do
-
-         call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_iNS)
-      end do
-   !$acc end parallel loop
-!$omp end do nowait
-
-   end subroutine HexMesh_ComputeLocalGradientiNS
-#endif 
-
-#ifdef CAHNHILLIARD
-   subroutine HexMesh_ComputeLocalGradientCH(self, set_mu)
-      implicit none
-      !-arguments-----------------------------------------
-      type(HexMesh), intent(inout)   :: self
-      logical, intent(in)            :: set_mu
-      !-local-variables-----------------------------------
-      integer :: eID, i, j, k
-
-      !--------------------------------------------------
-!$omp do schedule(runtime)
-      !$acc parallel loop gang vector_length(128) present(self) copyin(set_mu) async(1)
-      do eID = 1 , size(self % elements)
-
-         !$acc loop vector collapse(3) 
-         do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
-            call chGradientVariables(NCOMP, NCOMP, self % elements(eID) % storage % Q(1:IMC,i,j,k), self % elements(eID) % storage % Q_grad_CH(1:IMC,i,j,k))
-            !if ( set_mu ) self % elements(eID) % storage % Q_grad_CH(IGMU,i,j,k) = self % elements(eID) % storage % mu(1,i,j,k)
-         end do         ; end do         ; end do
-
-         call HexElement_ComputeLocalGradient(self % elements(eID), NCOMP, NCOMP, self % elements(eID) % storage % Q_grad_CH)
-      end do
-   !$acc end parallel loop
-!$omp end do nowait
-
-   end subroutine HexMesh_ComputeLocalGradientCH
-
-   subroutine HexMesh_ComputeLocalGradientMU(self, set_mu)
-      use VariableConversion
-      implicit none
-      !-arguments-----------------------------------------
-      type(HexMesh), intent(inout)   :: self
-      logical, intent(in)            :: set_mu
-      !-local-variables-----------------------------------
-      integer :: eID, i, j, k
-
-      !--------------------------------------------------
-!$omp do schedule(runtime)
-      !$acc parallel loop gang vector_length(128) present(self) copyin(set_mu) async(1)
-      do eID = 1 , size(self % elements)
-
-         !$acc loop vector collapse(3) 
-         do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
-            call mGradientVariables(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_mu(:,i,j,k), self % elements(eID) % storage % rho(i,j,k))
-            !if ( set_mu == .true.) then ! This is not working - weird - above it works
-                  self % elements(eID) % storage % Q_grad_mu(IGMU,i,j,k) = self % elements(eID) % storage % mu(1,i,j,k)
-            !end if
-         end do         ; end do         ; end do
-
-         call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_mu)
-      end do
-   !$acc end parallel loop
-!$omp end do nowait
-   end subroutine HexMesh_ComputeLocalGradientMU
+#ifdef MULTIPHASE
+            call GradientVariables_Selector(gradVars, nEqn, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), &
+                                            self % elements(eID) % storage % Q_grad(:,i,j,k), &
+                                            self % elements(eID) % storage % rho(i,j,k), &
+                                            self % elements(eID) % storage % mu(1,i,j,k))
+#else
+            call GradientVariables_Selector(gradVars, nEqn, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), &
+                                            self % elements(eID) % storage % Q_grad(:,i,j,k), 0.0_RP, 0.0_RP)
 #endif
+         end do         ; end do         ; end do
+!
+!        Compute their gradients
+!        -----------------------
+         call HexElement_ComputeLocalGradient(self % elements(eID), NGRAD, NGRAD, self % elements(eID) % storage % Q_grad)
+      end do
+      !$acc end parallel loop
+!$omp end do
+#else
+      write(STD_OUT,'(A)') "Gradient variables other than the state are only available for the flow equations."
+      errorMessage(STD_OUT)
+      error stop
+#endif
+
+   end subroutine HexMesh_ComputeLocalGradient_GradVars
 
 END MODULE HexMeshClass

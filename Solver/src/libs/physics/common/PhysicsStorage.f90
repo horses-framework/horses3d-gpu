@@ -55,6 +55,14 @@ module PhysicsStorage
 #if (!defined(FLOW)) && (defined(CAHNHILLIARD))
    integer, parameter :: NCONS = NCOMP
    integer, parameter :: NGRAD = NCOMP
+!
+!  The Cahn-Hilliard equation computes the gradients of the state (concentration).
+!  When it is coupled to a flow solver, the flow physics defines the gradient variables.
+!  -------------------------------------------------------------------------------------
+   enum, bind(C)
+      enumerator :: GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY
+   end enum
+   integer, parameter :: grad_vars = GRADVARS_STATE
 #endif
    
    

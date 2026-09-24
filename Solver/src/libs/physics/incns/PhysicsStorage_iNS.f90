@@ -70,6 +70,8 @@
      public    INSRHO, INSRHOU, INSRHOV, INSRHOW, INSP
      public    computeGradients
      public    enableGravity
+     public    GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY
+     public    grad_vars
 
      public    ConstructPhysicsStorage_iNS, DestructPhysicsStorage_iNS, DescribePhysicsStorage_iNS
      public    CheckPhysics_iNSInputIntegrity
@@ -99,6 +101,18 @@
 
      logical, protected       :: enableGravity         = .false.
       !$acc declare copyin(enableGravity)
+!
+!    --------------------------------
+!    Choice of the gradient variables
+!    --------------------------------
+!
+!    The iNS equations always compute gradients of the entropy variables,
+!    U = (-0.5*|u|^2, u, v, w, p) (see iNSGradientVariables).
+!
+     enum, bind(C)
+        enumerator :: GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY
+     end enum
+     integer, parameter :: grad_vars = GRADVARS_ENTROPY
 !
 !    ========
      contains

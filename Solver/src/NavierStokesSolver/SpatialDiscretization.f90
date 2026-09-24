@@ -244,7 +244,7 @@ module SpatialDiscretization
 !        ---------------
 !
          INTEGER :: k, nZones, zoneID, eID, i, j
-         logical :: HOElements, set_mu
+         logical :: HOElements
 
          if (present(HO_Elements)) then
             HOElements = HO_Elements
@@ -287,9 +287,6 @@ module SpatialDiscretization
 !        Compute gradients
 !        -----------------
 !
-         set_mu = .false.
-         call HexMesh_ComputeLocalGradientNS(mesh, set_mu)
-
          if ( computeGradients ) then
             call ViscousDiscretization % ComputeGradient( NCONS, NGRAD, mesh, time, GetGradients, HO_Elements)
          end if
@@ -1322,7 +1319,7 @@ module SpatialDiscretization
                beta  = 0.0_RP
                kappa = mesh % elements(eID) % storage % mu_ns(2,i,j,k)
 
-               call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
+               call ViscousFlux_GradVars( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
                                        mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, kappa, viscousFlux)
                
                do eq =1, NCONS
@@ -1387,7 +1384,7 @@ module SpatialDiscretization
                do j = 0, mesh % elements(eID) % Nxyz(2)  
                   do i = 0, mesh % elements(eID) % Nxyz(1)
 
-                  call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
+                  call ViscousFlux_GradVars( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
                                           mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), &
                                           mesh % elements(eID) % storage % mu_ns(1,i,j,k), 0.0_RP, &
                                           mesh % elements(eID) % storage % mu_ns(2,i,j,k), Flux)
@@ -1782,20 +1779,47 @@ module SpatialDiscretization
 !
          integer :: i,j,k
          
-         !select case(which_viscousflux)
-         !case(VSCFlux_STATE)
             !$acc loop vector collapse(3)
             do k = 0, Nz
                do j = 0, Ny
                   do i = 0, Nx
-                     call ViscousFlux_STATE(nEqn, nGradEqn, Q(:,i,j,k),  U_x(:,i,j,k), U_y(:,i,j,k), U_z(:,i,j,k), &
-                                            mu(1,i,j,k), 0.0_RP, mu(2,i,j,k), flux_cart(:,:,i,j,k))
+                     call ViscousFlux_GradVars(nEqn, nGradEqn, Q(:,i,j,k),  U_x(:,i,j,k), U_y(:,i,j,k), U_z(:,i,j,k), &
+                                               mu(1,i,j,k), 0.0_RP, mu(2,i,j,k), flux_cart(:,:,i,j,k))
                   enddo
                enddo
             enddo
-         !end select
       
       end subroutine ViscousFlux_selector
+
+      pure subroutine ViscousFlux_GradVars(nEqn, nGradEqn, Q, U_x, U_y, U_z, mu, beta, kappa, F)
+!
+!        ------------------------------------------------------------------
+!        Viscous flux computed from the gradients of the gradient variables
+!        selected by the user (grad_vars)
+!        ------------------------------------------------------------------
+!
+         !$acc routine seq
+         implicit none
+         integer,       intent(in)  :: nEqn, nGradEqn
+         real(kind=RP), intent(in)  :: Q   (1:nEqn     )
+         real(kind=RP), intent(in)  :: U_x (1:nGradEqn)
+         real(kind=RP), intent(in)  :: U_y (1:nGradEqn)
+         real(kind=RP), intent(in)  :: U_z (1:nGradEqn)
+         real(kind=RP), intent(in)  :: mu
+         real(kind=RP), intent(in)  :: beta
+         real(kind=RP), intent(in)  :: kappa
+         real(kind=RP), intent(out) :: F(1:nEqn, 1:NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENTROPY)
+            call ViscousFlux_ENTROPY(nEqn, nGradEqn, Q, U_x, U_y, U_z, mu, beta, kappa, F)
+         case (GRADVARS_ENERGY)
+            call ViscousFlux_ENERGY(nEqn, nGradEqn, Q, U_x, U_y, U_z, mu, beta, kappa, F)
+         case default
+            call ViscousFlux_STATE(nEqn, nGradEqn, Q, U_x, U_y, U_z, mu, beta, kappa, F)
+         end select
+
+      end subroutine ViscousFlux_GradVars
 
       subroutine IBM_MaskVelocity( this, Q, nEqn, STLNum, x, t, Q_target ) 
          !$acc routine seq
