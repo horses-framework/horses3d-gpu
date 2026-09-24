@@ -84,6 +84,9 @@ module StorageClass
 #ifdef INCNS
       real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_iNS  ! iNS State vector to calculate the gradient
 #endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+      real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_NS   ! NS gradient variables (entropy/energy) to calculate the gradient
+#endif
 #ifndef ACOUSTIC
       real(kind=RP),           allocatable :: mu_NS(:,:,:,:)       ! (mu, beta, kappa) artificial
       real(kind=RP),           allocatable :: mu_turb_NS(:,:,:)    ! mu of LES
@@ -824,6 +827,9 @@ module StorageClass
 #ifdef INCNS
          allocate(self % Q_grad_iNS(1:NCONS, 0:Nx, 0:Ny, 0:Nz))
 #endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+         allocate(self % Q_grad_NS(1:NCONS, 0:Nx, 0:Ny, 0:Nz))
+#endif
 #if defined (SPALARTALMARAS)
          ALLOCATE( self % S_SA  (NCONS,0:Nx,0:Ny,0:Nz) )
 #endif
@@ -906,6 +912,9 @@ module StorageClass
          self % rho    = 0.0_RP
 #ifdef INCNS
          self % Q_grad_iNS = 0.0_RP
+#endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+         self % Q_grad_NS = 0.0_RP
 #endif
 #ifndef ACOUSTIC
          self % mu_NS  = 0.0_RP
@@ -1028,6 +1037,9 @@ module StorageClass
 #ifdef INCNS
          to % Q_grad_iNS = from % Q_grad_iNS
 #endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+         to % Q_grad_NS = from % Q_grad_NS
+#endif
 #if defined (SPALARTALMARAS)
          to % S_SA   = from % S_SA
 #endif
@@ -1135,6 +1147,9 @@ module StorageClass
 
 #ifdef INCNS
          safedeallocate(self % Q_grad_iNS)
+#endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+         safedeallocate(self % Q_grad_NS)
 #endif
 #if defined (SPALARTALMARAS)
          safedeallocate(self % S_SA)

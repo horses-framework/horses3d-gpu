@@ -4525,6 +4525,9 @@ slavecoord:             DO l = 1, 4
 #ifdef INCNS
          !$acc enter data copyin(self % elements(eID) % storage % Q_grad_iNS) !iNS state to calculate the gradient
 #endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+         !$acc enter data copyin(self % elements(eID) % storage % Q_grad_NS) !NS gradient variables to calculate the gradient
+#endif
 #ifdef CAHNHILLIARD
          !$acc enter data copyin(self % elements(eID) % storage % c)     ! CHE concentration
          !$acc enter data copyin(self % elements(eID) % storage % cDot)  ! CHE concentration time derivative
@@ -4694,6 +4697,9 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % geom)
 #ifdef INCNS
          !$acc exit data delete(self % elements(eID) % storage % Q_grad_iNS) !iNS state to calculate the gradient
+#endif
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+         !$acc exit data delete(self % elements(eID) % storage % Q_grad_NS) !NS gradient variables to calculate the gradient
 #endif
 #ifdef CAHNHILLIARD
          !$acc exit data delete(self % elements(eID) % storage % c)     ! CHE concentration
@@ -5704,9 +5710,58 @@ call elementMPIList % destruct
       type(HexMesh), intent(inout)    :: self
       logical, intent(in)             :: set_mu
       !-local-variables-----------------------------------
-      integer :: eID
+      integer :: eID, i, j, k
 
       !--------------------------------------------------
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS)
+!
+!     The volume gradient must be taken of the same variables used in the
+!     BR1 face correction and assumed by getStressTensor/ViscousFlux
+!     ------------------------------------------------------------------
+      select case (grad_vars)
+      case (GRADVARS_ENTROPY)
+!$omp do schedule(runtime)
+         !$acc parallel loop gang vector_length(128) present(self) async(1)
+         do eID = 1 , size(self % elements)
+
+            !$acc loop vector collapse(3)
+            do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
+               call NSGradientVariables_ENTROPY(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_NS(:,i,j,k))
+            end do         ; end do         ; end do
+
+            call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_NS)
+         end do
+         !$acc end parallel loop
+!$omp end do nowait
+
+      case (GRADVARS_ENERGY)
+!$omp do schedule(runtime)
+         !$acc parallel loop gang vector_length(128) present(self) async(1)
+         do eID = 1 , size(self % elements)
+
+            !$acc loop vector collapse(3)
+            do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
+               call NSGradientVariables_ENERGY(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_NS(:,i,j,k))
+            end do         ; end do         ; end do
+
+            call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_NS)
+         end do
+         !$acc end parallel loop
+!$omp end do nowait
+
+      case default
+!
+!        GRADVARS_STATE: gradient variables are Q itself
+!        -----------------------------------------------
+!$omp do schedule(runtime)
+         !$acc parallel loop gang vector_length(128) present(self) async(1)
+         do eID = 1 , size(self % elements)
+            call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q)
+         end do
+         !$acc end parallel loop
+!$omp end do nowait
+      end select
+#else
 !$omp do schedule(runtime)
       !$acc parallel loop gang vector_length(128) present(self) async(1)
          do eID = 1 , size(self % elements)
@@ -5714,6 +5769,7 @@ call elementMPIList % destruct
          end do
       !$acc end parallel loop
 !$omp end do nowait
+#endif
 
    end subroutine HexMesh_ComputeLocalGradientNS
 
