@@ -149,6 +149,7 @@ module EllipticBR2
          integer :: Nx, Ny, Nz
          integer :: i, j, k
          integer :: eID , fID , dimID , eqID, fIDs(6), iFace, iEl
+         integer :: gradVars
          logical :: HOElements
 
          if (present(HO_Elements)) then
@@ -156,11 +157,15 @@ module EllipticBR2
          else
             HOElements = .false.
          end if
+
+         gradVars = self % GradientVariables()
 !
 !        ***********************
 !        Compute local gradients
 !        ***********************
 !
+         call self % ComputeLocalGradients(nEqn, nGradEqn, mesh)
+
          if (HOElements) then
 !$omp do schedule(runtime)
             do eID = 1, size(mesh % HO_Elements)
@@ -181,8 +186,8 @@ module EllipticBR2
             end do
 !$omp end do    
          else
-            call HexMesh_ProlongGradientsToFaces(mesh, size(mesh % elements_sequential), mesh % elements_sequential, NGRAD)
-            call HexMesh_ProlongGradientsToFaces(mesh, size(mesh % elements_mpi), mesh % elements_mpi, NGRAD)
+            call HexMesh_ProlongGradientsToFaces(mesh, size(mesh % elements_sequential), mesh % elements_sequential, nGradEqn)
+            call HexMesh_ProlongGradientsToFaces(mesh, size(mesh % elements_mpi), mesh % elements_mpi, nGradEqn)
          end if
          !$acc wait
          print*, "I am in BR2 line 211"
@@ -195,7 +200,7 @@ module EllipticBR2
 !$omp do schedule(runtime) private(fID)
             do iFace = 1, size(mesh % HO_FacesInterior)
                fID = mesh % HO_FacesInterior(iFace)
-               call BR2_GradientInterfaceSolution(self, mesh % faces(fID), nEqn, nGradEqn)
+               call BR2_GradientInterfaceSolution(self, mesh % faces(fID), nEqn, nGradEqn, gradVars)
             end do
 !$omp end do nowait
          else
@@ -203,7 +208,7 @@ module EllipticBR2
 !$acc parallel loop gang present(mesh) private(fID)
             do iFace = 1, size(mesh % faces_interior)
                fID = mesh % faces_interior(iFace)
-               call BR2_GradientInterfaceSolution(self, mesh % faces(fID), nEqn, nGradEqn)
+               call BR2_GradientInterfaceSolution(self, mesh % faces(fID), nEqn, nGradEqn, gradVars)
             end do
 !$acc end parallel loop
 !$omp end do nowait
@@ -215,7 +220,7 @@ module EllipticBR2
 !$omp do schedule(runtime) private(fID)
             do iFace = 1, size(mesh % HO_FacesBoundary)
                fID = mesh % HO_FacesBoundary(iFace)
-               call BR2_GradientInterfaceSolutionBoundary(mesh % faces(fID), nEqn, nGradEqn, time)
+               call BR2_GradientInterfaceSolutionBoundary(mesh % faces(fID), nEqn, nGradEqn, gradVars, time)
             end do
 !$omp end do 
          else
@@ -223,7 +228,7 @@ module EllipticBR2
 !$acc parallel loop gang present(mesh)
             do iFace = 1, size(mesh % faces_boundary)
                fID = mesh % faces_boundary(iFace)
-               call BR2_GradientInterfaceSolutionBoundary(mesh % faces(fID), nEqn, nGradEqn, time)
+               call BR2_GradientInterfaceSolutionBoundary(mesh % faces(fID), nEqn, nGradEqn, gradVars, time)
             end do
 !$acc end parallel loop
 !$omp end do 
@@ -276,7 +281,7 @@ module EllipticBR2
 !$acc parallel loop gang present(mesh)
          do iFace = 1, size(mesh % faces_mpi)
             fID = mesh % faces_mpi(iFace)
-            call BR2_GradientInterfaceSolutionMPI(self, mesh % faces(fID), nEqn, nGradEqn)
+            call BR2_GradientInterfaceSolutionMPI(self, mesh % faces(fID), nEqn, nGradEqn, gradVars)
          end do
 !$acc end parallel loop
 !$omp end do 
@@ -484,7 +489,7 @@ module EllipticBR2
 !
 !///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 !
-      subroutine BR2_GradientInterfaceSolution(self, f, nEqn, nGradEqn)
+      subroutine BR2_GradientInterfaceSolution(self, f, nEqn, nGradEqn, gradVars)
          !$acc routine vector
 !
 !        ************************************************
@@ -512,6 +517,7 @@ module EllipticBR2
          type(BassiRebay2_t),   intent(in)  :: self
          type(Face)                       :: f
          integer, intent(in)              :: nEqn, nGradEqn
+         integer, intent(in)              :: gradVars
 !
 !        ---------------
 !        Local variables
@@ -525,25 +531,15 @@ module EllipticBR2
          !$acc loop vector collapse(2) private(UL, UR, uStar)
          do j = 0, f % Nf(2)  ; do i = 0, f % Nf(1)
 #ifdef MULTIPHASE
-            select case (self % eqName)
-               case (ELLIPTIC_MU)
-                  call mGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, f % storage(1) % rho(i,j))
-                  call mGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, f % storage(2) % rho(i,j))
-
-               case(ELLIPTIC_CH)
-                  call chGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-                  call chGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
-            end select
-#elif INCNS
-            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
-            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)           
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, f % storage(1) % rho(i,j), f % storage(1) % mu(1,i,j))
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, f % storage(2) % rho(i,j), f % storage(2) % mu(1,i,j))
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, 0.0_RP, 0.0_RP)
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, 0.0_RP, 0.0_RP)
 #endif
 
             !$acc loop seq
-            do eq =1, nEqn
+            do eq =1, nGradEqn
                ! uStar = 0.5_RP * (f % storage(2) % Q(eq,i,j) - f % storage(1) % Q(eq,i,j)) * f % geom % jacobian(i,j)
                
                uStar = 0.5_RP * (UR(eq) - UL(eq)) * f % geom % jacobian(i,j)
@@ -559,7 +555,7 @@ module EllipticBR2
 
       end subroutine BR2_GradientInterfaceSolution   
 
-      subroutine BR2_GradientInterfaceSolutionMPI(self, f, nEqn, nGradEqn)
+      subroutine BR2_GradientInterfaceSolutionMPI(self, f, nEqn, nGradEqn, gradVars)
          !$acc routine vector
          use Physics  
          use ElementClass
@@ -573,6 +569,7 @@ module EllipticBR2
          type(BassiRebay2_t),   intent(in)  :: self
          type(Face)                       :: f
          integer, intent(in)              :: nEqn, nGradEqn
+         integer, intent(in)              :: gradVars
 !
 !        ---------------
 !        Local variables
@@ -586,21 +583,11 @@ module EllipticBR2
          !$acc loop vector collapse(2) private(UL, UR, Uhat)
          do j = 0, f % Nf(2)  ; do i = 0, f % Nf(1)
 #ifdef MULTIPHASE
-            select case (self % eqName)
-               case (ELLIPTIC_MU)
-                  call mGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, f % storage(1) % rho(i,j))
-                  call mGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, f % storage(2) % rho(i,j))
-
-               case(ELLIPTIC_CH)
-                  call chGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-                  call chGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
-            end select
-#elif INCNS
-            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
-            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)              
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, f % storage(1) % rho(i,j), f % storage(1) % mu(1,i,j))
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, f % storage(2) % rho(i,j), f % storage(2) % mu(1,i,j))
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, 0.0_RP, 0.0_RP)
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, 0.0_RP, 0.0_RP)
 #endif
    
             Uhat = 0.5_RP * (UL - UR) * f % geom % jacobian(i,j)
@@ -621,7 +608,7 @@ module EllipticBR2
          
       end subroutine BR2_GradientInterfaceSolutionMPI   
 
-      subroutine BR2_GradientInterfaceSolutionBoundary(f, nEqn, nGradEqn, time)
+      subroutine BR2_GradientInterfaceSolutionBoundary(f, nEqn, nGradEqn, gradVars, time)
          !$acc routine vector
          use Physics
          use FaceClass
@@ -629,6 +616,7 @@ module EllipticBR2
          type(Face)                       :: f
          integer,    intent(in)           :: nEqn
          integer,    intent(in)           :: nGradEqn
+         integer,    intent(in)           :: gradVars
          real(kind=RP)                    :: time
 !
 !        ---------------
@@ -637,21 +625,27 @@ module EllipticBR2
 !
          integer       :: i,j,eq
          real(kind=RP) :: Uhat
+         real(kind=RP) :: UL(NGRAD), UR(NGRAD)
 
-         !$acc loop vector collapse(2)
+         !$acc loop vector collapse(2) private(UL, UR)
          do j = 0, f % Nf(2)  ; do i = 0, f % Nf(1)
 !   
-!           -------------------
-!           u, v, w, T averages
-!           -------------------
+!           ---------------------------------------------
+!           Gradient variables of the interior and the BC
+!           ---------------------------------------------
 !   
-            !call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            !call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
-            !Uhat = 0.5_RP * (UL - UR) 
+#ifdef MULTIPHASE
+!           The chemical potential is taken from the interior (no jump at the boundary)
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, f % storage(1) % rho(i,j), f % storage(1) % mu(1,i,j))
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, f % storage(2) % rho(i,j), f % storage(1) % mu(1,i,j))
+#else
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, 0.0_RP, 0.0_RP)
+            call GradientVariables_Selector(gradVars, nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, 0.0_RP, 0.0_RP)
+#endif
 
             !$acc loop seq
-            do eq =1, NCONS
-               Uhat = 0.5_RP * (f % storage(1) % Q(eq,i,j) - f % storage(2) % Q(eq,i,j)) 
+            do eq =1, nGradEqn
+               Uhat = 0.5_RP * (UL(eq) - UR(eq)) 
 
                f % storage(1) % unStar(eq,1,i,j) = Uhat * f % geom % normal(1,i,j) * f % geom % jacobian(i,j)
                f % storage(1) % unStar(eq,2,i,j) = Uhat * f % geom % normal(2,i,j) * f % geom % jacobian(i,j)
