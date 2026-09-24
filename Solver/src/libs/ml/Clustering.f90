@@ -198,9 +198,47 @@ module Clustering
 
    real(RP), parameter :: LOG2PI = log(2.0_RP*PI)
 !
+!  State of the generator used for the random initial centroids, see
+!  clustering_random. Fixed seed: the sensor is reproducible run to run.
+!  ---------------------------------------------------------------------
+   integer, save :: clustering_seed = 20240917
+!
 !  ========
    contains
 !  ========
+!
+!///////////////////////////////////////////////////////////////////////////////
+!
+!  Uniform numbers in (0,1) for the random initial centroids.
+!
+!  These used to come from the intrinsic random_number, which gfortran seeds
+!  from the OS on every run (random_seed is never called) and nvfortran seeds
+!  with its own sequence. The GMM sensor was therefore different on every run
+!  of the same case -- from a bit-identical solution, whole elements changed
+!  cluster (sensor jumps of 0.25-0.5) -- and CPU and GPU builds could never
+!  agree. That made any comparison between runs with the GMM sensor (e.g. two
+!  "gradient variables" choices) partly a comparison of two random sensors.
+!
+!  This is Park & Miller's minimal standard generator (a = 16807,
+!  m = 2**31-1) with Schrage's factorisation, so it never overflows default
+!  integers and gives the same sequence with every compiler. Only the root
+!  rank calls it (the centroids are then broadcast), as before.
+!
+   subroutine clustering_random(x)
+      implicit none
+      real(RP), intent(out) :: x(:,:)
+      integer, parameter    :: a = 16807, m = 2147483647, q = 127773, r = 2836
+      integer               :: i, j, hi, lo
+
+      do j = 1, size(x, dim=2) ; do i = 1, size(x, dim=1)
+         hi = clustering_seed / q
+         lo = mod(clustering_seed, q)
+         clustering_seed = a * lo - r * hi
+         if (clustering_seed <= 0) clustering_seed = clustering_seed + m
+         x(i,j) = real(clustering_seed, RP) / real(m, RP)
+      end do                   ; end do
+
+   end subroutine clustering_random
 !
    subroutine kMeans_init(self, ndims, nclusters, maxiters)
 !
@@ -263,7 +301,7 @@ module Clustering
       if (self % initialized) then
 
          if (MPI_Process % isRoot) then
-            call random_number(self % centroids)
+            call clustering_random(self % centroids)
          end if
 
 #if defined(_HAS_MPI_)
@@ -734,7 +772,7 @@ module Clustering
 
          else
             if (MPI_Process % isRoot) then
-               call random_number(self % centroids(:,i1:i2))
+               call clustering_random(self % centroids(:,i1:i2))
             end if
 
 #if defined(_HAS_MPI_)
