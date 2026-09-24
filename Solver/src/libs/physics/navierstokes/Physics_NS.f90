@@ -31,6 +31,7 @@
       private
       public  EulerFlux
       public  ViscousFlux_STATE, ViscousFlux_ENTROPY, ViscousFlux_ENERGY
+      public  ViscousFlux_selector_0D
       public  GuermondPopovFlux_ENTROPY, GuermondPopovFlux_STATE, GuermondPopovFlux_ENERGY
       public  InviscidJacobian, ComputeEigenvaluesForState
       public  getStressTensor, ViscousJacobian, getFrictionVelocity, getFrictionVelocityWithSign
@@ -413,6 +414,34 @@
          F(IRHOE,IZ) = F(IRHOU,IZ) * u(IX) + F(IRHOV,IZ) * u(IY) + F(IRHOW,IZ) * u(IZ) + kappa  * nablaT(IZ)
 
       end subroutine ViscousFlux_ENERGY
+!
+!///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+!
+!     Point-wise viscous flux in the selected gradient variables (device-side
+!     equivalent of the ViscousFlux procedure pointer)
+!     -----------------------------------------------------------------------
+      pure subroutine ViscousFlux_selector_0D(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         !$acc routine seq
+         implicit none
+         integer,       intent(in)  :: nEqn
+         integer,       intent(in)  :: nGradEqn
+         real(kind=RP), intent(in)  :: Q   (1:nEqn        )
+         real(kind=RP), intent(in)  :: Q_x (1:nGradEqn    )
+         real(kind=RP), intent(in)  :: Q_y (1:nGradEqn    )
+         real(kind=RP), intent(in)  :: Q_z (1:nGradEqn    )
+         real(kind=RP), intent(in)  :: mu, beta, kappa
+         real(kind=RP), intent(out) :: F   (1:nEqn, 1:NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENTROPY)
+            call ViscousFlux_ENTROPY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         case (GRADVARS_ENERGY)
+            call ViscousFlux_ENERGY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         case default
+            call ViscousFlux_STATE(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         end select
+
+      end subroutine ViscousFlux_selector_0D
 
       pure subroutine GuermondPopovFlux_ENTROPY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
 !

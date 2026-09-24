@@ -1322,7 +1322,7 @@ module SpatialDiscretization
                beta  = 0.0_RP
                kappa = mesh % elements(eID) % storage % mu_ns(2,i,j,k)
 
-               call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
+               call ViscousFlux_selector_0D( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
                                        mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, kappa, viscousFlux)
                
                do eq =1, NCONS
@@ -1387,7 +1387,7 @@ module SpatialDiscretization
                do j = 0, mesh % elements(eID) % Nxyz(2)  
                   do i = 0, mesh % elements(eID) % Nxyz(1)
 
-                  call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
+                  call ViscousFlux_selector_0D( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
                                           mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), &
                                           mesh % elements(eID) % storage % mu_ns(1,i,j,k), 0.0_RP, &
                                           mesh % elements(eID) % storage % mu_ns(2,i,j,k), Flux)
@@ -1788,7 +1788,7 @@ module SpatialDiscretization
             do k = 0, Nz
                do j = 0, Ny
                   do i = 0, Nx
-                     call ViscousFlux_STATE(nEqn, nGradEqn, Q(:,i,j,k),  U_x(:,i,j,k), U_y(:,i,j,k), U_z(:,i,j,k), &
+                     call ViscousFlux_selector_0D(nEqn, nGradEqn, Q(:,i,j,k), U_x(:,i,j,k), U_y(:,i,j,k), U_z(:,i,j,k), &
                                             mu(1,i,j,k), 0.0_RP, mu(2,i,j,k), flux_cart(:,:,i,j,k))
                   enddo
                enddo

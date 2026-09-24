@@ -15,6 +15,7 @@ module VariableConversion_NS
    public   getRoeVariables, GetNSViscosity, getVelocityGradients, getTemperatureGradient, getConservativeGradients
    public   set_getVelocityGradients
    public   getVelocityGradients_State
+   public   getVelocityGradients_selector
   
 
    interface getTemperatureGradient
@@ -435,6 +436,27 @@ module VariableConversion_NS
          U_z = pDivRho * (Q_z(IRHOU:IRHOW) + U * Q_z(IRHOE))
 
       end subroutine getVelocityGradients_Entropy
+!
+!     Device-side equivalent of the getVelocityGradients procedure pointer
+!     (procedure pointers cannot be called from OpenACC compute regions)
+!     --------------------------------------------------------------------
+      pure subroutine getVelocityGradients_selector(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)  :: Q(NCONS)
+         real(kind=RP), intent(in)  :: Q_x(NGRAD), Q_y(NGRAD), Q_z(NGRAD)
+         real(kind=RP), intent(out) :: U_x(NDIM), U_y(NDIM), U_z(NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENTROPY)
+            call getVelocityGradients_Entropy(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         case (GRADVARS_ENERGY)
+            call getVelocityGradients_Energy(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         case default
+            call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         end select
+
+      end subroutine getVelocityGradients_selector
 
 !
 !/////////////////////////////////////////////////////////////////////////////
