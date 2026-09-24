@@ -26,6 +26,7 @@ The options comprise following flags:
 | --partition-file=  | *CHARACTER*: Specifies the path to the partition file (*.pmesh) to export the MPI ranks of the simulation.     | Not Present   |
 | --boundary-file=   | *CHARACTER*: Specifies the path to the boundary mesh file (*.bmesh) to export the surfaces as additional zones of the Tecplot file. | Not Present   |
 | --output-type=     | *CHARACTER*: Specifies the type of output file: *tecplot* or *vtkhdf*.                                          | *tecplot*     |
+| --gradient-variables= | *CHARACTER*: Gradient variables of the gradients saved in the solution file (see the solver keyword *gradient variables*): *state*, *entropy* or *energy*. Used to compute the velocity gradients. | *state*       |
 
 * *Homogeneous* when *--output-order* is specified
 
