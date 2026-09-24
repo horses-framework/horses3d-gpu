@@ -1018,6 +1018,7 @@ module SCsensorClass
       integer                :: n
       integer                :: cluster
       integer                :: nclusters
+      integer                :: ip, jc, jmax
       logical                :: with_kmeans
       real(RP)               :: u2, p
       real(RP)               :: ux(3), uy(3), uz(3)
@@ -1136,7 +1137,22 @@ module SCsensorClass
             e % storage % sensor = 0.0_RP
          else
             n = product(e % Nxyz + 1)
-            cluster = maxval(maxloc(sensor % gmm % prob(cnt+1:cnt+n,1:nclusters), dim=2))
+!
+!           Most probable cluster of each node, then the highest one in the
+!           element, i.e. maxval(maxloc(prob(cnt+1:cnt+n,1:nclusters), dim=2)).
+!           Written as a loop because nvfortran's maxloc(..., dim=2) on this
+!           array section corrupts the heap (free() of an invalid pointer inside
+!           pghpf_maxloc_i8), which aborted every GPU run with the GMM sensor.
+!           The strict ">" keeps maxloc's first-occurrence tie-breaking.
+!           ----------------------------------------------------------------
+            cluster = 1
+            do ip = cnt + 1, cnt + n
+               jmax = 1
+               do jc = 2, nclusters
+                  if (sensor % gmm % prob(ip,jc) > sensor % gmm % prob(ip,jmax)) jmax = jc
+               end do
+               cluster = max(cluster, jmax)
+            end do
             e % storage % sensor = real(cluster - 1, RP) / (nclusters - 1)
          end if
          cnt = cnt + n
