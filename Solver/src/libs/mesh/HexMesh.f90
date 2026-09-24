@@ -1568,6 +1568,13 @@ slavecoord:             DO l = 1, 4
                   counter = counter + nEqn
                end do               ; end do
                end associate
+!
+!              The neighbour's flux was unpacked on the host, but computeMPIFaceFlux
+!              runs on the device: without this the device keeps the value pushed
+!              by TimeDerivative_ComputeArtificialViscosity, i.e. the neighbour's
+!              flux from the previous stage. No-op on CPU builds.
+!              ----------------------------------------------------------------
+               !$acc update device(self % faces(fID) % storage(otherSide(thisSide)) % AviscFlux)
             end do
          end do
 #endif
