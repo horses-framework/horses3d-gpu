@@ -29,6 +29,53 @@ module VariableConversion
    end interface
 
    contains
+!
+!/////////////////////////////////////////////////////////////////////////////////////////////
+!
+!     ---------------------------------------------------------------------------------------
+!     Computes the gradient variables, U, from the state vector, Q, for the requested set of
+!     gradient variables (gradVars = GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY).
+!     Sets that are not implemented for the current physics fall back to the state variables.
+!
+!     rho and mu are only used by the multiphase solver (density and chemical potential).
+!     ---------------------------------------------------------------------------------------
+!
+      pure subroutine GradientVariables_Selector(gradVars, nEqn, nGradEqn, Q, U, rho, mu)
+         !$acc routine seq
+         use SMConstants, only: RP
+         use PhysicsStorage
+         implicit none
+         integer,       intent(in)  :: gradVars
+         integer,       intent(in)  :: nEqn, nGradEqn
+         real(kind=RP), intent(in)  :: Q(nEqn)
+         real(kind=RP), intent(out) :: U(nGradEqn)
+         real(kind=RP), intent(in)  :: rho
+         real(kind=RP), intent(in)  :: mu
+
+         select case (gradVars)
+#if defined(NAVIERSTOKES)
+         case (GRADVARS_ENTROPY)
+            call NSGradientVariables_ENTROPY(nEqn, nGradEqn, Q, U)
+
+         case (GRADVARS_ENERGY)
+            call NSGradientVariables_ENERGY(nEqn, nGradEqn, Q, U)
+#elif defined(INCNS)
+         case (GRADVARS_ENTROPY)
+            call iNSGradientVariables(nEqn, nGradEqn, Q, U)
+#elif defined(MULTIPHASE)
+         case (GRADVARS_ENTROPY)
+!
+!           The multiphase solver needs the chemical potential as first entropy variable
+!           ----------------------------------------------------------------------------
+            call mGradientVariables(nEqn, nGradEqn, Q, U, rho)
+            U(IGMU) = mu
+#endif
+         case default
+            U(1:nGradEqn) = Q(1:nGradEqn)
+
+         end select
+
+      end subroutine GradientVariables_Selector
 
 #if (defined(CAHNHILLIARD) && defined(NAVIERSTOKES))
       pure subroutine GetNSCHViscosity(phi, mu)

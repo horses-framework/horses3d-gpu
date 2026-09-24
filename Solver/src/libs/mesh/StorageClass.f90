@@ -81,9 +81,7 @@ module StorageClass
       real(kind=RP),           allocatable :: G_NS(:,:,:,:)        ! NSE auxiliary storage
       real(kind=RP),           allocatable :: S_NS(:,:,:,:)        ! NSE source term
       real(kind=RP),           allocatable :: S_NSP(:,:,:,:)       ! NSE Particles source term
-#ifdef INCNS
-      real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_iNS  ! iNS State vector to calculate the gradient
-#endif
+      real(kind=RP),           allocatable :: Q_grad(:,:,:,:)      ! Gradient variables U(Q) to calculate the gradient (not used for GRADVARS_STATE)
 #ifndef ACOUSTIC
       real(kind=RP),           allocatable :: mu_NS(:,:,:,:)       ! (mu, beta, kappa) artificial
       real(kind=RP),           allocatable :: mu_turb_NS(:,:,:)    ! mu of LES
@@ -112,10 +110,8 @@ module StorageClass
       real(kind=RP), dimension(:,:,:,:),   allocatable :: mu_z  ! CHE chemical potential z-gradient
       real(kind=RP), dimension(:,:,:,:),   allocatable :: v     ! CHE flow field velocity
       real(kind=RP), dimension(:,:,:,:),   allocatable :: G_CH  ! CHE auxiliary storage
-      real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_CH  ! CH state vector to calculate the gradient
 #endif
 #ifdef MULTIPHASE
-      real(kind=RP), dimension(:,:,:,:),   allocatable :: Q_grad_mu  ! Multiphase State vector to calculate the gradient
       real(kind=RP), dimension(:,:,:),     allocatable :: invMa2     ! Storage for the density*artificial compressibility factor
 #endif
       contains
@@ -821,9 +817,6 @@ module StorageClass
          ALLOCATE( self % G_NS   (NCONS,0:Nx,0:Ny,0:Nz) )
          ALLOCATE( self % S_NS   (NCONS,0:Nx,0:Ny,0:Nz) )
          ALLOCATE( self % S_NSP  (NCONS,0:Nx,0:Ny,0:Nz) )
-#ifdef INCNS
-         allocate(self % Q_grad_iNS(1:NCONS, 0:Nx, 0:Ny, 0:Nz))
-#endif
 #if defined (SPALARTALMARAS)
          ALLOCATE( self % S_SA  (NCONS,0:Nx,0:Ny,0:Nz) )
 #endif
@@ -834,6 +827,7 @@ module StorageClass
             ALLOCATE( self % U_xNS (NGRAD,0:Nx,0:Ny,0:Nz) )
             ALLOCATE( self % U_yNS (NGRAD,0:Nx,0:Ny,0:Nz) )
             ALLOCATE( self % U_zNS (NGRAD,0:Nx,0:Ny,0:Nz) )
+            ALLOCATE( self % Q_grad(NGRAD,0:Nx,0:Ny,0:Nz) )
          end if
 
 #ifndef ACOUSTIC
@@ -872,11 +866,9 @@ module StorageClass
          allocate(self % mu_z(NCOMP, 0:Nx, 0:Ny, 0:Nz))
          allocate(self % G_CH(NCOMP,0:Nx,0:Ny,0:Nz) )
          allocate(self % v   (1:NDIM, 0:Nx, 0:Ny, 0:Nz))
-         allocate(self % Q_grad_CH(NCOMP, 0:Nx, 0:Ny, 0:Nz))
 #endif
 
 #ifdef MULTIPHASE
-         allocate(self % Q_grad_mu(1:NCONS, 0:Nx, 0:Ny, 0:Nz))
          if ( RKSteps_num .gt. 0 ) then
             allocate(self % RKSteps(RKSteps_num))
 
@@ -904,9 +896,6 @@ module StorageClass
          self % FluxH    = 0.0_RP
          self % contravariantFlux    = 0.0_RP
          self % rho    = 0.0_RP
-#ifdef INCNS
-         self % Q_grad_iNS = 0.0_RP
-#endif
 #ifndef ACOUSTIC
          self % mu_NS  = 0.0_RP
          self % mu_turb_NS  = 0.0_RP
@@ -922,6 +911,7 @@ module StorageClass
             self % U_xNS = 0.0_RP
             self % U_yNS = 0.0_RP
             self % U_zNS = 0.0_RP
+            self % Q_grad = 0.0_RP
          end if
 
          self % artificialDiss = 0.0_RP
@@ -938,10 +928,8 @@ module StorageClass
          self % mu_z  = 0.0_RP
          self % G_CH  = 0.0_RP
          self % v     = 0.0_RP
-         self % Q_grad_CH   = 0.0_RP
 #endif
 #ifdef MULTIPHASE
-         self % Q_grad_mu   = 0.0_RP
          self % invMa2     = 0.0_RP
 #endif
 
@@ -1020,14 +1008,12 @@ module StorageClass
             to % U_xNS  = from % U_xNS
             to % U_yNS  = from % U_yNS
             to % U_zNS  = from % U_zNS
+            to % Q_grad = from % Q_grad
          end if
          to % QDotNS = from % QDotNS
          to % G_NS   = from % G_NS
          to % S_NS   = from % S_NS
          to % S_NSP  = from % S_NSP
-#ifdef INCNS
-         to % Q_grad_iNS = from % Q_grad_iNS
-#endif
 #if defined (SPALARTALMARAS)
          to % S_SA   = from % S_SA
 #endif
@@ -1058,11 +1044,9 @@ module StorageClass
          to % v    = from % v
          to % cDot = from % cDot
          to % G_CH = from % G_CH
-         to % Q_grad_CH = from % Q_grad_CH
 #endif
 
 #ifdef MULTIPHASE
-         to % Q_grad_mu = from % Q_grad_mu
          to % invMa2    = from % invMa2
 #endif
 
@@ -1133,9 +1117,6 @@ module StorageClass
          safedeallocate(self % S_NS)
          safedeallocate(self % S_NSP)
 
-#ifdef INCNS
-         safedeallocate(self % Q_grad_iNS)
-#endif
 #if defined (SPALARTALMARAS)
          safedeallocate(self % S_SA)
 #endif
@@ -1147,6 +1128,7 @@ module StorageClass
             safedeallocate(self % U_xNS)
             safedeallocate(self % U_yNS)
             safedeallocate(self % U_zNS)
+            safedeallocate(self % Q_grad)
          end if
 #ifndef ACOUSTIC
          safedeallocate(self % mu_NS)
@@ -1180,11 +1162,9 @@ module StorageClass
          safedeallocate(self % mu_z)
          safedeallocate(self % G_CH)
          safedeallocate(self % v)
-         safedeallocate(self % Q_grad_CH)
 #endif
 
 #ifdef MULTIPHASE
-         safedeallocate(self % Q_grad_mu)
          safedeallocate(self % invMa2)
 #endif
          safedeallocate(self % PrevQ)

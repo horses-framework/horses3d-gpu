@@ -784,54 +784,61 @@
 !
 !              nabla U = (1/J) \sum_i Ja^i \cdot \partial(u)/ \partial \xi^i
 !
+!           U_gradsol stores nEqn variables per node (its leading
+!           dimension), and the gradients of the first nGradEqn of them
+!           are computed. This allows to differentiate the state directly
+!           (e.g. the concentration stored in the first position of the
+!           multiphase state) without copying it to an auxiliary array.
 !        ****************************************************************
 !
          implicit none
          type(Element),   intent(inout)     :: self
          integer,         intent(in)        :: nEqn
          integer,         intent(in)        :: nGradEqn
-         real(kind=RP),   intent(in)        :: U_gradsol(1:nGradEqn, 0:self % Nxyz(1), 0:self % Nxyz(2), 0:self % Nxyz(3))
+         real(kind=RP),   intent(in)        :: U_gradsol(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(2), 0:self % Nxyz(3))
 !
 !        ---------------
 !        Local variables
 !        ---------------
 !
          integer  :: i, j, k, l, eq
-         real(kind=RP)  :: U_xi(NCONS)
-         real(kind=RP)  :: U_eta(NCONS)
-         real(kind=RP)  :: U_zeta(NCONS)
+         real(kind=RP)  :: U_xi(NGRAD)
+         real(kind=RP)  :: U_eta(NGRAD)
+         real(kind=RP)  :: U_zeta(NGRAD)
          real(kind=RP)  :: inv_jac
 
          !$acc loop vector collapse(3) private(U_xi, U_eta, U_zeta, inv_jac)
          do k = 0, self % Nxyz(3) ; do j = 0, self % Nxyz(2) ; do i = 0, self % Nxyz(1)
-            
-            !***
-            !Every self % storage % Q is changed to U_gradsol for multiphase compatibility
-            !***
 
-            ! U_xi =  self % storage % Q(:,0,j,k) * NodalStorage(self % Nxyz(1)) % D(i,0)
-            U_xi(1:nGradEqn) =  U_gradsol(:,0,j,k) * NodalStorage(self % Nxyz(1)) % D(i,0)
-            !$acc loop seq
-            do l = 1, self % Nxyz(1)
-               ! U_xi = U_xi + self % storage % Q(:,l,j,k) * NodalStorage(self % Nxyz(1)) % D(i,l)
-               U_xi(1:nGradEqn) = U_xi(1:nGradEqn) + U_gradsol(:,l,j,k) * NodalStorage(self % Nxyz(1)) % D(i,l)
-            enddo
-            
-            ! U_eta = self % storage % Q(:,i,0,k) * NodalStorage(self % Nxyz(2)) % D(j,0)
-            U_eta(1:nGradEqn) = U_gradsol(:,i,0,k) * NodalStorage(self % Nxyz(2)) % D(j,0)
-            !$acc loop seq
-            do l = 1, self % Nxyz(2)
-               ! U_eta = U_eta + self % storage % Q(:,i,l,k) * NodalStorage(self % Nxyz(2)) % D(j,l)
-               U_eta(1:nGradEqn) = U_eta(1:nGradEqn) + U_gradsol(:,i,l,k) * NodalStorage(self % Nxyz(2)) % D(j,l)
-            end do  
+            if ( self % Nxyz(1) > 0 ) then
+               U_xi(1:nGradEqn) =  U_gradsol(1:nGradEqn,0,j,k) * NodalStorage(self % Nxyz(1)) % D(i,0)
+               !$acc loop seq
+               do l = 1, self % Nxyz(1)
+                  U_xi(1:nGradEqn) = U_xi(1:nGradEqn) + U_gradsol(1:nGradEqn,l,j,k) * NodalStorage(self % Nxyz(1)) % D(i,l)
+               enddo
+            else
+               U_xi(1:nGradEqn) = 0.0_RP
+            end if
 
-            ! U_zeta = self % storage % Q(:,i,j,0) * NodalStorage(self % Nxyz(3)) % D(k,0)
-            U_zeta(1:nGradEqn) = U_gradsol(:,i,j,0) * NodalStorage(self % Nxyz(3)) % D(k,0)
-            !$acc loop seq
-            do l = 1, self % Nxyz(3)
-               ! U_zeta = U_zeta + self % storage % Q(:,i,j,l) * NodalStorage(self % Nxyz(3)) % D(k,l)
-               U_zeta(1:nGradEqn) = U_zeta(1:nGradEqn) + U_gradsol(:,i,j,l) * NodalStorage(self % Nxyz(3)) % D(k,l)
-            end do
+            if ( self % Nxyz(2) > 0 ) then
+               U_eta(1:nGradEqn) = U_gradsol(1:nGradEqn,i,0,k) * NodalStorage(self % Nxyz(2)) % D(j,0)
+               !$acc loop seq
+               do l = 1, self % Nxyz(2)
+                  U_eta(1:nGradEqn) = U_eta(1:nGradEqn) + U_gradsol(1:nGradEqn,i,l,k) * NodalStorage(self % Nxyz(2)) % D(j,l)
+               end do
+            else
+               U_eta(1:nGradEqn) = 0.0_RP
+            end if
+
+            if ( self % Nxyz(3) > 0 ) then
+               U_zeta(1:nGradEqn) = U_gradsol(1:nGradEqn,i,j,0) * NodalStorage(self % Nxyz(3)) % D(k,0)
+               !$acc loop seq
+               do l = 1, self % Nxyz(3)
+                  U_zeta(1:nGradEqn) = U_zeta(1:nGradEqn) + U_gradsol(1:nGradEqn,i,j,l) * NodalStorage(self % Nxyz(3)) % D(k,l)
+               end do
+            else
+               U_zeta(1:nGradEqn) = 0.0_RP
+            end if
 
             inv_jac = self % geom % InvJacobian(i,j,k)
 
