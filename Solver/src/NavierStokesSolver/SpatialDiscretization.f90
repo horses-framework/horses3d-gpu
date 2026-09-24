@@ -646,7 +646,7 @@ module SpatialDiscretization
 !        ***********************
 !        Now add the source term
 !        ***********************
-!$omp do schedule(runtime) private(i,j,k)
+!$omp do schedule(runtime) private(i,j,k,eq)
 !$acc parallel loop gang vector_length(128) present(mesh) async(1)
          do eID = 1, mesh % no_of_elements
             !$acc loop vector collapse(4)
