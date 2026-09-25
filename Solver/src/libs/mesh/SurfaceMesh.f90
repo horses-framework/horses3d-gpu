@@ -1391,7 +1391,6 @@ Module SurfaceMesh
 
         !local variables
         integer                                                 :: surfID, faceID, i, j, meshFaceID
-        real(kind=RP)                                           :: u_tau_t1, u_tau_t2
         real(kind=RP)                                           :: qq, u, v, w
         real(kind=RP), dimension(NDIM)                          :: freestream_dir
 
@@ -1411,7 +1410,7 @@ Module SurfaceMesh
                  (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. .not. surfaces % mergeFWHandBC) ) cycle
              if (.not. surfaces % isNoSlip(surfID)) cycle
              ! save u_tau_NS in each face of the no slip bc zones
-!!!$omp parallel do default(shared) private(faceID,u_tau_t1,u_tau_t2,meshFaceID,i,j)
+!!!$omp parallel do default(shared) private(faceID,meshFaceID,i,j)
              do faceID = 1, surfaces % zones(surfID) % no_of_faces
                 meshFaceID = surfaces % zones(surfID) % faces(faceID)
                 associate( Q => mesh % faces(meshFaceID) % storage(1) % Q, &
@@ -1428,9 +1427,7 @@ Module SurfaceMesh
                             if (saveUTauWithSign) then
                                 call getFrictionVelocityWithSign(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_1(:,i,j),tangent_2(:,i,j), freestream_dir, u_tau(i,j))
                             else
-                                call getFrictionVelocity(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_1(:,i,j),u_tau_t1)
-                                call getFrictionVelocity(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_2(:,i,j),u_tau_t2)
-                                u_tau(i,j) = sqrt(u_tau_t1**2+u_tau_t2**2)
+                                call getFrictionVelocityMagnitude(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),u_tau(i,j))
                             endif
                         end if
                         if (surfaces % saveUtauVector) then

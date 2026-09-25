@@ -20,7 +20,7 @@
       public  GuermondPopovFlux_ENTROPY
       public  InviscidJacobian
       public  getStressTensor, getFrictionVelocity, getFrictionVelocityWithSign
-      public  getFrictionVelocityVector
+      public  getFrictionVelocityVector, getFrictionVelocityMagnitude
 !
 !     ========
       CONTAINS 
@@ -714,6 +714,39 @@
          end if
 
       End Subroutine getFrictionVelocityVector
+
+      Subroutine getFrictionVelocityMagnitude(Q,Q_x,Q_y,Q_z,normal,u_tau)
+         implicit none
+         real(kind=RP), intent(in)      :: Q   (1:NCONS   )
+         real(kind=RP), intent(in)      :: Q_x (1:NGRAD   )
+         real(kind=RP), intent(in)      :: Q_y (1:NGRAD   )
+         real(kind=RP), intent(in)      :: Q_z (1:NGRAD   )
+         real(kind=RP), intent(in)      :: normal (1:NDIM )
+         real(kind=RP), intent(out)     :: u_tau                 ! friction velocity magnitude, sqrt(|tau_w|/rho)
+
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP)                  :: tau (1:NDIM, 1:NDIM   )
+         real(kind=RP)                  :: tau_w_vec(1:NDIM)
+         real(kind=RP)                  :: tangential_tau(1:NDIM)
+
+         call getStressTensor(Q, Q_x, Q_y, Q_z, tau)
+         tau_w_vec = -1.0_RP * matmul(tau, normal)
+
+         ! magnitude of the tangential part of the traction vector (Euclidean norm), so that it matches
+         ! the magnitude of the friction velocity vector returned by getFrictionVelocityVector
+         tangential_tau = tau_w_vec - dot_product(tau_w_vec, normal) * normal
+
+         if ( Q(IRHO) > tiny(1.0_RP) ) then
+            u_tau = sqrt(sqrt(dot_product(tangential_tau, tangential_tau)) / Q(IRHO))
+         else
+            u_tau = 0.0_RP
+         end if
+
+      End Subroutine getFrictionVelocityMagnitude
 
       Subroutine getFrictionVelocityWithSign(Q,Q_x,Q_y,Q_z,normal,tangent_1,tangent_2,freestream_dir, u_tau)
          implicit none
