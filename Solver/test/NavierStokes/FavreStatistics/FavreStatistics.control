@@ -1,0 +1,32 @@
+!
+!  Regression test for the statistics monitor (Reynolds and Favre averaging),
+!  case A: 4 samples.
+!  The initial condition and UserDefinedPeriodicOperation (SETUP/ProblemFile.f90)
+!  impose synthetic samples; dt is so small that the time step leaves them
+!  unchanged, so the monitor samples exactly those states (t=0 + one per step).
+!  The checks are done in UserDefinedFinalize.
+!
+Flow equations        = "NS"
+mesh file name        = "../../TestMeshes/Box27.mesh"
+Polynomial order      = 2
+simulation type       = time-accurate
+Number of time steps  = 3
+Output Interval       = 1
+Convergence tolerance = 1.d-10
+dt                    = 1.0d-30
+mach number           = 0.3
+Reynolds number       = 100.0
+AOA theta             = 0.0
+AOA phi               = 0.0
+solution file name    = "RESULTS/FavreStatistics.hsol"
+restart               = .false.
+restart file name     = "RESULTS/FavreStatistics.hsol"
+riemann solver        = roe
+
+#define boundary front__back__bottom__top__left__right
+  type = Inflow
+#end
+
+#define statistics
+   averaging = Reynolds, Favre
+#end

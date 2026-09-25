@@ -40,7 +40,8 @@ MODULE HexMeshClass
       public      GetOriginalNumberOfFaces
       public      ConstructFaces, ConstructPeriodicFaces
       public      DeletePeriodicMinusFaces, GetElementsFaceIDs
-      public      no_of_stats_variables, HexMesh_ProlongSolToFaces, HexMesh_ProlongGradientsToFaces
+      public      no_of_stats_variables, no_of_reynolds_variables, no_of_favre_variables
+      public      HexMesh_ProlongSolToFaces, HexMesh_ProlongGradientsToFaces
       public      HexMesh_UpdateMPIFacesSolution, HexMesh_UpdateMPIFacesGradients
       public      HexMesh_GatherMPIFacesSolution, HexMesh_GatherMPIFacesGradients
       public      HexMesh_ComputeLocalGradientNS
@@ -154,6 +155,8 @@ MODULE HexMeshClass
 
       integer, parameter :: NUM_OF_NEIGHBORS = 6 ! Hardcoded: Hexahedral conforming meshes
       integer            :: no_of_stats_variables
+      integer            :: no_of_reynolds_variables = 0
+      integer            :: no_of_favre_variables    = 0
 
       TYPE Neighbor_t         ! added to introduce colored computation of numerical Jacobian (is this the best place to define this type??) - only usable for conforming meshes
          INTEGER :: elmnt(NUM_OF_NEIGHBORS+1) ! "7" hardcoded for 3D hexahedrals in conforming meshes (the last one is itself)... This definition must change if the code is expected to be more general
@@ -3389,7 +3392,6 @@ slavecoord:             DO l = 1, 4
          refs(V_REF)     = refValues      % V
          refs(T_REF)     = refValues      % T
          refs(MACH_REF)  = dimensionless  % Mach
-         refs(RE_REF)    = dimensionless  % Re
 
 !
 !        Update the host data from the GPU
@@ -3407,23 +3409,34 @@ slavecoord:             DO l = 1, 4
          do eID = 1, self % no_of_elements
             associate( e => self % elements(eID) )
             pos = POS_INIT_DATA + (e % globID-1)*5_AddrInt*SIZEOF_INT + 1_AddrInt*no_of_stats_variables*e % offsetIO*SIZEOF_RP
-            no_stat_s = 9
-            call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            no_stat_s = no_of_reynolds_variables
+            if (no_stat_s > 0) then
+               call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            end if
             allocate(Q(NCONS, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
-            ! write(fid) e%storage%stats%data(7:,:,:,:)
             Q(1:NCONS,:,:,:) = e % storage % stats % data(no_stat_s+1:no_stat_s+NCONS,:,:,:)
-            write(fid) Q
+            if (no_stat_s == 0) then
+               call writeArray(fid, Q, position=pos)
+            else
+               write(fid) Q
+            end if
             deallocate(Q)
+            if (no_of_favre_variables > 0) then
+               allocate(Q(no_of_favre_variables, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+               Q(1:no_of_favre_variables,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+no_of_favre_variables,:,:,:)
+               write(fid) Q
+               deallocate(Q)
+            end if
             if ( saveGradients .and. computeGradients ) then
                allocate(Q(NGRAD,0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
                ! UX
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1:no_stat_s+NCONS+no_of_favre_variables+NGRAD,:,:,:)
                write(fid) Q
                ! UY
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+NGRAD:no_stat_s+NCONS+2*NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+NGRAD:no_stat_s+NCONS+no_of_favre_variables+2*NGRAD,:,:,:)
                write(fid) Q
                ! UZ
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+2*NGRAD:,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+2*NGRAD:,:,:,:)
                write(fid) Q
                deallocate(Q)
             end if
@@ -3439,7 +3452,7 @@ slavecoord:             DO l = 1, 4
 
 #endif
 
-#if defined(INCNS) 
+#if defined(INCNS)
       subroutine HexMesh_SaveStatistics(self, iter, time, name, saveGradients)
          use SolutionFile
          implicit none
@@ -3485,23 +3498,34 @@ slavecoord:             DO l = 1, 4
          do eID = 1, self % no_of_elements
             associate( e => self % elements(eID) )
             pos = POS_INIT_DATA + (e % globID-1)*5_AddrInt*SIZEOF_INT + no_of_stats_variables*e % offsetIO*SIZEOF_RP
-            no_stat_s = 9
-            call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            no_stat_s = no_of_reynolds_variables
+            if (no_stat_s > 0) then
+               call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            end if
             allocate(Q(NCONS, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
-         !    ! write(fid) e%storage%stats%data(7:,:,:,:)
-             Q(1:NCONS,:,:,:) = e % storage % stats % data(no_stat_s+1:no_stat_s+NCONS,:,:,:)
-             write(fid) Q
-             deallocate(Q)
+            Q(1:NCONS,:,:,:) = e % storage % stats % data(no_stat_s+1:no_stat_s+NCONS,:,:,:)
+            if (no_stat_s == 0) then
+               call writeArray(fid, Q, position=pos)
+            else
+               write(fid) Q
+            end if
+            deallocate(Q)
+            if (no_of_favre_variables > 0) then
+               allocate(Q(no_of_favre_variables, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+               Q(1:no_of_favre_variables,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+no_of_favre_variables,:,:,:)
+               write(fid) Q
+               deallocate(Q)
+            end if
             if ( saveGradients .and. computeGradients ) then
                allocate(Q(NGRAD,0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
                ! UX
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1:no_stat_s+NCONS+no_of_favre_variables+NGRAD,:,:,:)
                write(fid) Q
                ! UY
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+NGRAD:no_stat_s+NCONS+2*NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+NGRAD:no_stat_s+NCONS+no_of_favre_variables+2*NGRAD,:,:,:)
                write(fid) Q
                ! UZ
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+2*NGRAD:,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+2*NGRAD:,:,:,:)
                write(fid) Q
                deallocate(Q)
             end if
