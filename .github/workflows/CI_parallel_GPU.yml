@@ -171,6 +171,179 @@ jobs:
         if: '!cancelled()'
 
 #
+# 1b) FAVRE STATISTICS (statistics monitor: Reynolds and Favre averaging)
+# -----------------------------------------------------------------------
+
+      - name: Build NSFavreStatistics
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics/SETUP
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          make clean || true
+          make ns COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+        if: '!cancelled()'
+
+      - name: Fix test directory ownership
+        run: sudo chown -R a.ballout:a.ballout $GITHUB_WORKSPACE
+        if: '!cancelled()'
+        
+      - name: Run NSFavreStatistics
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          
+          cat > run_test.sh << 'EOF'
+          #!/bin/bash
+          #SBATCH --job-name=NSFavreStats
+          #SBATCH --ntasks=2
+          #SBATCH --partition=gpu
+          #SBATCH --mem=32G
+          #SBATCH --gres=gpu:2  # number of gpus max 4
+          #SBATCH --time=00:15:00
+          
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          mpirun -np 2 --bind-to none ./horses3d.ns FavreStatistics.control
+          EOF
+          
+          job_id=$(sbatch --uid=a.ballout --parsable run_test.sh)
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+          
+          cat slurm-${job_id}.out
+          
+          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics (Favre only)
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          
+          cat > run_test.sh << 'EOF'
+          #!/bin/bash
+          #SBATCH --job-name=NSFavreStats
+          #SBATCH --ntasks=2
+          #SBATCH --partition=gpu
+          #SBATCH --mem=32G
+          #SBATCH --gres=gpu:2  # number of gpus max 4
+          #SBATCH --time=00:15:00
+          
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          mpirun -np 2 --bind-to none ./horses3d.ns FavreStatistics_FavreOnly.control
+          EOF
+          
+          job_id=$(sbatch --uid=a.ballout --parsable run_test.sh)
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+          
+          cat slurm-${job_id}.out
+          
+          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics (periodic signal)
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          
+          cat > run_test.sh << 'EOF'
+          #!/bin/bash
+          #SBATCH --job-name=NSFavreStats
+          #SBATCH --ntasks=2
+          #SBATCH --partition=gpu
+          #SBATCH --mem=32G
+          #SBATCH --gres=gpu:2  # number of gpus max 4
+          #SBATCH --time=00:15:00
+          
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          mpirun -np 2 --bind-to none ./horses3d.ns FavreStatistics_Sine.control
+          EOF
+          
+          job_id=$(sbatch --uid=a.ballout --parsable run_test.sh)
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+          
+          cat slurm-${job_id}.out
+          
+          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+        if: '!cancelled()'
+
+
+#
 # 5) CYLINDER SMAGORINSKY
 # -----------------------
 
