@@ -1,45 +1,35 @@
 #################################################################################
 ##	Makefile for the WallShearStress unit test.
 ##
-##	Requires the Navier-Stokes libraries to be built first, e.g. from ./Solver:
-##	   make ns COMPILER=gfortran COMM=SERIAL ENABLE_THREADS=NO
+##	It includes the solver Makefile, so it uses the same compiler, flags and
+##	external libraries (COMPILER, MODE, COMM, WITH_METIS, EXTRA_FFLAGS, ...)
+##	that were used to build HORSES3D. Only the equation-independent libraries
+##	and the Navier-Stokes physics library (libphysicsns, built by any of
+##	make ns / ins / mu) are needed, so it works after any solver build.
 ##
-##	Usage:
-##	   make COMPILER=gfortran     (build)
-##	   make run COMPILER=gfortran (build and run)
+##	Usage (from this folder, after building the solver):
+##	   make unittest     COMPILER=gfortran COMM=SEQUENTIAL   (build)
+##	   make run-unittest COMPILER=gfortran COMM=SEQUENTIAL   (build and run)
 #################################################################################
 HOME_DIR ?= ../../..
-COMPILER ?= gfortran
-PROG     := TestWallShearStress
+include $(HOME_DIR)/Makefile
 
-ifeq ($(COMPILER),gfortran)
-   FC     = gfortran
-   FFLAGS = -cpp -ffree-line-length-0 -O0 -g -fcheck=all -fbacktrace -ffpe-trap=invalid,zero,overflow
-   MOD_FLAG = -J
-else ifeq ($(COMPILER),ifort)
-   FC     = ifort
-   FFLAGS = -fpp -O0 -g -check all -traceback -fpe0
-   MOD_FLAG = -module
-else ifeq ($(COMPILER),nvfortran)
-   FC     = nvfortran
-   FFLAGS = -cpp -O0 -g
-   MOD_FLAG = -module
+PROG_UNITTEST := TestWallShearStress
+LIBS_UNITTEST := -L$(HOME_DIR)/lib -lphysicsns -lio -lspectral -lmpiutils -lfoundation -lftobject -lml
+# Runtime search path for shared external libraries (e.g. HDF5 when WITH_HDF5=YES)
+RPATH_UNITTEST := -Wl,-rpath,$(abspath $(HOME_DIR)/lib)
+ifdef HDF5_DIR
+   RPATH_UNITTEST += -Wl,-rpath,$(HDF5_DIR)/lib
 endif
 
-INCLUDE = -I$(HOME_DIR)/include -I$(HOME_DIR)/include_ns
-LIBS    = -L$(HOME_DIR)/lib -lphysics_ns -lphysicsns -lio -lspectral -lmpiutils -lfoundation -lftobject
+.DEFAULT_GOAL := unittest
+unittest: ./bin/$(PROG_UNITTEST)
 
-.DEFAULT_GOAL := all
-all: ./bin/$(PROG)
-
-./bin/$(PROG): ./src/$(PROG).f90
+./bin/$(PROG_UNITTEST): ./src/$(PROG_UNITTEST).f90 FORCE
 	@mkdir -p ./bin ./build
-	$(FC) $(FFLAGS) $(INCLUDE) $(MOD_FLAG) ./build -o $@ $< $(LIBS)
+	$(FC) $(FFLAGS) $(MACROS) $(INCLUDE) $(EXTLIB_INC) $(MOD_FLAG) ./build -o $@ $< $(LIBS_UNITTEST) $(LIBS) $(RPATH_UNITTEST)
 
-run: ./bin/$(PROG)
-	./bin/$(PROG)
+run-unittest: unittest
+	./bin/$(PROG_UNITTEST)
 
-clean:
-	@rm -rf ./bin ./build
-
-.PHONY: all run clean
+.PHONY: unittest run-unittest
