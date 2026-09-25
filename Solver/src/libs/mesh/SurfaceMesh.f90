@@ -43,6 +43,7 @@ Module SurfaceMesh
         logical                                                 :: mergeFWHandBC    ! flag to merge 2 surfaces if they have the same BCs
         logical                                                 :: active           ! flag use for save at least one file
         logical                                                 :: saveUt           ! flag use for save friction velocity in bcs
+        logical                                                 :: saveUtauVector   ! flag use for save friction-velocity vector in bcs
         logical                                                 :: saveTurb         ! flag use for save wall normal distance, and viscosity
 
         contains
@@ -130,6 +131,7 @@ Module SurfaceMesh
         sliceTolerance = controlVariables % getValueOrDefault("slice tolerance", 1.0e-4_RP)
         self % saveGradients = controlVariables % logicalValueForKey("surface save gradients") .or. controlVariables % logicalValueForKey("save gradients")
         self % saveUt = controlVariables % logicalValueForKey("surface save utau")
+        self % saveUtauVector = controlVariables % logicalValueForKey("surface save utau vector")
         self % saveTurb = controlVariables % logicalValueForKey("surface save turbulent")
 !
 !       get number of surfaces
@@ -466,12 +468,13 @@ Module SurfaceMesh
         character(len=LINE_LENGTH)                          :: FinalName      !  Final name for particular file
         logical                                             :: saveFWH
         integer, dimension(:), allocatable                  :: elemSide
-        logical                                             :: saveUt, saveTurb
+        logical                                             :: saveUt, saveUtauVector, saveTurb
 
         if (.not. self % active) return
         saveFWH = controlVariables % logicalValueForKey("acoustic solution save") .or. self % mergeFWHandBC
         do i = 1, self % numberOfSurfaces
             saveUt = .false.
+            saveUtauVector = .false.
             saveTurb = .false.
             if (.not. self % surfaceActive(i)) cycle
             !skip fwh if not requested
@@ -491,13 +494,14 @@ Module SurfaceMesh
                  (self % surfaceTypes(i) .eq. SURFACE_TYPE_FWH .and. self % mergeFWHandBC) ) then
                 if (self%isNoSlip(i)) then
                     saveUt = self % saveUt
+                    saveUtauVector = self % saveUtauVector
                     saveTurb = self % saveTurb
                 end if
             end if
             call SurfaceSaveSolution(self % zones(i), mesh, time, iter, FinalName, self % totalFaces(i), &
                                  self % globalFid(1:nf,i), self % faceOffset(1:nf,i), elemSide, &
                                  self % surfaceTypes(i),self % saveGradients, &
-                                 self % mergeFWHandBC, saveUt, saveTurb)
+                                 self % mergeFWHandBC, saveUt, saveUtauVector, saveTurb)
         end do
 !
     End Subroutine SurfSaveAllSolution
@@ -656,7 +660,7 @@ Module SurfaceMesh
 !/////////////////////////////////////////////////////////////////////////////////////////////
 !         
    Subroutine SurfaceSaveSolution(surface_zone, mesh, time, iter, name, no_of_faces, fGlobID, faceOffset, eSides, surface_type, &
-                                  saveGradients, saveBCandFWH, saveUt, saveTurb)
+                                  saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb)
 
 !     *******************************************************************
 !        This subroutine saves the solution from the face storage to a binary file
@@ -676,7 +680,7 @@ Module SurfaceMesh
       character(len=*), intent(in)                         :: name
       integer, dimension(:), intent(in)                    :: fGlobID, faceOffset
       integer, dimension(:), intent(in)                    :: eSides
-      logical                                              :: saveGradients, saveBCandFWH, saveUt, saveTurb
+      logical                                              :: saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb
 
       ! local variables
       integer                                              :: zoneFaceID, meshFaceID, solution_type
@@ -743,9 +747,12 @@ Module SurfaceMesh
           end if
       end select
 
+#if defined(NAVIERSTOKES)
       if (saveUt) padding = padding + 1
+      if (saveUtauVector) padding = padding + NDIM
       ! save mu_NS and y, for y+ value calc
       if (saveTurb) padding = padding + 2
+#endif
 !
 !     Create new file
 !     ---------------
@@ -817,7 +824,15 @@ Module SurfaceMesh
                write(fid) Q
                deallocate(Q)
 #endif
-          end if 
+          end if
+          if (saveUtauVector) then
+#if defined(NAVIERSTOKES)
+               allocate(Q(1:NDIM,0:Nx,0:Ny))
+               Q(1:NDIM,:,:)= f % storage(eSides(zoneFaceID)) % u_tau_vec_NS(:,:,:)
+               write(fid) Q
+               deallocate(Q)
+#endif
+          end if
           if (saveTurb) then
 #if defined(NAVIERSTOKES)
                allocate(Q(1,0:Nx,0:Ny))
@@ -1261,7 +1276,7 @@ Module SurfaceMesh
 !
 !     Create file: it will be contained in ./MESH
 !     -------------------------------------------
-      meshName = "./MESH/" // trim(removePath(getFileName(fileName))) // ".surf.hmesh"
+      meshName = "./MESH/" // trim(removePath(fileName)) // ".surf.hmesh"
       call CreateNewSolutionFile(trim(meshName), ZONE_MESH_FILE, mesh % nodeType, &
                                     no_of_faces, 0, 0.0_RP, refs)
 !
@@ -1376,13 +1391,12 @@ Module SurfaceMesh
 
         !local variables
         integer                                                 :: surfID, faceID, i, j, meshFaceID
-        real(kind=RP)                                           :: u_tau_t1, u_tau_t2
         real(kind=RP)                                           :: qq, u, v, w
         real(kind=RP), dimension(NDIM)                          :: freestream_dir
 
 
         if (.not. surfaces % active) return
-        if (.not. surfaces % saveUt) return
+        if ((.not. surfaces % saveUt) .and. (.not. surfaces % saveUtauVector)) return
 
         u  = cos(refValues % AoAtheta * PI / 180.0_RP)*cos(refValues % AoAphi * PI / 180.0_RP)
         v  = sin(refValues % AoAtheta * PI / 180.0_RP)*cos(refValues % AoAphi * PI / 180.0_RP)
@@ -1396,7 +1410,7 @@ Module SurfaceMesh
                  (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. .not. surfaces % mergeFWHandBC) ) cycle
              if (.not. surfaces % isNoSlip(surfID)) cycle
              ! save u_tau_NS in each face of the no slip bc zones
-!!!$omp parallel do default(shared) private(faceID,u_tau_t1,u_tau_t2,meshFaceID,i,j)
+!!!$omp parallel do default(shared) private(faceID,meshFaceID,i,j)
              do faceID = 1, surfaces % zones(surfID) % no_of_faces
                 meshFaceID = surfaces % zones(surfID) % faces(faceID)
                 associate( Q => mesh % faces(meshFaceID) % storage(1) % Q, &
@@ -1406,15 +1420,19 @@ Module SurfaceMesh
                            normal => mesh % faces(meshFaceID) % geom % normal, &
                            tangent_1 => mesh % faces(meshFaceID) % geom % t1, &
                            tangent_2 => mesh % faces(meshFaceID) % geom % t2, &
-                           u_tau => mesh % faces(meshFaceID) % storage(1) % u_tau_NS )
+                           u_tau => mesh % faces(meshFaceID) % storage(1) % u_tau_NS, &
+                           u_tau_vec => mesh % faces(meshFaceID) % storage(1) % u_tau_vec_NS )
                     do j=0,mesh % faces(meshFaceID) % Nf(2)   ; do i = 0, mesh % faces(meshFaceID) % Nf(1)
-                        if (saveUTauWithSign) then 
-                            call getFrictionVelocityWithSign(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_1(:,i,j),tangent_2(:,i,j), freestream_dir, u_tau(i,j))
-                        else 
-                            call getFrictionVelocity(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_1(:,i,j),u_tau_t1)
-                            call getFrictionVelocity(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_2(:,i,j),u_tau_t2)
-                            u_tau(i,j) = sqrt(u_tau_t1**2+u_tau_t2**2)
-                        endif 
+                        if (surfaces % saveUt) then
+                            if (saveUTauWithSign) then
+                                call getFrictionVelocityWithSign(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),tangent_1(:,i,j),tangent_2(:,i,j), freestream_dir, u_tau(i,j))
+                            else
+                                call getFrictionVelocityMagnitude(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),u_tau(i,j))
+                            endif
+                        end if
+                        if (surfaces % saveUtauVector) then
+                            call getFrictionVelocityVector(Q(:,i,j),U_x(:,i,j),U_y(:,i,j),U_z(:,i,j),normal(:,i,j),u_tau_vec(:,i,j))
+                        end if
                     end do             ; end do
                 end associate
 

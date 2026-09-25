@@ -200,6 +200,7 @@ module StorageClass
       real(kind=RP), dimension(:,:),       allocatable :: rho
       real(kind=RP), dimension(:,:,:),     allocatable :: mu_NS
       real(kind=RP), dimension(:,:),       allocatable :: u_tau_NS
+      real(kind=RP), dimension(:,:,:),     allocatable :: u_tau_vec_NS ! friction velocity vector, velocity units (1:NDIM,:,:)
       real(kind=RP), dimension(:,:),       allocatable :: wallNodeDistance ! for BC walls, distance to the first fluid node
 #ifdef ACOUSTIC
       real(kind=RP), dimension(:,:,:),     allocatable :: Qbase ! Base flow State vector
@@ -1417,6 +1418,7 @@ module StorageClass
 #ifndef ACOUSTIC
          allocate( self % mu_NS     (1:3,0:Nf(1),0:Nf(2)) )
          allocate( self % u_tau_NS  (0:Nf(1),0:Nf(2)) )
+         allocate( self % u_tau_vec_NS  (1:NDIM,0:Nf(1),0:Nf(2)) )
          allocate( self % wallNodeDistance  (0:Nf(1),0:Nf(2)) )
 #endif
          
@@ -1478,6 +1480,7 @@ module StorageClass
 #ifndef ACOUSTIC
          self % mu_NS  = 0.0_RP
          self % u_tau_NS = 1.0_RP
+         self % u_tau_vec_NS = 0.0_RP
          self % wallNodeDistance = 0.0_RP
 #endif
 
@@ -1573,6 +1576,7 @@ module StorageClass
          end if
          safedeallocate(self % mu_NS)
          safedeallocate(self % u_tau_NS)
+         safedeallocate(self % u_tau_vec_NS)
          safedeallocate(self % wallNodeDistance)
          safedeallocate(self % rho )
 #if defined (ACOUSTIC)
@@ -1745,6 +1749,7 @@ module StorageClass
 #ifndef ACOUSTIC
          to % mu_NS  = from % mu_NS
          to % u_tau_NS  = from % u_tau_NS
+         to % u_tau_vec_NS  = from % u_tau_vec_NS
          to % wallNodeDistance  = from % wallNodeDistance
 #endif
 
