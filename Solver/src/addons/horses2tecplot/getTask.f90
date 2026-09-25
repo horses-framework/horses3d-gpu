@@ -15,6 +15,10 @@
 !           --output-basis=Gauss: Gauss-Legendre points.
 !           --output-basis=Homogeneous: Equally spaced points.
 !
+!     * The flag --gradient-variables selects the gradient variables of the gradients stored
+!        in the solution file (same as the solver keyword "gradient variables"):
+!           --gradient-variables=state (default), entropy or energy.
+!
 !/////////////////////////////////////////////////////////////////////////////////////////////////
 !
 #include "Includes.h"
@@ -54,6 +58,7 @@ module getTask
    character(len=*), parameter   :: PARTITION_FILE_FLAG="--partition-file="
    character(len=*), parameter   :: OUTPUT_FILE_TYPE="--output-type="
    character(len=*), parameter   :: WRITE_MESH_TYPE="--write-mesh="
+   character(len=*), parameter   :: GRADIENT_VARIABLES_FLAG="--gradient-variables="
 
    contains
 
@@ -352,6 +357,20 @@ module getTask
          else
              flowEq = "ns"
          end if
+!
+!        Gradient variables of the saved gradients. The iNS and multiphase
+!        solvers store the velocity gradients directly (as "energy" does).
+!        -----------------------------------------------------------------
+         if (controlVariables % containsKey("gradient variables")) then
+            call SetGradientVariablesOfSolution(controlVariables % stringValueForKey("gradient variables", LINE_LENGTH))
+         else
+            select case (trim(flowEq))
+            case ("ins", "mu")
+               call SetGradientVariablesOfSolution("energy")
+            case default
+               call SetGradientVariablesOfSolution("state")
+            end select
+         end if
 
          if (controlVariables % containsKey("additional variables")) then
              additionalVariablesStr = controlVariables % stringValueForKey("additional variables", LINE_LENGTH)
@@ -390,7 +409,8 @@ module getTask
 
       subroutine getTaskTypeCommand(taskType, meshName, no_of_solutions, solutionNames, solutionTypes, fixedOrder, Nout, basis,mode, oldStats, writeMesh)
          use SolutionFile
-         use Storage               , only: hasMPIranks, hasBoundaries, partitionFileName, boundaryFileName, flowEq
+         use Storage               , only: hasMPIranks, hasBoundaries, partitionFileName, boundaryFileName, flowEq, &
+                                           SetGradientVariablesOfSolution
          use OutputVariables       , only: outScale, hasVariablesFlag, askedVariables, Lreference
          implicit none
          integer,                                 intent(out) :: taskType
@@ -652,6 +672,11 @@ module getTask
 			pos = index(trim(auxiliarName),"--resultonly")
             if ( pos .ne. 0 ) then
                writeMesh = .false.
+               cycle
+            end if
+            pos = index(trim(auxiliarName),GRADIENT_VARIABLES_FLAG)
+            if ( pos .ne. 0 ) then
+               call SetGradientVariablesOfSolution(auxiliarName(pos+len_trim(GRADIENT_VARIABLES_FLAG):len_trim(auxiliarName)))
                cycle
             end if
          end do

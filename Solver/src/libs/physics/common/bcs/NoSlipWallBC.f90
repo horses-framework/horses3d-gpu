@@ -381,14 +381,7 @@ module NoSlipWallBCClass
                
                Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
 
-               select case(grad_vars)
-               case(GRADVARS_ENTROPY)
-                  call NSGradientVariables_ENTROPY(NCONS, NGRAD, Q, u_int)
-               case(GRADVARS_ENERGY)
-                  call NSGradientVariables_ENERGY(NCONS, NGRAD, Q, u_int)
-               case default
-                  call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
-               end select
+               call GradientVariables_Selector(grad_vars, NCONS, NGRAD, Q, u_int, 0.0_RP, 0.0_RP)
 
                invRho = 1.0_RP / Q(IRHO)
                e_int = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
@@ -400,14 +393,7 @@ module NoSlipWallBCClass
                Q_aux(IRHOTHETA) = 0.0_RP
 #endif
 
-               select case(grad_vars)
-               case(GRADVARS_ENTROPY)
-                  call NSGradientVariables_ENTROPY(NCONS, NGRAD, Q_aux, u_star)
-               case(GRADVARS_ENERGY)
-                  call NSGradientVariables_ENERGY(NCONS, NGRAD, Q_aux, u_star)
-               case default
-                  call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
-               end select
+               call GradientVariables_Selector(grad_vars, NCONS, NGRAD, Q_aux, u_star, 0.0_RP, 0.0_RP)
 
                u_star(IRHO) = u_int(IRHO)
                

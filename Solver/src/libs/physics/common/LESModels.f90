@@ -9,7 +9,8 @@ module LESModels
    use FluidData
 #if defined(NAVIERSTOKES)
    use Physics_NSKeywordsModule
-   use VariableConversion_NS     , only: getVelocityGradients, getTemperatureGradient, getVelocityGradients_State
+   use VariableConversion_NS     , only: getVelocityGradients, getTemperatureGradient, getVelocityGradients_State, &
+                                         getVelocityGradients_selector
 #elif defined(INCNS)
    use Physics_iNSKeywordsModule
    use VariableConversion_iNS     ,only: getVelocityGradients
@@ -316,7 +317,11 @@ module LESModels
          real(kind=RP)  :: U_y(NDIM)
          real(kind=RP)  :: U_z(NDIM)
          !-------------------------------------------------------
+#if defined(NAVIERSTOKES)
+         call getVelocityGradients_selector(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)   ! device-safe: no procedure pointer in acc routines
+#else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+#endif
 
 !
 !        Compute symmetric part of the deformation tensor
@@ -428,7 +433,11 @@ module LESModels
          integer        :: k   ! The third index
          !-------------------------------------------------------
 
+#if defined(NAVIERSTOKES)
+         call getVelocityGradients_selector(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)   ! device-safe: no procedure pointer in acc routines
+#else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+#endif
 
          gradV(1,:) = U_x(1:3)
          gradV(2,:) = U_y(1:3)
@@ -560,7 +569,11 @@ module LESModels
          integer        :: i,j,k
          !-------------------------------------------------------
 
+#if defined(NAVIERSTOKES)
+         call getVelocityGradients_selector(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)   ! device-safe: no procedure pointer in acc routines
+#else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+#endif
 
          delta2 = delta*delta
          gradV(1,:) = U_x(1:3)

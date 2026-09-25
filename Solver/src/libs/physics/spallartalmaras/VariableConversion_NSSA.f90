@@ -170,6 +170,7 @@ module VariableConversion_NSSA
 !---------------------------------------------------------------------
 !
       pure subroutine NSGradientVariables_STATE( nEqn, nGrad, Q, U, rho_ )
+         !$acc routine seq
          implicit none
          integer, intent(in)        :: nEqn, nGrad
          real(kind=RP), intent(in)  :: Q(nEqn)
@@ -185,6 +186,7 @@ module VariableConversion_NSSA
       end subroutine NSGradientVariables_STATE
 
       pure subroutine NSGradientVariables_ENTROPY( nEqn, nGrad, Q, U, rho_ )
+         !$acc routine seq
          implicit none
          integer, intent(in)        :: nEqn, nGrad
          real(kind=RP), intent(in)  :: Q(nEqn)
@@ -208,11 +210,13 @@ module VariableConversion_NSSA
          U(IRHOV) = Q(IRHOV)*invP
          U(IRHOW) = Q(IRHOW)*invP
          U(IRHOE) = -Q(IRHO)*invP
+         U(IRHOTHETA) = Q(IRHOTHETA)                    ! turbulence variable: keep the state
 
 
       end subroutine NSGradientVariables_ENTROPY
 
       pure subroutine NSGradientVariables_ENERGY( nEqn, nGrad, Q, U, rho_ )
+         !$acc routine seq
          implicit none
          integer, intent(in)        :: nEqn, nGrad
          real(kind=RP), intent(in)  :: Q(nEqn)
@@ -234,6 +238,7 @@ module VariableConversion_NSSA
          U(IRHOV) = Q(IRHOV)*invRho                     ! y-velocity
          U(IRHOW) = Q(IRHOW)*invRho                     ! z-velocity
          U(IRHOE) = dimensionless % gammaM2 * p*invRho  ! Temperature
+         U(IRHOTHETA) = Q(IRHOTHETA)                    ! turbulence variable: keep the state
 
       end subroutine NSGradientVariables_ENERGY
 !

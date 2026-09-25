@@ -103,8 +103,8 @@ contains
 ! --- collect min/max rho across all partitions ---
 #ifdef _HAS_MPI_
         if (MPI_Process % doMPIAction) then
-            call MPI_Allreduce(MPI_IN_PLACE, rho_min_global, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD, ierr)
-            call MPI_Allreduce(MPI_IN_PLACE, rho_max_global, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(MPI_IN_PLACE, rho_min_global, 1, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(MPI_IN_PLACE, rho_max_global, 1, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, ierr)
         end if
 #endif
 

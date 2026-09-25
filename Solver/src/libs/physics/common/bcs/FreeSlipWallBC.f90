@@ -369,14 +369,7 @@ module FreeSlipWallBCClass
             do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
                Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
 
-               select case(grad_vars)
-               case(GRADVARS_ENTROPY)
-                  call NSGradientVariables_ENTROPY(NCONS, NGRAD, Q, u_int)
-               case(GRADVARS_ENERGY)
-                  call NSGradientVariables_ENERGY(NCONS, NGRAD, Q, u_int)
-               case default
-                  call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
-               end select
+               call GradientVariables_Selector(grad_vars, NCONS, NGRAD, Q, u_int, 0.0_RP, 0.0_RP)
 
                Q_aux(IRHO) = Q(IRHO)
                Q_aux(IRHOU:IRHOW) = Q(IRHOU:IRHOW)
@@ -384,14 +377,7 @@ module FreeSlipWallBCClass
 #if defined(SPALARTALMARAS)
                Q_aux(IRHOTHETA)= Q(IRHOTHETA)
 #endif
-               select case(grad_vars)
-               case(GRADVARS_ENTROPY)
-                  call NSGradientVariables_ENTROPY(NCONS, NGRAD, Q_aux, u_star)
-               case(GRADVARS_ENERGY)
-                  call NSGradientVariables_ENERGY(NCONS, NGRAD, Q_aux, u_star)
-               case default
-                  call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
-               end select
+               call GradientVariables_Selector(grad_vars, NCONS, NGRAD, Q_aux, u_star, 0.0_RP, 0.0_RP)
 
                mesh % faces(fID) % storage(1) % unStar(:,1,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(1,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
                mesh % faces(fID) % storage(1) % unStar(:,2,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(2,i,j) * mesh % faces(fID) % geom % jacobian(i,j)    
