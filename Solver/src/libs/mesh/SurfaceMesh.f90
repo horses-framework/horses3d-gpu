@@ -1289,7 +1289,7 @@ Module SurfaceMesh
 !
 !     Create file: it will be contained in ./MESH
 !     -------------------------------------------
-      meshName = "./MESH/" // trim(removePath(getFileName(fileName))) // ".surf.hmesh"
+      meshName = "./MESH/" // trim(removePath(fileName)) // ".surf.hmesh"
       call CreateNewSolutionFile(trim(meshName), ZONE_MESH_FILE, mesh % nodeType, &
                                     no_of_faces, 0, 0.0_RP, refs)
 !
