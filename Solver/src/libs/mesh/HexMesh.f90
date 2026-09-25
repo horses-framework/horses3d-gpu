@@ -3392,7 +3392,6 @@ slavecoord:             DO l = 1, 4
          refs(V_REF)     = refValues      % V
          refs(T_REF)     = refValues      % T
          refs(MACH_REF)  = dimensionless  % Mach
-         refs(RE_REF)    = dimensionless  % Re
 
 !
 !        Update the host data from the GPU
