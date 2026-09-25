@@ -251,6 +251,24 @@ By default, the statistic monitor will average following variables:
 \end{itemize}
 \end{multicols}
 
+The \texttt{averaging} keyword (optional) selects which second-order moments are accumulated:
+
+\begin{lstlisting}
+#define statistics
+   initial time      = 1.d0
+   dump interval     = 20
+   averaging         = Reynolds, Favre
+#end
+\end{lstlisting}
+
+\begin{itemize}
+\item \textbf{Reynolds} (default): uu, vv, ww, uv, uw, vw (Reynolds averages).
+\item \textbf{Favre}: $(\rho u)^2/\rho$, $(\rho v)^2/\rho$, $(\rho w)^2/\rho$, $(\rho u)(\rho v)/\rho$, $(\rho u)(\rho w)/\rho$, $(\rho v)(\rho w)/\rho$ (density-weighted).
+\item \textbf{Reynolds, Favre}: both sets.
+\end{itemize}
+
+The mean conservative variables are always stored. From the Favre moments, horses2plt computes the Favre stresses $\overline{\rho u_i'' u_j''} = \overline{(\rho u_i)(\rho u_j)/\rho} - \overline{\rho u_i}\,\overline{\rho u_j}/\overline{\rho}$, exported as \texttt{Fxx}, \texttt{Fyy}, \texttt{Fzz}, \texttt{Fxy}, \texttt{Fxz}, \texttt{Fyz}. The keyword is case-insensitive; an unrecognized value falls back to \texttt{Reynolds}.
+
 A keyword preceded by @ is used in real-time to signalize the solver what it must do with the statistics computation:
 
 \begin{multicols}{3}
