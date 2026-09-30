@@ -11,6 +11,7 @@ module Storage
    public NVARS, NGRADVARS, hasMPIranks, hasBoundaries, isOldStats
    public partitionFileName, boundaryFileName, flowEq
    public hasExtraGradients, hasMu_NS, hasUt_NS, hasWallY, NSTAT, hasMu_sgs
+   public NFAVRE_VARS, statsHasFavre
 
    integer                          :: NVARS, NGRADVARS
    logical                          :: hasMPIranks, hasBoundaries, isOldStats
@@ -20,7 +21,9 @@ module Storage
    logical                          :: hasWallY     = .false.
    logical                          :: hasMu_sgs = .false.
    character(len=LINE_LENGTH)       :: boundaryFileName, partitionFileName, flowEq
-   integer, parameter               :: NSTAT = 9
+   integer               :: NSTAT = 9
+   integer, parameter    :: NFAVRE_VARS = 6
+   logical               :: statsHasFavre = .false.
 
    type Element_t
 !                                /* Mesh quantities */
@@ -43,6 +46,7 @@ module Storage
       real(kind=RP), pointer     :: wallY(:,:,:,:)
       real(kind=RP), pointer     :: mu_sgs(:,:,:,:)
       real(kind=RP), pointer     :: stats(:,:,:,:)
+      real(kind=RP), pointer     :: favre(:,:,:,:)
       real(kind=RP)              :: sensor
 !                                /* Output quantities */
       integer                    :: Nout(NDIM)
@@ -57,6 +61,7 @@ module Storage
       real(kind=RP), pointer     :: wallYout(:,:,:,:)
       real(kind=RP), pointer     :: mu_sgsout(:,:,:,:)
       real(kind=RP), pointer     :: statsout(:,:,:,:)
+      real(kind=RP), pointer     :: favreout(:,:,:,:)
 
       real(kind=RP), allocatable :: outputVars(:,:,:,:)
    end type Element_t
@@ -220,7 +225,14 @@ module Storage
          integer                        :: iter
          real(kind=RP)                  :: time
          real(kind=RP), allocatable     :: Qdot(:,:,:,:)
+         real(kind=RP), allocatable     :: grads_tmp(:,:,:,:)
          character(len=1024)  :: msg
+         integer              :: ndim_peek
+         integer              :: pos_peek, stats_reset_pos
+         integer(kind=8)      :: pos_probe
+         logical              :: statsHasGrads
+         integer              :: Npts
+         integer(kind=8)      :: fsize, remaining
 
          self % solutionName = trim(solutionName)
 		 write(STD_OUT,'(10X,A,A)') "Loading Solution File:"
@@ -278,7 +290,10 @@ module Storage
 
          self % isSurface = (dimensionsSize .eq. 3)
 
-         self % hasGradients = self % hasGradients .or. hasExtraGradients
+         if ( self % isStatistics .and. hasExtraGradients ) then
+            write(STD_OUT,'(30X,A)') "-> WARNING: 'has gradients = .true.' ignored for statistics files (no gradients stored)."
+         end if
+         self % hasGradients = self % hasGradients .or. (hasExtraGradients .and. .not. self % isStatistics)
 !
 !        Get node type
 !        -------------
@@ -314,12 +329,25 @@ module Storage
          ! call set_getVelocityGradients(GRADVARS_STATE) ! FIXME: MIGHT BE NEEDED FOR HORSES2PLT
          ! write(STD_OUT,'(15X,A)') " WARNING horses2tecplot.90 :: Velocity Gradients set to default (GRADVARS_STATE)"
       
+         statsHasGrads    = .false.
+         statsHasFavre    = .false.
+         stats_reset_pos  = 0
+         if ( self % isStatistics ) NSTAT = 9
+
          if ( .not. isOldStats ) then
          ! if ( .not. self % isStatistics ) then
             do eID = 1, self % no_of_elements
                associate ( e => self % elements(eID) )
-               call getSolutionFileArrayDimensions(fid,arrayDimensions)
+               if ( stats_reset_pos .gt. 0 ) then
+                  call getSolutionFileArrayDimensions(fid,arrayDimensions,pos=stats_reset_pos)
+                  stats_reset_pos = 0
+               else
+                  call getSolutionFileArrayDimensions(fid,arrayDimensions)
+               end if
 
+               if ( self % isStatistics ) then
+                  NSTAT = merge(9, 0, arrayDimensions(1) .eq. 9)
+               end if
                call getNVARS(arrayDimensions(1), self % isStatistics)
 !   
                ! e % Nsol(1:3) = arrayDimensions(2:4) - 1
@@ -327,12 +355,11 @@ module Storage
                if (dimensionsSize .eq. 3) e % Nsol(3) = 0
 !   
 !
-!              Allocate memory for the statistics
-!              ----------------------------------
-               if (self % isStatistics) then
-                   allocate( e % stats(1:NSTAT,0:e % Nsol(1), 0:e % Nsol(2), 0:e % Nsol(3)) )
-                   read(fid) e % stats
-!
+!              Allocate memory for the statistics (Reynolds averages)
+!              -------------------------------------------------------
+               if (self % isStatistics .and. NSTAT .gt. 0) then
+                  allocate( e % stats(1:NSTAT,0:e % Nsol(1), 0:e % Nsol(2), 0:e % Nsol(3)) )
+                  read(fid) e % stats
                end if
 !
 !              Allocate memory for the coordinates
@@ -343,6 +370,86 @@ module Storage
 !              ---------
                read(fid) e % Q
 
+!              For stats files: detect Favre and gradient records after Q
+               if ( self % isStatistics ) then
+                  if ( eID .eq. 1 ) then
+                     Npts = (e%Nsol(1)+1) * (e%Nsol(2)+1) * (e%Nsol(3)+1)
+                     inquire(unit=fid, pos=pos_peek)
+                     if ( self % no_of_elements .gt. 1 ) then
+                        read(fid, pos=pos_peek) ndim_peek
+                        if ( ndim_peek .eq. 4 ) then
+                           statsHasFavre = .false.
+                           statsHasGrads = .false.
+                           stats_reset_pos = pos_peek
+                        else
+                           pos_probe = int(pos_peek, kind=8) + int(NFAVRE_VARS * Npts, kind=8) * int(SIZEOF_RP, kind=8)
+                           read(fid, pos=pos_probe) ndim_peek
+                           if ( ndim_peek .eq. 4 ) then
+                              statsHasFavre = .true.
+                              statsHasGrads = .false.
+                              stats_reset_pos = int(pos_probe, kind=4)
+                           else
+                              pos_probe = int(pos_peek, kind=8) + int((NFAVRE_VARS + 3*NVARS) * Npts, kind=8) * int(SIZEOF_RP, kind=8)
+                              read(fid, pos=pos_probe) ndim_peek
+                              if ( ndim_peek .eq. 4 ) then
+                                 statsHasFavre = .true.
+                                 statsHasGrads = .true.
+                                 stats_reset_pos = int(pos_probe, kind=4)
+                              else
+                                 pos_probe = int(pos_peek, kind=8) + int(3*NVARS * Npts, kind=8) * int(SIZEOF_RP, kind=8)
+                                 read(fid, pos=pos_probe) ndim_peek
+                                 if ( ndim_peek .eq. 4 ) then
+                                    statsHasFavre = .false.
+                                    statsHasGrads = .true.
+                                    stats_reset_pos = int(pos_probe, kind=4)
+                                 else
+                                    write(STD_OUT,'(A)') "WARNING: could not determine stats file layout."
+                                    statsHasFavre = .false.
+                                    statsHasGrads = .false.
+                                    stats_reset_pos = pos_peek
+                                 end if
+                              end if
+                           end if
+                        end if
+                     else
+                        inquire(unit=fid, size=fsize)
+                        remaining = fsize - int(pos_peek - 1, kind=8)
+                        if ( remaining .eq. int(NFAVRE_VARS * Npts, kind=8) * int(SIZEOF_RP, kind=8) ) then
+                           statsHasFavre = .true.
+                           statsHasGrads = .false.
+                        else if ( remaining .eq. int(3*NVARS * Npts, kind=8) * int(SIZEOF_RP, kind=8) ) then
+                           statsHasFavre = .false.
+                           statsHasGrads = .true.
+                        else if ( remaining .eq. int((NFAVRE_VARS + 3*NVARS) * Npts, kind=8) * int(SIZEOF_RP, kind=8) ) then
+                           statsHasFavre = .true.
+                           statsHasGrads = .true.
+                        else
+                           statsHasFavre = .false.
+                           statsHasGrads = .false.
+                        end if
+                     end if
+                  end if
+                  if ( statsHasFavre ) then
+                     allocate( e % favre(1:NFAVRE_VARS, 0:e%Nsol(1), 0:e%Nsol(2), 0:e%Nsol(3)) )
+                     if ( eID .eq. 1 ) then
+                        read(fid, pos=pos_peek) e % favre
+                     else
+                        read(fid) e % favre
+                     end if
+                  end if
+                  if ( statsHasGrads ) then
+                     allocate( grads_tmp(1:NVARS, 0:e%Nsol(1), 0:e%Nsol(2), 0:e%Nsol(3)) )
+                     if ( eID .eq. 1 .and. .not. statsHasFavre ) then
+                        read(fid, pos=pos_peek) grads_tmp
+                     else
+                        read(fid) grads_tmp  ! UX
+                     end if
+                     read(fid) grads_tmp  ! UY
+                     read(fid) grads_tmp  ! UZ
+                     deallocate( grads_tmp )
+                  end if
+               end if
+
               ! Qdot goes before gradients when present
               ! for now is not saved anywhere, just to be able to read gradients
                if (self % hasTimeDeriv) then
@@ -351,7 +458,7 @@ module Storage
                    deallocate(Qdot)
                end if
 
-               if ( self % hasGradients ) then
+               if ( self % hasGradients .and. .not. self % isStatistics ) then
 !
 !                 Allocate memory for the gradients
 !                 ---------------------------------

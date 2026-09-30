@@ -450,7 +450,39 @@ jobs:
         run: |
           # source /opt/intel/oneapi/setvars.sh || true
           mpiexec --oversubscribe -n 8 ./horses3d.ns Cylinder.control
-        if: '!cancelled()'  
+        if: '!cancelled()'
+
+#
+# 1b) FAVRE STATISTICS (statistics monitor: Reynolds and Favre averaging)
+# -----------------------------------------------------------------------
+
+      - name: Build NSFavreStatistics
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics/SETUP
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns FavreStatistics.control
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics (Favre only)
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns FavreStatistics_FavreOnly.control
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics (periodic signal)
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns FavreStatistics_Sine.control
+        if: '!cancelled()'
 
 #
 # 2) CYLINDER IP
