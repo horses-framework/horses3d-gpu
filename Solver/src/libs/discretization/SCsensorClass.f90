@@ -457,7 +457,6 @@ module SCsensorClass
 !     Local variables
 !     ---------------
 !
-      type(Element), pointer :: e
       integer                :: eID
       real(RP)               :: s
 
@@ -469,27 +468,26 @@ module SCsensorClass
 !     Add 'inertia' to the scaled value
 !     ---------------------------------
       if (sensor % min_steps > 1) then   ! Enter the loop only if necessary
-!$omp parallel do default(private) shared(sem)
+!$omp parallel do default(private) shared(sem, sensor)
          do eID = 1, sem % mesh % no_of_elements
-            e => sem % mesh % elements(eID)
-            s = e % storage % sensor
+            associate(st => sem % mesh % elements(eID) % storage)
+            s = st % sensor
             if (s > 0.0_RP) then
-               if (e % storage % prev_sensor <= 0.0_RP) then
-                  e % storage % first_sensed = 0
-                  e % storage % prev_sensor = s
+               if (st % prev_sensor <= 0.0_RP) then
+                  st % first_sensed = 0
+                  st % prev_sensor = s
                else
-                  e % storage % first_sensed = e % storage % first_sensed + 1
-                  e % storage % prev_sensor = s
+                  st % first_sensed = st % first_sensed + 1
+                  st % prev_sensor = s
                end if
-            elseif (e % storage % first_sensed < sensor % min_steps) then
-               e % storage % first_sensed = e % storage % first_sensed + 1
-               e % storage % sensor = e % storage % prev_sensor
+            elseif (st % first_sensed < sensor % min_steps) then
+               st % first_sensed = st % first_sensed + 1
+               st % sensor = st % prev_sensor
             end if
+            end associate
          end do
 !$omp end parallel do
       end if
-
-      nullify(e)
 
    end subroutine Compute_SCsensor
 !
@@ -821,8 +819,6 @@ module SCsensorClass
       real(RP)                             :: mTE
       procedure(UserDefinedSourceTermNS_f) :: UserDefinedSourceTermNS
 
-      type(Element), pointer :: e
-      type(Element), pointer :: ce
       type(DGSem),   pointer :: csem
 
 
@@ -832,13 +828,10 @@ module SCsensorClass
 !     ---------------
 !$omp parallel do default(private) shared(sem, csem)
       do eID = 1, sem % mesh % no_of_elements
-
-         e  => sem % mesh % elements(eID)
-         ce => csem % mesh % elements(eID)
-
+         associate(e => sem % mesh % elements(eID), ce => csem % mesh % elements(eID))
          call Interp3DArrays(NCONS, e % Nxyz, e % storage % Q, ce % Nxyz, ce % storage % Q)
          ce % storage % sensor = e % storage % sensor
-
+         end associate
       end do
 !$omp end parallel do
 
@@ -846,12 +839,9 @@ module SCsensorClass
 !
 !     Maximum TE computation
 !     ----------------------
-!$omp parallel do default(private) shared(sem, csem)
+!$omp parallel do default(private) shared(sem, csem, sensor)
       do eID = 1, sem % mesh % no_of_elements
-
-         e  => sem % mesh % elements(eID)
-         ce => csem % mesh % elements(eID)
-
+         associate(e => sem % mesh % elements(eID), ce => csem % mesh % elements(eID))
          ! Use G_NS as temporary storage for Qdot
          call Interp3DArrays(NCONS, e % Nxyz, e % storage % QDot, ce % Nxyz, ce % storage % G_NS)
 
@@ -875,12 +865,10 @@ module SCsensorClass
          else
             e % storage % sensor = SinRamp(sensor, log10(mTE))
          end if
-
+         end associate
       end do
 !$omp end parallel do
 
-      nullify(e)
-      nullify(ce)
       nullify(csem)
 
    end subroutine Sensor_truncation

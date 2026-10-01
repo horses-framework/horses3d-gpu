@@ -381,7 +381,7 @@ module NoSlipWallBCClass
                
                Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
 
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
+               call NSGradientVariables_SELECTED(NCONS, NGRAD, Q, u_int)
 
                invRho = 1.0_RP / Q(IRHO)
                e_int = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
@@ -393,7 +393,7 @@ module NoSlipWallBCClass
                Q_aux(IRHOTHETA) = 0.0_RP
 #endif
 
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
+               call NSGradientVariables_SELECTED(NCONS, NGRAD, Q_aux, u_star)
 
                u_star(IRHO) = u_int(IRHO)
                

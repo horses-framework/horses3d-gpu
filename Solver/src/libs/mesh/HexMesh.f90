@@ -982,25 +982,37 @@ slavecoord:             DO l = 1, 4
          select case ( self %nodeType )
          case(1) !Gauss
 
-!$omp do schedule(runtime)
+#ifdef _OPENACC
 !$acc parallel loop gang collapse(2) present(self) num_gangs(size(self % elements)) vector_length(32) async(1)
+#else
+!$omp do schedule(runtime)
+#endif
          do eID = 1, size(self % elements)
             do fID = 1, 6
-            call HexElement_ProlongSolToFaces(self % elements(eID), nEqn, self % faces(self % elements(eID) % faceIDs(fID)), fID)                        
+            call HexElement_ProlongSolToFaces(self % elements(eID), nEqn, self % faces(self % elements(eID) % faceIDs(fID)), fID)
          end do ; end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 
          case(2) !Gauss-Lobatto
 
+#ifdef _OPENACC
+!$acc parallel loop gang collapse(2) present(self) num_gangs(size(self % elements)) vector_length(32) async(1)
+#else
 !$omp do schedule(runtime)
-!$acc parallel loop gang collapse(2) present(self) num_gangs(size(self % elements)) vector_length(32) async(1)  
+#endif
          do eID = 1, size(self % elements)
             do fID = 1, 6
-            call HexElement_ProlongSolToFaces_GL(self % elements(eID), nEqn, self % faces(self % elements(eID) % faceIDs(fID)), fID)                        
+            call HexElement_ProlongSolToFaces_GL(self % elements(eID), nEqn, self % faces(self % elements(eID) % faceIDs(fID)), fID)
          end do ; end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 
          end select
 
@@ -1024,8 +1036,11 @@ slavecoord:             DO l = 1, 4
          select case ( self %nodeType )
          case(1) !Gauss
 
+#ifdef _OPENACC
 !$acc parallel loop gang num_gangs(size_element_list) collapse(2) present(self, element_list) private(fIDs) async(1)
+#else
 !$omp do schedule(runtime) private(eID)
+#endif
          do iEl = 1, size_element_list
             do fid = 1,6
                eID = element_list(iEl)
@@ -1041,47 +1056,68 @@ slavecoord:             DO l = 1, 4
                call HexElement_ProlongGradientsToFaces(self % elements(eID), nGradEqn, &
                                                        self % faces(fIDs(fid)), &
                                                        self % elements(eID) % storage % U_z,fid, 3)
-         end do ; enddo 
+         end do ; enddo
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 
          case(2) !Gauss-Lobatto
 
-!$omp do schedule(runtime)
+#ifdef _OPENACC
 !$acc parallel loop gang collapse(2) num_gangs(size(self % elements)) vector_length(32) present(self,element_list) async(1)
+#else
+!$omp do schedule(runtime)
+#endif
          do iEl = 1, size_element_list
             do fID = 1, 6
                eID = element_list(iEl)
                call HexElement_ProlongGradientsToFaces_GL(self % elements(eID), nGradEqn, &
                                                           self % faces(self % elements(eID) % faceIDs(fID)), &
-                                                          self % elements(eID) % storage % U_x, fID,1)                        
+                                                          self % elements(eID) % storage % U_x, fID,1)
          end do ; end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 
+#ifdef _OPENACC
+!$acc parallel loop gang collapse(2) num_gangs(size(self % elements)) vector_length(32) present(self,element_list) async(1)
+#else
 !$omp do schedule(runtime)
-!$acc parallel loop gang collapse(2) num_gangs(size(self % elements)) vector_length(32) present(self,element_list) async(1) 
+#endif
          do iEl = 1, size_element_list
             do fID = 1, 6
                eID = element_list(iEl)
                call HexElement_ProlongGradientsToFaces_GL(self % elements(eID), nGradEqn, &
                                                           self % faces(self % elements(eID) % faceIDs(fID)), &
-                                                          self % elements(eID) % storage % U_y, fID,2)                        
+                                                          self % elements(eID) % storage % U_y, fID,2)
          end do ; end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
-         
+#endif
+
+#ifdef _OPENACC
+!$acc parallel loop gang collapse(2) num_gangs(size(self % elements)) vector_length(32) present(self,element_list) async(1)
+#else
 !$omp do schedule(runtime)
-!$acc parallel loop gang collapse(2) num_gangs(size(self % elements)) vector_length(32) present(self,element_list) async(1) 
+#endif
          do iEl = 1, size_element_list
             do fID = 1, 6
                eID = element_list(iEl)
                call HexElement_ProlongGradientsToFaces_GL(self % elements(eID), nGradEqn, &
                                                           self % faces(self % elements(eID) % faceIDs(fID)), &
-                                                          self % elements(eID) % storage % U_z, fID,3)                        
+                                                          self % elements(eID) % storage % U_z, fID,3)
          end do ; end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
          end select
 
       end subroutine HexMesh_ProlongGradientsToFaces
@@ -4593,10 +4629,14 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % zones(zoneID) % toBeDeleted)     
       enddo
 
-      DO i = 0, self % Nx(1) !it should be the maximum nX
-         !$acc enter data copyin(NodalStorage(i))
+      !$acc enter data copyin(NodalStorage(0:ubound(NodalStorage,1)))
+      DO i = 0, ubound(NodalStorage,1)
+         if (.not. NodalStorage(i) % Constructed) cycle
+         !!$acc enter data copyin(NodalStorage(i))
          !$acc enter data copyin(NodalStorage(i) % hatD)
-         !$acc enter data copyin(NodalStorage(i) % sharpD)
+         if (allocated(NodalStorage(i) % sharpD)) then
+            !$acc enter data copyin(NodalStorage(i) % sharpD)
+         end if
          !$acc enter data copyin(NodalStorage(i) % D)
          !$acc enter data copyin(NodalStorage(i) % b)
          !$acc enter data copyin(NodalStorage(i) % v)
@@ -4747,14 +4787,19 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete (self % zones(zoneID) % toBeDeleted)     
       enddo
 
-      DO i = 0, self % Nx(1) !it should be the maximum nX
+      DO i = 0, ubound(NodalStorage,1)
+         if (.not. NodalStorage(i) % Constructed) cycle
          !$acc exit data delete (NodalStorage(i) % hatD)
-         !$acc exit data delete (NodalStorage(i) % sharpD)
+         if (allocated(NodalStorage(i) % sharpD)) then
+            !$acc exit data delete (NodalStorage(i) % sharpD)
+         end if
          !$acc exit data delete (NodalStorage(i) % D)
          !$acc exit data delete (NodalStorage(i) % b)
          !$acc exit data delete (NodalStorage(i) % v)
-         !$acc exit data delete (NodalStorage(i))
+         !$acc exit data delete (NodalStorage(i) % w)
+         !$acc exit data delete (NodalStorage(i) % x)
       END DO
+      !$acc exit data delete(NodalStorage(0:ubound(NodalStorage,1)))
 
 #ifdef _HAS_MPI_
       !$acc exit data delete (self % faces_mpi)
@@ -5663,16 +5708,37 @@ call elementMPIList % destruct
       type(HexMesh), intent(inout)    :: self
       logical, intent(in)             :: set_mu
       !-local-variables-----------------------------------
-      integer :: eID
+      integer :: eID, i, j, k
 
       !--------------------------------------------------
-!$omp do schedule(runtime)
+#ifdef _OPENACC
       !$acc parallel loop gang vector_length(128) present(self) async(1)
+#else
+!$omp do schedule(runtime)
+#endif
          do eID = 1 , size(self % elements)
+#if defined(NAVIERSTOKES) && (!(SPALARTALMARAS))
+            if (grad_vars /= GRADVARS_STATE) then
+               ! Volume fluxes are computed after gradients; reuse their scratch storage.
+               !$acc loop vector collapse(3)
+               do k = 0, self % elements(eID) % Nxyz(3); do j = 0, self % elements(eID) % Nxyz(2); do i = 0, self % elements(eID) % Nxyz(1)
+                  call NSGradientVariables_SELECTED(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), &
+                                                     self % elements(eID) % storage % contravariantFlux(:,i,j,k,IX))
+               end do; end do; end do
+               call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, &
+                                                     self % elements(eID) % storage % contravariantFlux(:,:,:,:,IX))
+            else
+#endif
             call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q)
+#if defined(NAVIERSTOKES) && (!(SPALARTALMARAS))
+            end if
+#endif
          end do
+#ifdef _OPENACC
       !$acc end parallel loop
+#else
 !$omp end do nowait
+#endif
 
    end subroutine HexMesh_ComputeLocalGradientNS
 
@@ -5686,19 +5752,25 @@ call elementMPIList % destruct
       integer :: eID, i, j, k
 
       !--------------------------------------------------
-!$omp do schedule(runtime)
+#ifdef _OPENACC
       !$acc parallel loop gang vector_length(128) present(self) async(1)
+#else
+!$omp do schedule(runtime)
+#endif
       do eID = 1 , size(self % elements)
 
-         !$acc loop vector collapse(3) 
+         !$acc loop vector collapse(3)
          do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
             call iNSGradientVariables(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_iNS(:,i,j,k))
          end do         ; end do         ; end do
 
          call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_iNS)
       end do
+#ifdef _OPENACC
    !$acc end parallel loop
+#else
 !$omp end do nowait
+#endif
 
    end subroutine HexMesh_ComputeLocalGradientiNS
 #endif 
@@ -5713,20 +5785,25 @@ call elementMPIList % destruct
       integer :: eID, i, j, k
 
       !--------------------------------------------------
-!$omp do schedule(runtime)
+#ifdef _OPENACC
       !$acc parallel loop gang vector_length(128) present(self) copyin(set_mu) async(1)
+#else
+!$omp do schedule(runtime)
+#endif
       do eID = 1 , size(self % elements)
 
-         !$acc loop vector collapse(3) 
+         !$acc loop vector collapse(3)
          do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
             call chGradientVariables(NCOMP, NCOMP, self % elements(eID) % storage % Q(1:IMC,i,j,k), self % elements(eID) % storage % Q_grad_CH(1:IMC,i,j,k))
-            !if ( set_mu ) self % elements(eID) % storage % Q_grad_CH(IGMU,i,j,k) = self % elements(eID) % storage % mu(1,i,j,k)
          end do         ; end do         ; end do
 
          call HexElement_ComputeLocalGradient(self % elements(eID), NCOMP, NCOMP, self % elements(eID) % storage % Q_grad_CH)
       end do
+#ifdef _OPENACC
    !$acc end parallel loop
+#else
 !$omp end do nowait
+#endif
 
    end subroutine HexMesh_ComputeLocalGradientCH
 
@@ -5740,22 +5817,26 @@ call elementMPIList % destruct
       integer :: eID, i, j, k
 
       !--------------------------------------------------
-!$omp do schedule(runtime)
+#ifdef _OPENACC
       !$acc parallel loop gang vector_length(128) present(self) copyin(set_mu) async(1)
+#else
+!$omp do schedule(runtime)
+#endif
       do eID = 1 , size(self % elements)
 
-         !$acc loop vector collapse(3) 
+         !$acc loop vector collapse(3)
          do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
             call mGradientVariables(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_mu(:,i,j,k), self % elements(eID) % storage % rho(i,j,k))
-            !if ( set_mu == .true.) then ! This is not working - weird - above it works
                   self % elements(eID) % storage % Q_grad_mu(IGMU,i,j,k) = self % elements(eID) % storage % mu(1,i,j,k)
-            !end if
          end do         ; end do         ; end do
 
          call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_mu)
       end do
+#ifdef _OPENACC
    !$acc end parallel loop
+#else
 !$omp end do nowait
+#endif
    end subroutine HexMesh_ComputeLocalGradientMU
 #endif
 

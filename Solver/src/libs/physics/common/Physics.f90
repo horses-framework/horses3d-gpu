@@ -3,6 +3,7 @@ module Physics
    use Physics_NS
 #elif defined(NAVIERSTOKES) && (SPALARTALMARAS)
    use Physics_NSSA
+   use Physics_NSSA, only: ViscousFlux_SELECTED => ViscousFlux_STATE
 #elif defined(INCNS)
    use Physics_iNS
 #elif defined(MULTIPHASE)

@@ -230,6 +230,7 @@ contains
 !     ************************************************************************
 !
       call ComputeNumericalFluxJacobian(sem % mesh,nEqn,time)
+!$omp end parallel
 !
 !     ***************
 !     Diagonal blocks
@@ -242,7 +243,6 @@ contains
 !     *******************
 !
       if (.not. BlockDiagonal) call AnalyticalJacobian_OffDiagonalBlocks(sem % mesh,Matrix)
-!$omp end parallel
 !
 !     ************************
 !     Finish assembling matrix
@@ -288,34 +288,33 @@ contains
       class(Matrix_t)          , intent(inout) :: Matrix
       !--------------------------------------------
       integer :: eID, fID
-      type(Element), pointer :: e   
       !--------------------------------------------
 !
 !     Project flux Jacobian to corresponding element
 !     ----------------------------------------------
-!$omp do schedule(runtime)
+!$omp parallel do schedule(runtime)
       do fID = 1, size(mesh % faces)
-         call mesh % faces(fID) % ProjectFluxJacobianToElements(nEqn,LEFT ,LEFT )   ! dF/dQL to the left element 
+         call mesh % faces(fID) % ProjectFluxJacobianToElements(nEqn,LEFT ,LEFT )   ! dF/dQL to the left element
          if (.not. (mesh % faces(fID) % faceType == HMESH_BOUNDARY)) call mesh % faces(fID) % ProjectFluxJacobianToElements(nEqn,RIGHT,RIGHT)   ! dF/dQR to the right element
       end do
-!$omp end do
+!$omp end parallel do
 !
 !     Project flux Jacobian with respect to gradients to corresponding elements
 !     -------------------------------------------------------------------------
       if (flowIsNavierStokes) then
-!$omp do schedule(runtime)
+!$omp parallel do schedule(runtime)
          do fID = 1, size(mesh % faces)
-            call mesh % faces(fID) % ProjectGradJacobianToElements(LEFT, LEFT)   ! dF/dQL to the left element 
+            call mesh % faces(fID) % ProjectGradJacobianToElements(LEFT, LEFT)   ! dF/dQL to the left element
             if (.not. (mesh % faces(fID) % faceType == HMESH_BOUNDARY)) call mesh % faces(fID) % ProjectGradJacobianToElements(RIGHT,RIGHT)   ! dF/dQR to the right element
          end do
-!$omp end do
+!$omp end parallel do
       end if
 !
 !     Compute each element's diagonal block
 !     -------------------------------------
-!$omp do schedule(runtime) private(e)
+!$omp parallel do schedule(runtime)
       do eID = 1, size(mesh % elements)
-         e => mesh % elements(eID)
+         associate(e => mesh % elements(eID))
          call Local_SetDiagonalBlock( e, &
                                       mesh % faces( e % faceIDs(EFRONT ) ), &
                                       mesh % faces( e % faceIDs(EBACK  ) ), &
@@ -325,9 +324,9 @@ contains
                                       mesh % faces( e % faceIDs(ELEFT  ) ), &
                                       Matrix,                               &
                                       mesh% IBM                             )
+         end associate
       end do
-!$omp end do
-      nullify (e)
+!$omp end parallel do
    end subroutine AnalyticalJacobian_DiagonalBlocks   
 !
 !///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -344,42 +343,40 @@ contains
       class(Matrix_t)          , intent(inout) :: Matrix
       !--------------------------------------------
       integer :: eID, fID, elSide, side
-      type(Element), pointer :: e_plus
-      type(Face)   , pointer :: f
       !--------------------------------------------
-      
+
 !
 !     Project flux Jacobian to opposed elements (RIGHT to LEFT and LEFT to RIGHT)
 !     ---------------------------------------------------------------------------
-!$omp do schedule(runtime)
+!$omp parallel do schedule(runtime)
       do fID = 1, size(mesh % faces)
          if (mesh % faces(fID) % faceType /= HMESH_BOUNDARY) then
             call mesh % faces(fID) % ProjectFluxJacobianToElements(NCONS, LEFT ,RIGHT)   ! dF/dQR to the left element
-            call mesh % faces(fID) % ProjectFluxJacobianToElements(NCONS, RIGHT,LEFT )   ! dF/dQL to the right element 
+            call mesh % faces(fID) % ProjectFluxJacobianToElements(NCONS, RIGHT,LEFT )   ! dF/dQL to the right element
          end if
       end do
-!$omp end do
+!$omp end parallel do
 
 !
 !     Project flux Jacobian with respect to gradients to opposed elements (RIGHT to LEFT and LEFT to RIGHT)
 !     -----------------------------------------------------------------------------------------------------
       if (flowIsNavierStokes) then
-!$omp do schedule(runtime)
+!$omp parallel do schedule(runtime)
          do fID = 1, size(mesh % faces)
             if (mesh % faces(fID) % faceType /= HMESH_BOUNDARY) then
                call mesh % faces(fID) % ProjectGradJacobianToElements(LEFT ,RIGHT)   ! dF/dGradQR to the left element
-               call mesh % faces(fID) % ProjectGradJacobianToElements(RIGHT,LEFT )   ! dF/dGradQL to the right element 
+               call mesh % faces(fID) % ProjectGradJacobianToElements(RIGHT,LEFT )   ! dF/dGradQL to the right element
             end if
          end do
-!$omp end do
+!$omp end parallel do
       end if
-      
+
 !
 !     Compute the off-diagonal blocks for each element's equations
 !     ------------------------------------------------------------
-!$omp do schedule(runtime) private(e_plus,elSide,fID,side,f)
+!$omp parallel do schedule(runtime) private(elSide,fID,side)
       do eID = 1, mesh % no_of_elements
-         e_plus => mesh % elements(eID)
+         associate(e_plus => mesh % elements(eID))
 !
 !        One block for every neighbor element
 !        ------------------------------------
@@ -388,14 +385,14 @@ contains
             
             fID  = e_plus % faceIDs(elSide)
             side = e_plus % faceSide(elSide)
-            
-            f => mesh % faces(fID)
-            
+
+            associate(f => mesh % faces(fID))
             call Local_GetOffDiagonalBlock(f,e_plus,e_plus % Connection(elSide),side,Matrix)
+            end associate
          end do
+         end associate
       end do
-!$omp end do
-      nullify (f, e_plus)
+!$omp end parallel do
    end subroutine AnalyticalJacobian_OffDiagonalBlocks
 !
 !///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
