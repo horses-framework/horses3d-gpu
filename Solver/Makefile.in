@@ -264,7 +264,7 @@ HORSES_LIBS_NSSA=-L$(HOME_DIR)/lib -ltimeintegrator_nssa -ljacobian_nssa -ldiscr
 HORSES_LIBS_CH=-L$(HOME_DIR)/lib -ltimeintegrator_ch -ljacobian_ch -ldiscretization_ch -lmonitors_ch -lparticles_ch -lmesh_ch -lphysics_ch -lphysicsch -lio -lspectral -lmpiutils -lfoundation -lftobject -lsources_ch -lml
 HORSES_LIBS_MU=-L$(HOME_DIR)/lib -ltimeintegrator_mu -ljacobian_mu -ldiscretization_mu -lmonitors_mu -lparticles_mu -lphysics_bcs_mu -lmesh_mu -lphysics_mu -lphysicsch -lphysicsmu -lio -lspectral -lmpiutils -lfoundation -lftobject -lsources_mu -lml
 HORSES_LIBS_CAA=-L$(HOME_DIR)/lib -ltimeintegrator_caa -ljacobian_caa -ldiscretization_caa -lmonitors_caa -lparticles_caa -lmesh_caa -lphysics_caa -lphysicscaa -lio -lspectral -lmpiutils -lfoundation -lftobject -lsources_caa -lml
-ADDONS=horses2tecplot extractgeometry mergeStatistics tools horsesConverter
+ADDONS=horses2tecplot extractgeometry mergeStatistics tools horsesConverter horses2probes
 HORSESFLAGS += $(MACROS)
 ADDONSFLAGS += $(MACROS)
 

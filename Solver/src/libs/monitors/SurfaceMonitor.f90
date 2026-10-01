@@ -314,6 +314,7 @@ module SurfaceMonitorClass
 
             close ( fID )
          end if
+
       end subroutine SurfaceMonitor_Initialization
 
       subroutine SurfaceMonitor_Update ( self, mesh, bufferPosition, iter, autosave, dt )
