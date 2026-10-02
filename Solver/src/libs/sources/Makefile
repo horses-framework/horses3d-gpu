@@ -9,27 +9,33 @@ RANLIB?=ranlib
 MOD_FLAG?=-J
 
 LIBOBJS_NS = ./build_ns/ActuatorLine.o \
+			 ./build_ns/ActuatorDisk.o \
 			 ./build_ns/mkl_dfti.o \
 			 ./build_ns/TripForceClass.o \
 			 ./build_ns/SpongeClass.o \
 			 ./build_ns/ChannelForcing.o \
 			 ./build_ns/RandomNumberGenerator.o
-		
+
 LIBOBJS_NSSA =  ./build_nssa/ActuatorLine.o \
+				./build_nssa/ActuatorDisk.o \
 				./build_nssa/mkl_dfti.o \
 				./build_nssa/TripForceClass.o \
-				./build_nssa/SpongeClass.o 
-		
+				./build_nssa/SpongeClass.o
+
 LIBOBJS_iNS = ./build_ins/ActuatorLine.o \
-			  ./build_ins/SpongeClass.o 
-		
-LIBOBJS_CH = ./build_ch/ActuatorLine.o 
+			  ./build_ins/ActuatorDisk.o \
+			  ./build_ins/SpongeClass.o
+
+LIBOBJS_CH = ./build_ch/ActuatorLine.o \
+			 ./build_ch/ActuatorDisk.o
 
 LIBOBJS_MU = ./build_mu/ActuatorLine.o \
-			 ./build_mu/SpongeClass.o 
+			 ./build_mu/ActuatorDisk.o \
+			 ./build_mu/SpongeClass.o
 
 LIBOBJS_CAA = ./build_caa/ActuatorLine.o \
-			 ./build_caa/SpongeClass.o 
+			 ./build_caa/ActuatorDisk.o \
+			 ./build_caa/SpongeClass.o
 
 LIB = sources
 
