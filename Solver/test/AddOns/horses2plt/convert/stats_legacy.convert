@@ -1,0 +1,7 @@
+!
+!  horses2plt CI: legacy statistics file (Stats2Plt), Gauss points
+!     RESULTS/Legacy.stats.hsol is built from RESULTS/Cylinder.stats.hsol with make_legacy_stats.py
+!
+hmesh file   = MESH/Cylinder_0000000000.hmesh
+hsol file    = RESULTS/Legacy.stats.hsol
+legacy stats = .true.
