@@ -27,7 +27,8 @@ module ConstructMeshAndSpectralBasis_MOD
          type(FTValueDictionary)                      :: controlVariables
          integer                                      :: no_of_elements
          integer                                      :: nodeType, fileType, fid
-         integer                                      :: dims(4), pos
+         integer                                      :: dims(4)
+         integer(kind=AddrInt)                        :: pos
          integer                                      :: eID, iter, padding
          integer, allocatable                         :: Nx(:), Ny(:), Nz(:)
          logical                                      :: success
@@ -71,8 +72,8 @@ module ConstructMeshAndSpectralBasis_MOD
 !
 !           Skip to the next element data
 !           -----------------------------
-            pos = pos + 5*SIZEOF_INT + &
-                        padding*(Nx(eID)+1)*(Ny(eID)+1)*(Nz(eID)+1)*SIZEOF_RP 
+            pos = pos + 5_AddrInt*SIZEOF_INT + &
+                        1_AddrInt*padding*(Nx(eID)+1)*(Ny(eID)+1)*(Nz(eID)+1)*SIZEOF_RP 
 
             NDOF = NDOF + (Nx(eID)+1)*(Ny(eID)+1)*(Nz(eID)+1)
          end do

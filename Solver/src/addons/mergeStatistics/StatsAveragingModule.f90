@@ -1,7 +1,7 @@
 module StatsAveragingModule
    use SMConstants
    use SolutionFile
-   use StatisticsMonitor, only: NO_OF_VARIABLES_Sij
+   use StatisticsMonitor, only: NO_OF_VARIABLES_Sij, NO_OF_FAVRE_VARS
    use PhysicsStorage_NS, only: NCONS, NGRAD
    implicit none
    
@@ -12,6 +12,7 @@ module StatsAveragingModule
 !                                /* Solution quantities */
       integer                    :: Nsol(NDIM)
       real(kind=RP), pointer     :: stats(:,:,:,:)
+      real(kind=RP), pointer     :: favre(:,:,:,:)
       real(kind=RP), pointer     :: Q(:,:,:,:)
       real(kind=RP), pointer     :: Q_x(:,:,:,:)
       real(kind=RP), pointer     :: Q_y(:,:,:,:)
@@ -40,6 +41,9 @@ module StatsAveragingModule
    type(Mesh_t)   :: AveragedSol, CurrentSol
 
    logical        :: hasGradients
+!  Blocks stored in the statistics files (all files must share the layout): [Reynolds] Q [Favre] [gradients]
+   logical        :: hasReynolds = .true., hasFavre = .false.
+   integer        :: nStatRows = NO_OF_VARIABLES_Sij, nFavreRows = 0
    
 !  ========
    contains
@@ -61,6 +65,7 @@ module StatsAveragingModule
          character(len=LINE_LENGTH) :: solutionName
          real(kind=RP), allocatable :: tempStats(:,:,:,:)
          real(kind=RP), allocatable :: tempQStats(:,:,:,:)
+         logical                    :: layoutHasGradients
          !------------------------------------------------------------
          
 !        Get information from last file 
@@ -70,15 +75,30 @@ module StatsAveragingModule
          num_of_elements = getSolutionFileNoOfElements( solutionName )
          
          allocate ( Nsol(3,num_of_elements) )
-         
-         
+!
+!        Get the file layout (the gradients flag is taken from the file)
+!        ---------------------------------------------------------------
+         call getStatsFileLayout(solutionName, NO_OF_VARIABLES_Sij, NCONS, NO_OF_FAVRE_VARS, NCONS, &
+                                 hasReynolds, hasFavre, layoutHasGradients)
+         if ( layoutHasGradients .neqv. hasGradients ) then
+            write(STD_OUT,'(A,L1,A)') "WARNING: gradients flag ignored, the statistics files have gradients = ", layoutHasGradients, "."
+         end if
+         hasGradients = layoutHasGradients
+         nStatRows  = merge(NO_OF_VARIABLES_Sij, 0, hasReynolds)
+         nFavreRows = merge(NO_OF_FAVRE_VARS,    0, hasFavre)
+         write(STD_OUT,'(A,L1,A,L1,A,L1)') "Statistics layout -> Reynolds: ", hasReynolds, ", Favre: ", hasFavre, &
+                                          ", gradients: ", hasGradients
+
          fid = putSolutionFileInReadDataMode(solutionName)
          do eID = 1, num_of_elements
             call getSolutionFileArrayDimensions(fid,arrayDimensions)
             Nsol(1:3,eID) = arrayDimensions(2:4) - 1
-            allocate (tempStats (1:NO_OF_VARIABLES_Sij,0:Nsol(1,eID),0:Nsol(2,eID),0:Nsol(3,eID)), tempQStats (1:NCONS,0:Nsol(1,eID),0:Nsol(2,eID),0:Nsol(3,eID)) )
+            allocate (tempStats (1:nStatRows,0:Nsol(1,eID),0:Nsol(2,eID),0:Nsol(3,eID)), tempQStats (1:NCONS,0:Nsol(1,eID),0:Nsol(2,eID),0:Nsol(3,eID)) )
             read(fid) tempStats
             read(fid) tempQStats
+            deallocate (tempStats)
+            allocate (tempStats (1:nFavreRows,0:Nsol(1,eID),0:Nsol(2,eID),0:Nsol(3,eID)))
+            read(fid) tempStats
             if (hasGradients) then
                 read(fid) tempQStats
                 read(fid) tempQStats
@@ -165,8 +185,10 @@ module StatsAveragingModule
          
          do eID = 1, this % num_of_elements
             associate (e => this % elements(eID) )
-            allocate( e % Q(1:NCONS,0:Nsol(1,eID), 0:Nsol(2,eID), 0:Nsol(3,eID)) , e % stats(1:NO_OF_VARIABLES_Sij,0:Nsol(1,eID), 0:Nsol(2,eID), 0:Nsol(3,eID)) )
+            allocate( e % Q(1:NCONS,0:Nsol(1,eID), 0:Nsol(2,eID), 0:Nsol(3,eID)) , e % stats(1:nStatRows,0:Nsol(1,eID), 0:Nsol(2,eID), 0:Nsol(3,eID)) )
+            allocate( e % favre(1:nFavreRows,0:Nsol(1,eID), 0:Nsol(2,eID), 0:Nsol(3,eID)) )
             e % stats = 0._RP
+            e % favre = 0._RP
             e % Q = 0._RP
             if (hasGradients) then
                 allocate( e % Q_x(1:NCONS,0:Nsol(1,eID), 0:Nsol(2,eID), 0:Nsol(3,eID)), &
@@ -209,6 +231,7 @@ module StatsAveragingModule
          do eID = 1, this % num_of_elements
             this % elements(eID) % stats = this % elements(eID) % stats + weight * contribution % elements(eID) % stats            
             this % elements(eID) % Q = this % elements(eID) % Q + weight * contribution % elements(eID) % Q            
+            this % elements(eID) % favre = this % elements(eID) % favre + weight * contribution % elements(eID) % favre
             if (hasGradients) then
                 this % elements(eID) % Q_x = this % elements(eID) % Q_x + weight * contribution % elements(eID) % Q_x            
                 this % elements(eID) % Q_y = this % elements(eID) % Q_y + weight * contribution % elements(eID) % Q_y            
@@ -229,9 +252,18 @@ module StatsAveragingModule
          !-local-variables---------------------------------------------
          integer       :: arrayDimensions(4)
          integer       :: fid, eID         
+         logical       :: fileHasReynolds, fileHasFavre, fileHasGradients
          !-------------------------------------------------------------
          
 !~         self % solutionName = trim(solutionName)
+         call getStatsFileLayout(solutionName, NO_OF_VARIABLES_Sij, NCONS, NO_OF_FAVRE_VARS, NCONS, &
+                                 fileHasReynolds, fileHasFavre, fileHasGradients)
+         if ( (fileHasReynolds .neqv. hasReynolds) .or. (fileHasFavre .neqv. hasFavre) .or. &
+              (fileHasGradients .neqv. hasGradients) ) then
+            write(STD_OUT,'(A,A,A)') 'The statistics file "', trim(solutionName), '" stores different variables than the other files.'
+            write(STD_OUT,'(A)') "ERROR: statistics files with different layouts cannot be merged."
+            error stop
+         end if
 !
 !        Read coordinates
 !        ----------------
@@ -242,6 +274,7 @@ module StatsAveragingModule
             call getSolutionFileArrayDimensions(fid,arrayDimensions) ! needed to get to the position of stats
             read(fid) e % stats
             read(fid) e % Q
+            read(fid) e % favre
             if (hasGradients) then
                 read(fid) e % Q_x
                 read(fid) e % Q_y
@@ -270,9 +303,9 @@ module StatsAveragingModule
          !-------------------------------------------------------------
 
          if (hasGradients) then
-             no_of_stats_variables = NO_OF_VARIABLES_Sij + NCONS + NGRAD*NDIM
+             no_of_stats_variables = nStatRows + NCONS + nFavreRows + NGRAD*NDIM
          else
-             no_of_stats_variables = NO_OF_VARIABLES_Sij + NCONS
+             no_of_stats_variables = nStatRows + NCONS + nFavreRows
          end if
 !
 !        Create new file
@@ -285,8 +318,13 @@ module StatsAveragingModule
          do eID = 1, self % num_of_elements
             associate( e => self % elements(eID) )
                 pos = POS_INIT_DATA + (eID-1)*5_AddrInt*SIZEOF_INT + no_of_stats_variables*e % offsetIO*SIZEOF_RP
-                call writeArray(fid, e % stats, position=pos)
-                write(fid) e % Q
+                if (hasReynolds) then
+                    call writeArray(fid, e % stats, position=pos)
+                    write(fid) e % Q
+                else
+                    call writeArray(fid, e % Q, position=pos)
+                end if
+                if (hasFavre) write(fid) e % favre
                 if (hasGradients) then
                     write(fid) e % Q_x
                     write(fid) e % Q_y

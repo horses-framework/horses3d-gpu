@@ -5,7 +5,6 @@ module Stats2PltModule
    use Headers
    use InterpolationMatrices
    use FileReadingUtilities      , only: getFileName
-   use Solution2PltModule        , only: WriteBoundaryToTecplot
    implicit none
 
    private
@@ -169,7 +168,7 @@ module Stats2PltModule
                end do
             else
                do bID=1, size (mesh % boundaries)
-                  call WriteBoundaryToTecplot(fid, mesh % boundaries(bID), mesh % elements)
+                  call WriteBoundaryToTecplotStats(fid, mesh % boundaries(bID), mesh % elements)
                end do
             end if
          end if
@@ -321,7 +320,7 @@ module Stats2PltModule
                end do
             else
                do bID=1, size (mesh % boundaries)
-                  call WriteBoundaryToTecplot(fid, mesh % boundaries(bID), mesh % elements)
+                  call WriteBoundaryToTecplotStats(fid, mesh % boundaries(bID), mesh % elements)
                end do
             end if
          end if
@@ -504,7 +503,7 @@ module Stats2PltModule
                end do
             else
                do bID=1, size (mesh % boundaries)
-                  call WriteBoundaryToTecplot(fid, mesh % boundaries(bID), mesh % elements)
+                  call WriteBoundaryToTecplotStats(fid, mesh % boundaries(bID), mesh % elements)
                end do
             end if
          end if
@@ -938,6 +937,95 @@ module Stats2PltModule
          end do
 
       end subroutine WriteSingleBoundaryZoneToTecplotStats
+!
+!/////////////////////////////////////////////////////////////////////////////
+!
+!     Writes the boundary faces as one ordered (multizone) zone per face, with
+!     the statistics output variables (same columns as WriteElementToTecplot)
+!
+!/////////////////////////////////////////////////////////////////////////////
+      subroutine WriteBoundaryToTecplotStats(fd,boundary, elements)
+         use Storage
+         implicit none
+         !-arguments-------------------------------------------
+         integer         , intent(in) :: fd
+         type(Boundary_t), intent(in) :: boundary
+         type(Element_t) , intent(in) :: elements(:)
+         !-local-variables-------------------------------------
+         integer :: fID, side
+         integer :: i,j,k
+         character(len=LINE_LENGTH) :: formatout
+         !-----------------------------------------------------
+         
+         formatout = getFormat(3 + countStatsOutputVars())
+         
+         do fID=1, boundary % no_of_faces
+            
+            associate (e => elements( boundary % elements(fID) ))
+            side = boundary % elementSides(fID)
+            
+            select case (side)
+            
+               case(1)
+                  
+                  write(fd,'(A,I0,A,I0,A,I0,A,A,I0,A)') "ZONE I=",e % Nout(1)+1,", J=",e % Nout(3)+1, &
+                                                  ", K=",1,', F=POINT, T="boundary_', trim(boundary % Name), fID, '"'
+                  
+                  do k = 0, e % Nout(3)    ; do i = 0, e % Nout(1)
+                     write(fd,trim(formatout)) e % xOut(:,i,0,k), e % outputVars(:,i,0,k)
+                  end do                ; end do
+                  
+               case(2)
+                  
+                  write(fd,'(A,I0,A,I0,A,I0,A,A,I0,A)') "ZONE I=",e % Nout(1)+1,", J=",e % Nout(3)+1, &
+                                                  ", K=",1,', F=POINT, T="boundary_', trim(boundary % Name), fID, '"'
+                  
+                  do k = 0, e % Nout(3)    ; do i = 0, e % Nout(1)
+                     write(fd,trim(formatout)) e % xOut(:,i,e % Nout(2),k), e % outputVars(:,i,e % Nout(2),k)
+                  end do                ; end do
+               
+               case(3)
+                  
+                  write(fd,'(A,I0,A,I0,A,I0,A,A,I0,A)') "ZONE I=",e % Nout(1)+1,", J=",e % Nout(2)+1, &
+                                                  ", K=",1,', F=POINT, T="boundary_', trim(boundary % Name), fID, '"'
+                  
+                  do j = 0, e % Nout(2)    ; do i = 0, e % Nout(1)
+                     write(fd,trim(formatout)) e % xOut(:,i,j,0), e % outputVars(:,i,j,0)
+                  end do                ; end do
+                  
+               case(4)
+                  
+                  write(fd,'(A,I0,A,I0,A,I0,A,A,I0,A)') "ZONE I=",e % Nout(2)+1,", J=",e % Nout(3)+1, &
+                                                  ", K=",1,', F=POINT, T="boundary_', trim(boundary % Name), fID, '"'
+                  
+                  do k = 0, e % Nout(3)    ; do j = 0, e % Nout(2)
+                     write(fd,trim(formatout)) e % xOut(:,e % Nout(1),j,k), e % outputVars(:,e % Nout(1),j,k)
+                  end do                ; end do
+                  
+               case(5)
+                  
+                  write(fd,'(A,I0,A,I0,A,I0,A,A,I0,A)') "ZONE I=",e % Nout(1)+1,", J=",e % Nout(2)+1, &
+                                                  ", K=",1,', F=POINT, T="boundary_', trim(boundary % Name), fID, '"'
+                  
+                  do j = 0, e % Nout(2)    ; do i = 0, e % Nout(1)
+                     write(fd,trim(formatout)) e % xOut(:,i,j,e % Nout(3)), e % outputVars(:,i,j,e % Nout(3))
+                  end do                ; end do
+                  
+               case(6)
+                  
+                  write(fd,'(A,I0,A,I0,A,I0,A,A,I0,A)') "ZONE I=",e % Nout(2)+1,", J=",e % Nout(3)+1, &
+                                                  ", K=",1,', F=POINT, T="boundary_', trim(boundary % Name), fID, '"'
+                  
+                  do k = 0, e % Nout(3)    ; do j = 0, e % Nout(2)
+                     write(fd,trim(formatout)) e % xOut(:,0,j,k), e % outputVars(:,0,j,k)
+                  end do                ; end do
+                  
+            end select
+            
+            end associate
+         end do
+         
+      end subroutine WriteBoundaryToTecplotStats
 
       character(len=LINE_LENGTH) function getFormat(ncols)
          implicit none
