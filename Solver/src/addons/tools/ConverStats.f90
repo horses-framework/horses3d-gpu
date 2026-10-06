@@ -23,7 +23,8 @@ Module ConverStats  !
         integer                                                 :: iter
         integer, dimension(:),  allocatable                     :: arrayDimensions
         real(kind=RP)                                           :: time
-        logical                                                 :: hasGradients
+        logical                                                 :: hasGradients, hasReynolds, hasFavre, layoutHasGradients
+        integer, parameter                                      :: NFAVRE = 6
         real(kind=RP)                                           :: refs(NO_OF_SAVED_REFS)
 
         fileName = controlVariables % stringValueForKey("stats file", LINE_LENGTH)
@@ -54,6 +55,15 @@ Module ConverStats  !
          refs = getSolutionFileReferenceValues(trim(fileName))
          nodeType = getSolutionFileNodeType(fileName)
 
+!        Blocks stored for each element: [Reynolds] Q [Favre] [gradients]
+!        ----------------------------------------------------------------
+         call getStatsFileLayout(fileName, NSTAT, NVARS, NFAVRE, NVARS, hasReynolds, hasFavre, layoutHasGradients)
+         if ( layoutHasGradients .neqv. hasGradients ) then
+            write(STD_OUT,'(A,L1,A)') "WARNING: 'has gradients' ignored, the statistics file has gradients = ", layoutHasGradients, "."
+         end if
+         hasGradients = layoutHasGradients
+         if ( .not. hasReynolds ) NSTAT = 0
+
          fid = putSolutionFileInReadDataMode(fileName)
 
          ! NVARS = arrayDimensions(1)
@@ -80,6 +90,14 @@ Module ConverStats  !
 !           Read data
 !           ---------
             read(fid) Q
+!
+!           Skip the Favre moments
+!           ----------------------
+            if ( hasFavre ) then
+               allocate( Q_x(1:NFAVRE,0:Nsol(1),0:Nsol(2),0:Nsol(3)) )
+               read(fid) Q_x
+               deallocate( Q_x )
+            end if
 !
             if ( hasGradients ) then
                allocate( Q_x(1:NVARS,0:Nsol(1),0:Nsol(2),0:Nsol(3)) )

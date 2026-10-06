@@ -91,22 +91,47 @@ The options are:
 
 
 ## Statistics Files (*.stats.hsol)
-Statistics files can generate the standard variables as well as the following variables (being \(S_{ij}\) the components of the Reynolds Stress tensor):
+Statistics files can generate the following variables (being \(R_{ij}\) the components of the Reynolds Stress tensor):
 
 <div class="multicols" style="column-count: 3;">
   <ul>
-    <li>\(umean\)</li>
-    <li>\(vmean\)</li>
-    <li>\(wmean\)</li>
-    <li>\(S_{xx}\)</li>
-    <li>\(S_{yy}\)</li>
-    <li>\(S_{zz}\)</li>
-    <li>\(S_{xy}\)</li>
-    <li>\(S_{xz}\)</li>
-    <li>\(S_{yz}\)</li>
+    <li>\(Umean\)</li>
+    <li>\(Vmean\)</li>
+    <li>\(Wmean\)</li>
+    <li>\(R_{xx}\)</li>
+    <li>\(R_{yy}\)</li>
+    <li>\(R_{zz}\)</li>
+    <li>\(R_{xy}\)</li>
+    <li>\(R_{xz}\)</li>
+    <li>\(R_{yz}\)</li>
   </ul>
 </div>
 
+If the simulation was run with Favre (density-weighted) averaging, the following variables are also available, being \(F_{ij}\) the components of the Favre stress tensor:
+
+<div class="multicols" style="column-count: 3;">
+  <ul>
+    <li>\(F_{xx}\)</li>
+    <li>\(F_{yy}\)</li>
+    <li>\(F_{zz}\)</li>
+    <li>\(F_{xy}\)</li>
+    <li>\(F_{xz}\)</li>
+    <li>\(F_{yz}\)</li>
+  </ul>
+</div>
+
+As with standard solution files, the variables to export can be restricted with **-{}-output-variables=** (or the `output variables` keyword). The following shorthands are also accepted:
+
+| Token           | Expands to                                    |
+|-----------------|------------------------------------------------|
+| `Vmean` or `V`  | `Umean, Vmean, Wmean`                           |
+| `Rij`           | `Rxx, Ryy, Rzz, Rxy, Rxz, Ryz`                  |
+| `Fij`           | `Fxx, Fyy, Fzz, Fxy, Fxz, Fyz`                  |
+| `all`           | Every Reynolds and (if available) Favre variable |
+
+```
+output variables = Vmean, Rij
+```
 
 
 ## Extract geometry

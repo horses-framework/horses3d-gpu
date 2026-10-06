@@ -11,6 +11,7 @@ module Storage
    public NVARS, NGRADVARS, hasMPIranks, hasBoundaries, isOldStats
    public partitionFileName, boundaryFileName, flowEq
    public hasExtraGradients, hasMu_NS, hasUt_NS, hasWallY, NSTAT, hasMu_sgs
+   public NFAVRE_VARS, statsHasFavre
 
    integer                          :: NVARS, NGRADVARS
    logical                          :: hasMPIranks, hasBoundaries, isOldStats
@@ -20,7 +21,9 @@ module Storage
    logical                          :: hasWallY     = .false.
    logical                          :: hasMu_sgs = .false.
    character(len=LINE_LENGTH)       :: boundaryFileName, partitionFileName, flowEq
-   integer, parameter               :: NSTAT = 9
+   integer               :: NSTAT = 9
+   integer, parameter    :: NFAVRE_VARS = 6
+   logical               :: statsHasFavre = .false.
 
    type Element_t
 !                                /* Mesh quantities */
@@ -43,6 +46,7 @@ module Storage
       real(kind=RP), pointer     :: wallY(:,:,:,:)
       real(kind=RP), pointer     :: mu_sgs(:,:,:,:)
       real(kind=RP), pointer     :: stats(:,:,:,:)
+      real(kind=RP), pointer     :: favre(:,:,:,:)
       real(kind=RP)              :: sensor
 !                                /* Output quantities */
       integer                    :: Nout(NDIM)
@@ -57,6 +61,7 @@ module Storage
       real(kind=RP), pointer     :: wallYout(:,:,:,:)
       real(kind=RP), pointer     :: mu_sgsout(:,:,:,:)
       real(kind=RP), pointer     :: statsout(:,:,:,:)
+      real(kind=RP), pointer     :: favreout(:,:,:,:)
 
       real(kind=RP), allocatable :: outputVars(:,:,:,:)
    end type Element_t
@@ -220,7 +225,9 @@ module Storage
          integer                        :: iter
          real(kind=RP)                  :: time
          real(kind=RP), allocatable     :: Qdot(:,:,:,:)
+         real(kind=RP), allocatable     :: grads_tmp(:,:,:,:)
          character(len=1024)  :: msg
+         logical              :: statsHasGrads, statsHasReynolds
 
          self % solutionName = trim(solutionName)
 		 write(STD_OUT,'(10X,A,A)') "Loading Solution File:"
@@ -278,7 +285,10 @@ module Storage
 
          self % isSurface = (dimensionsSize .eq. 3)
 
-         self % hasGradients = self % hasGradients .or. hasExtraGradients
+         if ( self % isStatistics .and. hasExtraGradients ) then
+            write(STD_OUT,'(30X,A)') "-> WARNING: 'has gradients = .true.' ignored for statistics files (no gradients stored)."
+         end if
+         self % hasGradients = self % hasGradients .or. (hasExtraGradients .and. .not. self % isStatistics)
 !
 !        Get node type
 !        -------------
@@ -314,6 +324,20 @@ module Storage
          ! call set_getVelocityGradients(GRADVARS_STATE) ! FIXME: MIGHT BE NEEDED FOR HORSES2PLT
          ! write(STD_OUT,'(15X,A)') " WARNING horses2tecplot.90 :: Velocity Gradients set to default (GRADVARS_STATE)"
       
+         statsHasGrads    = .false.
+         statsHasFavre    = .false.
+         statsHasReynolds = .true.
+         if ( self % isStatistics ) then
+            NSTAT = 9
+            if ( .not. isOldStats ) then
+!              Which blocks the file stores: [Reynolds] Q [Favre] [gradients]
+               call getNVARS(0, .true.)
+               call getStatsFileLayout(solutionName, NSTAT, NVARS, NFAVRE_VARS, NVARS, &
+                                       statsHasReynolds, statsHasFavre, statsHasGrads)
+               if ( .not. statsHasReynolds ) NSTAT = 0
+            end if
+         end if
+
          if ( .not. isOldStats ) then
          ! if ( .not. self % isStatistics ) then
             do eID = 1, self % no_of_elements
@@ -327,12 +351,11 @@ module Storage
                if (dimensionsSize .eq. 3) e % Nsol(3) = 0
 !   
 !
-!              Allocate memory for the statistics
-!              ----------------------------------
-               if (self % isStatistics) then
-                   allocate( e % stats(1:NSTAT,0:e % Nsol(1), 0:e % Nsol(2), 0:e % Nsol(3)) )
-                   read(fid) e % stats
-!
+!              Allocate memory for the statistics (Reynolds averages)
+!              -------------------------------------------------------
+               if (self % isStatistics .and. NSTAT .gt. 0) then
+                  allocate( e % stats(1:NSTAT,0:e % Nsol(1), 0:e % Nsol(2), 0:e % Nsol(3)) )
+                  read(fid) e % stats
                end if
 !
 !              Allocate memory for the coordinates
@@ -343,6 +366,21 @@ module Storage
 !              ---------
                read(fid) e % Q
 
+!              For stats files: Favre and gradient records after Q
+               if ( self % isStatistics ) then
+                  if ( statsHasFavre ) then
+                     allocate( e % favre(1:NFAVRE_VARS, 0:e%Nsol(1), 0:e%Nsol(2), 0:e%Nsol(3)) )
+                     read(fid) e % favre
+                  end if
+                  if ( statsHasGrads ) then
+                     allocate( grads_tmp(1:NVARS, 0:e%Nsol(1), 0:e%Nsol(2), 0:e%Nsol(3)) )
+                     read(fid) grads_tmp  ! UX
+                     read(fid) grads_tmp  ! UY
+                     read(fid) grads_tmp  ! UZ
+                     deallocate( grads_tmp )
+                  end if
+               end if
+
               ! Qdot goes before gradients when present
               ! for now is not saved anywhere, just to be able to read gradients
                if (self % hasTimeDeriv) then
@@ -351,7 +389,7 @@ module Storage
                    deallocate(Qdot)
                end if
 
-               if ( self % hasGradients ) then
+               if ( self % hasGradients .and. .not. self % isStatistics ) then
 !
 !                 Allocate memory for the gradients
 !                 ---------------------------------
