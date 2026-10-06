@@ -541,6 +541,7 @@ module Horses2probesModule
       type(SpatialGrid_t) :: grid
       integer             :: pID, found_count, warn_count, processed_count, new_count, milestone
       integer(kind=8)     :: t0, t1, count_rate
+      new_count = 0
 
       found_count     = 0
       warn_count      = 0
@@ -555,24 +556,18 @@ module Horses2probesModule
 
       call system_clock(t0, count_rate)
 
-      !$OMP PARALLEL DO SCHEDULE(DYNAMIC,100) REDUCTION(+:found_count) DEFAULT(SHARED) PRIVATE(new_count)
       do pID = 1, no_of_probes
          call FindProbeInMeshFast(mesh, bbox, grid, probes(pID) % x, &
                                   probes(pID) % eID, probes(pID) % xi, probes(pID) % found)
          if (probes(pID) % found) found_count = found_count + 1
-         !$OMP ATOMIC CAPTURE
          processed_count = processed_count + 1
          new_count       = processed_count
-         !$OMP END ATOMIC
          if (mod(new_count, milestone) .eq. 0) then
-            !$OMP CRITICAL (progress_bar)
             write(STD_OUT,'(30X,A,I0,A,I0,A,F5.1,A)') &
                "   [", new_count, "/", no_of_probes, &
                "]  ", 100.0_RP * new_count / no_of_probes, "%"
-            !$OMP END CRITICAL (progress_bar)
          end if
       end do
-      !$OMP END PARALLEL DO
 
       call system_clock(t1)
       write(STD_OUT,'(30X,A)') "   [done]"
@@ -841,7 +836,7 @@ module Horses2probesModule
 !     Local variables
 !     ---------------
 !
-      type(Element_t)                :: mock_e_priv   ! thread-private in OMP region
+      type(Element_t)                :: mock_e_priv
       real(kind=RP),     allocatable :: output_priv(:,:,:,:)
       real(kind=RP),     allocatable :: outVars(:,:)
       real(kind=RP),     allocatable :: Q_all(:,:)
@@ -876,70 +871,61 @@ module Horses2probesModule
       allocate(Q_all(NVARS, no_of_probes))
       Q_all = 0.0_RP
 
-      !$OMP PARALLEL DO SCHEDULE(DYNAMIC,256) DEFAULT(SHARED)
       do pID = 1, no_of_probes
          if (.not. probes(pID) % found) cycle
          Q_all(:,pID) = InterpolateQAtProbe(mesh % elements(probes(pID) % eID), &
                                              probes(pID) % xi, mesh % nodeType)
       end do
-      !$OMP END PARALLEL DO
 !
-!     Phase 2: compute output variables — each thread owns a private mock element
-!     so there are no write conflicts on mock_e or output.
-!     -----------------------------------------------------------------------------
-      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(pID, mock_e_priv, output_priv)
+!     Phase 2: compute output variables
+!     -----------------------------------
+      mock_e_priv % Nout = 0
+      allocate(mock_e_priv % Qout    (NVARS, 0:0, 0:0, 0:0))
+      allocate(mock_e_priv % xOut    (NDIM,  0:0, 0:0, 0:0))
+      allocate(mock_e_priv % QDot_out(NVARS, 0:0, 0:0, 0:0))
+      allocate(mock_e_priv % U_xout  (NVARS, 0:0, 0:0, 0:0))
+      allocate(mock_e_priv % U_yout  (NVARS, 0:0, 0:0, 0:0))
+      allocate(mock_e_priv % U_zout  (NVARS, 0:0, 0:0, 0:0))
+      allocate(mock_e_priv % statsout (1,    0:0, 0:0, 0:0))
+      allocate(mock_e_priv % mu_NSout (1,    0:0, 0:0, 0:0))
+      allocate(mock_e_priv % ut_NSout (1,    0:0, 0:0, 0:0))
+      allocate(mock_e_priv % wallYout (1,    0:0, 0:0, 0:0))
+      allocate(mock_e_priv % mu_sgsout(1,    0:0, 0:0, 0:0))
+      allocate(mock_e_priv % wallY    (1,    0:0, 0:0, 0:0))
+      allocate(mock_e_priv % ut_NS    (1,    0:0, 0:0, 0:0))
+      allocate(output_priv(no_of_outputVariables, 0:0, 0:0, 0:0))
 
-         mock_e_priv % Nout = 0
-         allocate(mock_e_priv % Qout    (NVARS, 0:0, 0:0, 0:0))
-         allocate(mock_e_priv % xOut    (NDIM,  0:0, 0:0, 0:0))
-         allocate(mock_e_priv % QDot_out(NVARS, 0:0, 0:0, 0:0))
-         allocate(mock_e_priv % U_xout  (NVARS, 0:0, 0:0, 0:0))
-         allocate(mock_e_priv % U_yout  (NVARS, 0:0, 0:0, 0:0))
-         allocate(mock_e_priv % U_zout  (NVARS, 0:0, 0:0, 0:0))
-         allocate(mock_e_priv % statsout (1,    0:0, 0:0, 0:0))
-         allocate(mock_e_priv % mu_NSout (1,    0:0, 0:0, 0:0))
-         allocate(mock_e_priv % ut_NSout (1,    0:0, 0:0, 0:0))
-         allocate(mock_e_priv % wallYout (1,    0:0, 0:0, 0:0))
-         allocate(mock_e_priv % mu_sgsout(1,    0:0, 0:0, 0:0))
-         allocate(mock_e_priv % wallY    (1,    0:0, 0:0, 0:0))
-         allocate(mock_e_priv % ut_NS    (1,    0:0, 0:0, 0:0))
-         allocate(output_priv(no_of_outputVariables, 0:0, 0:0, 0:0))
+      mock_e_priv % QDot_out  = 0.0_RP
+      mock_e_priv % U_xout    = 0.0_RP
+      mock_e_priv % U_yout    = 0.0_RP
+      mock_e_priv % U_zout    = 0.0_RP
+      mock_e_priv % wallY     = 0.0_RP
+      mock_e_priv % ut_NS     = 0.0_RP
+      mock_e_priv % statsout  = 0.0_RP
+      mock_e_priv % mu_NSout  = 0.0_RP
+      mock_e_priv % ut_NSout  = 0.0_RP
+      mock_e_priv % wallYout  = 0.0_RP
+      mock_e_priv % mu_sgsout = 0.0_RP
+      mock_e_priv % sensor    = 0.0_RP
 
-         mock_e_priv % QDot_out  = 0.0_RP
-         mock_e_priv % U_xout    = 0.0_RP
-         mock_e_priv % U_yout    = 0.0_RP
-         mock_e_priv % U_zout    = 0.0_RP
-         mock_e_priv % wallY     = 0.0_RP
-         mock_e_priv % ut_NS     = 0.0_RP
-         mock_e_priv % statsout  = 0.0_RP
-         mock_e_priv % mu_NSout  = 0.0_RP
-         mock_e_priv % ut_NSout  = 0.0_RP
-         mock_e_priv % wallYout  = 0.0_RP
-         mock_e_priv % mu_sgsout = 0.0_RP
-         mock_e_priv % sensor    = 0.0_RP
+      do pID = 1, no_of_probes
+         if (.not. probes(pID) % found) cycle
 
-         !$OMP DO SCHEDULE(DYNAMIC,256)
-         do pID = 1, no_of_probes
-            if (.not. probes(pID) % found) cycle
+         mock_e_priv % Qout(:,0,0,0) = Q_all(:,pID)
+         mock_e_priv % xOut(:,0,0,0) = probes(pID) % x
 
-            mock_e_priv % Qout(:,0,0,0) = Q_all(:,pID)
-            mock_e_priv % xOut(:,0,0,0) = probes(pID) % x
+         call ComputeOutputVariables(no_of_outputVariables, outputVariableNames, &
+                                      mock_e_priv % Nout, mock_e_priv, output_priv, &
+                                      mesh % refs, .false., .false., .false.)
+         outVars(:,pID) = output_priv(:,0,0,0)
+      end do
 
-            call ComputeOutputVariables(no_of_outputVariables, outputVariableNames, &
-                                         mock_e_priv % Nout, mock_e_priv, output_priv, &
-                                         mesh % refs, .false., .false., .false.)
-            outVars(:,pID) = output_priv(:,0,0,0)
-         end do
-         !$OMP END DO
-
-         deallocate(mock_e_priv % Qout, mock_e_priv % xOut, mock_e_priv % QDot_out)
-         deallocate(mock_e_priv % U_xout, mock_e_priv % U_yout, mock_e_priv % U_zout)
-         deallocate(mock_e_priv % statsout, mock_e_priv % mu_NSout, mock_e_priv % ut_NSout)
-         deallocate(mock_e_priv % wallYout, mock_e_priv % mu_sgsout)
-         deallocate(mock_e_priv % wallY, mock_e_priv % ut_NS)
-         deallocate(output_priv)
-
-      !$OMP END PARALLEL
+      deallocate(mock_e_priv % Qout, mock_e_priv % xOut, mock_e_priv % QDot_out)
+      deallocate(mock_e_priv % U_xout, mock_e_priv % U_yout, mock_e_priv % U_zout)
+      deallocate(mock_e_priv % statsout, mock_e_priv % mu_NSout, mock_e_priv % ut_NSout)
+      deallocate(mock_e_priv % wallYout, mock_e_priv % mu_sgsout)
+      deallocate(mock_e_priv % wallY, mock_e_priv % ut_NS)
+      deallocate(output_priv)
 
       deallocate(Q_all)
 !
