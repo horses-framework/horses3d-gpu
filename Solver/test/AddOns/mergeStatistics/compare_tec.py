@@ -7,6 +7,7 @@
 #
 #  Usage: ./compare_tec.py REFERENCE.tec RESULT.tec [TOLERANCE]
 #
+import math
 import sys
 
 def load(fileName):
@@ -34,13 +35,18 @@ if [v.lower() for v in refVars] != [v.lower() for v in resVars]:
 if len(ref) != len(res) or any(len(a) != len(b) for a, b in zip(ref, res)):
     sys.exit(f"FAILED: different number of points ({len(ref)} vs {len(res)})")
 
+for fileName, rows in ((refFile, ref), (resFile, res)):
+    if not all(math.isfinite(v) for row in rows for v in row):
+        sys.exit(f"FAILED: {fileName} contains NaN or infinite values")
+
 failed = False
 for i, var in enumerate(refVars):
     scale = max(abs(r[i]) for r in ref)
     diff = max(abs(a[i] - b[i]) for a, b in zip(ref, res))
     relDiff = diff / scale if scale > 0.0 else diff
-    status = "OK" if relDiff <= tol else "FAILED"
-    failed = failed or relDiff > tol
+    ok = relDiff <= tol
+    status = "OK" if ok else "FAILED"
+    failed = failed or not ok
     print(f"{var:>10s}: max rel diff = {relDiff:.3e}  [{status}]")
 
 if failed:
