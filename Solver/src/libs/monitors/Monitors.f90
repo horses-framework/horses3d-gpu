@@ -337,6 +337,74 @@ module MonitorsClass
                      end associate
                   end if
                end do
+!              Sort owned probes by ascending eID so Monitor_ComputeFileProbesCPU
+!              accesses mesh%elements(eID)%storage%Q sequentially, improving cache
+!              reuse when many probes share the same or nearby elements.
+!              Uses counting sort: O(fp_nOwned + no_of_elements).
+               if (Monitors % fp_nOwned > 1) then
+                  block
+                     integer :: ne, cnt, pos_s, p_s, q_s, tmp_i, Nmax_sort
+                     integer, allocatable :: count_arr(:), prefix(:), sort_perm(:)
+                     integer, allocatable :: tmp_ownedIdx(:), tmp_eID(:), tmp_Nx(:), tmp_Ny(:), tmp_Nz(:)
+                     real(kind=RP), allocatable :: tmp_lxi(:,:), tmp_leta(:,:), tmp_lzeta(:,:)
+
+                     ne = mesh % no_of_elements
+                     allocate( count_arr(ne), prefix(ne+1) )
+                     count_arr = 0
+                     do p_s = 1, Monitors % fp_nOwned
+                        count_arr(Monitors % fp_cpu_eID(p_s)) = &
+                           count_arr(Monitors % fp_cpu_eID(p_s)) + 1
+                     end do
+                     prefix(1) = 1
+                     do cnt = 1, ne
+                        prefix(cnt+1) = prefix(cnt) + count_arr(cnt)
+                     end do
+
+                     allocate( sort_perm(Monitors % fp_nOwned) )
+                     count_arr = 0
+                     do p_s = 1, Monitors % fp_nOwned
+                        q_s   = Monitors % fp_cpu_eID(p_s)
+                        pos_s = prefix(q_s) + count_arr(q_s)
+                        sort_perm(pos_s) = p_s
+                        count_arr(q_s) = count_arr(q_s) + 1
+                     end do
+                     deallocate(count_arr, prefix)
+
+                     Nmax_sort = ubound(Monitors % fp_cpu_lxi, 1)
+                     allocate( tmp_ownedIdx(Monitors % fp_nOwned) )
+                     allocate( tmp_eID(Monitors % fp_nOwned) )
+                     allocate( tmp_Nx (Monitors % fp_nOwned) )
+                     allocate( tmp_Ny (Monitors % fp_nOwned) )
+                     allocate( tmp_Nz (Monitors % fp_nOwned) )
+                     allocate( tmp_lxi  (0:Nmax_sort, Monitors % fp_nOwned) )
+                     allocate( tmp_leta (0:Nmax_sort, Monitors % fp_nOwned) )
+                     allocate( tmp_lzeta(0:Nmax_sort, Monitors % fp_nOwned) )
+
+                     do p_s = 1, Monitors % fp_nOwned
+                        tmp_i = sort_perm(p_s)
+                        tmp_ownedIdx(p_s)     = Monitors % fp_ownedIdx(tmp_i)
+                        tmp_eID(p_s)          = Monitors % fp_cpu_eID(tmp_i)
+                        tmp_Nx(p_s)           = Monitors % fp_cpu_Nx(tmp_i)
+                        tmp_Ny(p_s)           = Monitors % fp_cpu_Ny(tmp_i)
+                        tmp_Nz(p_s)           = Monitors % fp_cpu_Nz(tmp_i)
+                        tmp_lxi  (:,p_s)      = Monitors % fp_cpu_lxi  (:,tmp_i)
+                        tmp_leta (:,p_s)      = Monitors % fp_cpu_leta (:,tmp_i)
+                        tmp_lzeta(:,p_s)      = Monitors % fp_cpu_lzeta(:,tmp_i)
+                     end do
+
+                     Monitors % fp_ownedIdx(1:Monitors%fp_nOwned) = tmp_ownedIdx
+                     Monitors % fp_cpu_eID   = tmp_eID
+                     Monitors % fp_cpu_Nx    = tmp_Nx
+                     Monitors % fp_cpu_Ny    = tmp_Ny
+                     Monitors % fp_cpu_Nz    = tmp_Nz
+                     Monitors % fp_cpu_lxi   = tmp_lxi
+                     Monitors % fp_cpu_leta  = tmp_leta
+                     Monitors % fp_cpu_lzeta = tmp_lzeta
+
+                     deallocate(sort_perm, tmp_ownedIdx, tmp_eID, tmp_Nx, tmp_Ny, tmp_Nz, &
+                                tmp_lxi, tmp_leta, tmp_lzeta)
+                  end block
+               end if
             end block
          end if
 #endif
@@ -1407,10 +1475,13 @@ end subroutine getNoOfMonitors
 #ifndef _OPENACC
    subroutine Monitor_ComputeFileProbesCPU(self, mesh, fp_offset, nv)
 !
-!     Compact SoA compute loop for file-probes on CPU.
-!     Reads eID/Nxyz/lxi/leta/lzeta from contiguous fp_cpu_* arrays built at construction,
-!     and accumulates Lagrange-interpolated values directly into fp_buf.
-!     This avoids stride-nRanks access into the scattered probes(:) struct array.
+!     Optimised SoA compute loop for file-probes on CPU.
+!     Loop order: probe → node (kk,jj,ii) → variable.
+!     Q(:,ii,jj,kk) is loaded once per node; all nv variables are accumulated
+!     in a single pass, eliminating nv redundant cache-line fetches per node.
+!     When probes are stored sorted by ascending eID (see InitializeProbesFromFile),
+!     sequential probes touch the same or adjacent element Q arrays, further
+!     improving cache reuse across probes.
 !
       use Physics
       implicit none
@@ -1421,9 +1492,16 @@ end subroutine getNoOfMonitors
 !     Local variables
 !
       integer        :: p, v, ii, jj, kk, eID, Nx, Ny, Nz, jbuf
-      real(kind=RP)  :: value, w, q_val
+      real(kind=RP)  :: w
+      real(kind=RP)  :: acc(nv)
 #ifdef NAVIERSTOKES
-      real(kind=RP)  :: u2
+      real(kind=RP)  :: q_rho, q_rhou, q_rhov, q_rhow, q_rhoE, u2
+#endif
+#ifdef INCNS
+      real(kind=RP)  :: q_rho, q_rhou, q_rhov, q_rhow, q_p
+#endif
+#ifdef MULTIPHASE
+      real(kind=RP)  :: q_p, q_c, q_mu, q_cx, q_cy, q_cz
 #endif
 
       do p = 1, self % fp_nOwned
@@ -1431,119 +1509,81 @@ end subroutine getNoOfMonitors
          Nx   = self % fp_cpu_Nx(p)
          Ny   = self % fp_cpu_Ny(p)
          Nz   = self % fp_cpu_Nz(p)
-!        Position in fp_buf for this probe: (global_probe_index - fp_offset - 1)*nv + 1
          jbuf = (self % fp_ownedIdx(p) - fp_offset - 1) * nv
-         do v = 1, nv
-            value = 0.0_RP
-            select case (self % fp_cpu_varCodes(v))
+         acc(1:nv) = 0.0_RP
+         associate(Qe => mesh%elements(eID)%storage%Q)
+         do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
+            w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
+!           Load conserved variables once for this node
 #ifdef NAVIERSTOKES
-            case(FPVAR_PRESSURE)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * Pressure(mesh%elements(eID)%storage%Q(:,ii,jj,kk))
-               end do ; end do ; end do
-            case(FPVAR_VELOCITY)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * sqrt(POW2(mesh%elements(eID)%storage%Q(IRHOU,ii,jj,kk)) + &
-                                           POW2(mesh%elements(eID)%storage%Q(IRHOV,ii,jj,kk)) + &
-                                           POW2(mesh%elements(eID)%storage%Q(IRHOW,ii,jj,kk))) &
-                                    / mesh%elements(eID)%storage%Q(IRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_U)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(IRHOU,ii,jj,kk) &
-                                    / mesh%elements(eID)%storage%Q(IRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_V)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(IRHOV,ii,jj,kk) &
-                                    / mesh%elements(eID)%storage%Q(IRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_W)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(IRHOW,ii,jj,kk) &
-                                    / mesh%elements(eID)%storage%Q(IRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_MACH)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w  = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  u2 = (POW2(mesh%elements(eID)%storage%Q(IRHOU,ii,jj,kk)) + &
-                        POW2(mesh%elements(eID)%storage%Q(IRHOV,ii,jj,kk)) + &
-                        POW2(mesh%elements(eID)%storage%Q(IRHOW,ii,jj,kk))) / &
-                        POW2(mesh%elements(eID)%storage%Q(IRHO ,ii,jj,kk))
-                  value = value + w * sqrt( u2 / ( thermodynamics%gamma*(thermodynamics%gamma-1.0_RP) * &
-                             (mesh%elements(eID)%storage%Q(IRHOE,ii,jj,kk) / &
-                              mesh%elements(eID)%storage%Q(IRHO ,ii,jj,kk) - 0.5_RP*u2) ) )
-               end do ; end do ; end do
-            case(FPVAR_K)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * 0.5_RP * (POW2(mesh%elements(eID)%storage%Q(IRHOU,ii,jj,kk)) + &
-                                                 POW2(mesh%elements(eID)%storage%Q(IRHOV,ii,jj,kk)) + &
-                                                 POW2(mesh%elements(eID)%storage%Q(IRHOW,ii,jj,kk))) &
-                                              / mesh%elements(eID)%storage%Q(IRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_RHO)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(IRHO,ii,jj,kk)
-               end do ; end do ; end do
+            q_rho  = Qe(IRHO ,ii,jj,kk)
+            q_rhou = Qe(IRHOU,ii,jj,kk)
+            q_rhov = Qe(IRHOV,ii,jj,kk)
+            q_rhow = Qe(IRHOW,ii,jj,kk)
+            q_rhoE = Qe(IRHOE,ii,jj,kk)
 #endif
 #ifdef INCNS
-            case(FPVAR_PRESSURE)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(INSP,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_VELOCITY)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * sqrt(POW2(mesh%elements(eID)%storage%Q(INSRHOU,ii,jj,kk)) + &
-                                           POW2(mesh%elements(eID)%storage%Q(INSRHOV,ii,jj,kk)) + &
-                                           POW2(mesh%elements(eID)%storage%Q(INSRHOW,ii,jj,kk))) &
-                                    / mesh%elements(eID)%storage%Q(INSRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_U)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(INSRHOU,ii,jj,kk) &
-                                    / mesh%elements(eID)%storage%Q(INSRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_V)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(INSRHOV,ii,jj,kk) &
-                                    / mesh%elements(eID)%storage%Q(INSRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_W)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(INSRHOW,ii,jj,kk) &
-                                    / mesh%elements(eID)%storage%Q(INSRHO,ii,jj,kk)
-               end do ; end do ; end do
-            case(FPVAR_RHO)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * mesh%elements(eID)%storage%Q(INSRHO,ii,jj,kk)
-               end do ; end do ; end do
+            q_rho  = Qe(INSRHO ,ii,jj,kk)
+            q_rhou = Qe(INSRHOU,ii,jj,kk)
+            q_rhov = Qe(INSRHOV,ii,jj,kk)
+            q_rhow = Qe(INSRHOW,ii,jj,kk)
+            q_p    = Qe(INSP   ,ii,jj,kk)
 #endif
 #ifdef MULTIPHASE
-            case(FPVAR_STATICPRES)
-               do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
-                  w = self%fp_cpu_lxi(ii,p)*self%fp_cpu_leta(jj,p)*self%fp_cpu_lzeta(kk,p)
-                  value = value + w * ( mesh%elements(eID)%storage%Q(IMP,ii,jj,kk) &
-                               + mesh%elements(eID)%storage%Q(IMC,ii,jj,kk)*mesh%elements(eID)%storage%mu(1,ii,jj,kk) &
-                               - 12.0_RP*multiphase%sigma*multiphase%invEps*(POW2(mesh%elements(eID)%storage%Q(IMC,ii,jj,kk)*(1.0_RP-mesh%elements(eID)%storage%Q(IMC,ii,jj,kk)))) &
-                               - 0.25_RP*3.0_RP*multiphase%sigma*multiphase%eps*(POW2(mesh%elements(eID)%storage%c_x(1,ii,jj,kk))+POW2(mesh%elements(eID)%storage%c_y(1,ii,jj,kk))+POW2(mesh%elements(eID)%storage%c_z(1,ii,jj,kk))) )
-               end do ; end do ; end do
+            q_p  = Qe(IMP,ii,jj,kk)
+            q_c  = Qe(IMC,ii,jj,kk)
+            q_mu = mesh%elements(eID)%storage%mu(1,ii,jj,kk)
+            q_cx = mesh%elements(eID)%storage%c_x(1,ii,jj,kk)
+            q_cy = mesh%elements(eID)%storage%c_y(1,ii,jj,kk)
+            q_cz = mesh%elements(eID)%storage%c_z(1,ii,jj,kk)
 #endif
-            end select
-            self % fp_buf(jbuf + v) = value
-         end do
+            do v = 1, nv
+               select case (self % fp_cpu_varCodes(v))
+#ifdef NAVIERSTOKES
+               case(FPVAR_PRESSURE)
+                  acc(v) = acc(v) + w * Pressure([q_rho,q_rhou,q_rhov,q_rhow,q_rhoE])
+               case(FPVAR_VELOCITY)
+                  acc(v) = acc(v) + w * sqrt(POW2(q_rhou)+POW2(q_rhov)+POW2(q_rhow)) / q_rho
+               case(FPVAR_U)
+                  acc(v) = acc(v) + w * q_rhou / q_rho
+               case(FPVAR_V)
+                  acc(v) = acc(v) + w * q_rhov / q_rho
+               case(FPVAR_W)
+                  acc(v) = acc(v) + w * q_rhow / q_rho
+               case(FPVAR_MACH)
+                  u2 = (POW2(q_rhou)+POW2(q_rhov)+POW2(q_rhow)) / POW2(q_rho)
+                  acc(v) = acc(v) + w * sqrt( u2 / ( thermodynamics%gamma*(thermodynamics%gamma-1.0_RP) * &
+                              (q_rhoE/q_rho - 0.5_RP*u2) ) )
+               case(FPVAR_K)
+                  acc(v) = acc(v) + w * 0.5_RP*(POW2(q_rhou)+POW2(q_rhov)+POW2(q_rhow)) / q_rho
+               case(FPVAR_RHO)
+                  acc(v) = acc(v) + w * q_rho
+#endif
+#ifdef INCNS
+               case(FPVAR_PRESSURE)
+                  acc(v) = acc(v) + w * q_p
+               case(FPVAR_VELOCITY)
+                  acc(v) = acc(v) + w * sqrt(POW2(q_rhou)+POW2(q_rhov)+POW2(q_rhow)) / q_rho
+               case(FPVAR_U)
+                  acc(v) = acc(v) + w * q_rhou / q_rho
+               case(FPVAR_V)
+                  acc(v) = acc(v) + w * q_rhov / q_rho
+               case(FPVAR_W)
+                  acc(v) = acc(v) + w * q_rhow / q_rho
+               case(FPVAR_RHO)
+                  acc(v) = acc(v) + w * q_rho
+#endif
+#ifdef MULTIPHASE
+               case(FPVAR_STATICPRES)
+                  acc(v) = acc(v) + w * ( q_p + q_c*q_mu &
+                               - 12.0_RP*multiphase%sigma*multiphase%invEps*(POW2(q_c*(1.0_RP-q_c))) &
+                               - 0.25_RP*3.0_RP*multiphase%sigma*multiphase%eps*(POW2(q_cx)+POW2(q_cy)+POW2(q_cz)) )
+#endif
+               end select
+            end do
+         end do ; end do ; end do
+         end associate
+         self % fp_buf(jbuf+1:jbuf+nv) = acc(1:nv)
       end do
 
    end subroutine Monitor_ComputeFileProbesCPU
