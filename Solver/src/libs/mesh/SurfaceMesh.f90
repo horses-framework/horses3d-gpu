@@ -356,8 +356,31 @@ Module SurfaceMesh
         write(STD_OUT,'(30X,A,A28,I0)') "->", "Number of surfaces: ", self % numberOfSurfaces
         if (.not. all(self % surfaceActive)) write(STD_OUT,'(30X,A,A28,I0)') "->", "Inactive surfaces: ", count(.not. self % surfaceActive, dim=1)
         write(STD_OUT,'(30X,A,A28,I0)') "->", "Number of slices: ", idSliceX + idSliceY + idSliceZ
-        if (hasBC) write(STD_OUT,'(30X,A,A28,I0)') "->", "Number of boundaries: ", numberOfSurfacesBC
-        if (hasFWH) then 
+        if (hasSliceX) then
+            write(STD_OUT,'(30X,A,A28)',advance="no") "->", "Slice X at: "
+            do i = 1, size(posSliceX) ; write(STD_OUT,'(ES12.4,A)',advance="no") posSliceX(i), " " ; end do
+            write(STD_OUT,*)
+            if (allocated(limSliceX)) write(STD_OUT,'(30X,A,A28,2ES12.4)') "->", "Slice X limits: ", limSliceX
+        end if
+        if (hasSliceY) then
+            write(STD_OUT,'(30X,A,A28)',advance="no") "->", "Slice Y at: "
+            do i = 1, size(posSliceY) ; write(STD_OUT,'(ES12.4,A)',advance="no") posSliceY(i), " " ; end do
+            write(STD_OUT,*)
+            if (allocated(limSliceY)) write(STD_OUT,'(30X,A,A28,2ES12.4)') "->", "Slice Y limits: ", limSliceY
+        end if
+        if (hasSliceZ) then
+            write(STD_OUT,'(30X,A,A28)',advance="no") "->", "Slice Z at: "
+            do i = 1, size(posSliceZ) ; write(STD_OUT,'(ES12.4,A)',advance="no") posSliceZ(i), " " ; end do
+            write(STD_OUT,*)
+            if (allocated(limSliceZ)) write(STD_OUT,'(30X,A,A28,2ES12.4)') "->", "Slice Z limits: ", limSliceZ
+        end if
+        if (hasBC) then
+            write(STD_OUT,'(30X,A,A28,I0)') "->", "Number of boundaries: ", numberOfSurfacesBC
+            write(STD_OUT,'(30X,A,A28)',advance="no") "->", "Boundaries: "
+            do i = 1, size(bcs_names) ; write(STD_OUT,'(A,A)',advance="no") trim(bcs_names(i)), "  " ; end do
+            write(STD_OUT,*)
+        end if
+        if (hasFWH) then
             write(STD_OUT,'(30X,A,A28,L1)') "->", "Save FWH and BC together: ", self % mergeFWHandBC
             write(STD_OUT ,'(/)')
         end if

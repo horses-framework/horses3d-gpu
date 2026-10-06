@@ -388,7 +388,7 @@
                                msg           = "Final maximum residual")
 
             CALL FTAssertEqual(expectedValue = 1.0_RP + wake_u , &
-                               actualValue   = 1.0_RP + monitors % probes(1) % values(1) , &
+                               actualValue   = 1.0_RP + monitors % probes(1) % values(1,1) , &
                                tol           = 1.d-11, &
                                msg           = "Wake final x-velocity at the point [0,2.0,4.0]")
 
