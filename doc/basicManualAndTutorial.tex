@@ -541,12 +541,18 @@ The options comprise following flags:
 			\textit{CHARACTER}: Specifies the path to the partition file (*.pmesh) to export the MPI ranks of the simulation. & 
 							Not Present  \\ \hline
 							
--{}-boundary-file= 	& 
-			\textit{CHARACTER}: Specifies the path to the boundary mesh file (*.bmesh) to export the surfaces as additional zones of the Tecplot file. & 
+-{}-boundary-file= 	&
+			\textit{CHARACTER}: Specifies the path to the boundary mesh file (*.bmesh) to export the surfaces as additional zones of the Tecplot file. &
 							Not Present  \\ \hline
+
+-{}-gradient-variables= 	&
+			\textit{CHARACTER}: Gradient variables of the gradients saved in the solution file (see the solver keyword \textit{gradient variables}): \textit{state}, \textit{entropy} or \textit{energy}. Used to compute the velocity gradients. &
+							\textit{state}  \\ \hline
 \multicolumn{3}{p{16.4cm}}{*  \textit{Homogeneous} when \textit{-{}-output-order} is specified} \\
 
 \end{longtable}
+
+\textbf{Warning:} \textit{-{}-gradient-variables} (or the \textit{gradient variables} key of the *.h2t* control file) is a setting of \textit{horses2plt} itself, independent of the solver, and it silently defaults to \textit{state} when left unspecified. It must be set to exactly the same value used for the \textit{gradient variables} keyword when the simulation was run; otherwise every quantity derived from a velocity gradient in the postprocessed output (skin friction, vorticity, Q-criterion, wall shear stress, ...) will be computed from the wrong set of variables and will be silently wrong, with no error or warning raised.
 
 Additionally, depending on the type of solution file, the user can specify additional options.
 
