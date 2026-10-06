@@ -110,8 +110,8 @@ jobs:
           cat slurm-${job_id}.out
 
           # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ')
+          if [ "$exit_code" != "0:0" ]; then
             echo "Test failed with exit code: $exit_code"
             exit 1
           fi

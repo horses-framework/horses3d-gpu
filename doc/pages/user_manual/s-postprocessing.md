@@ -107,7 +107,7 @@ Surface saving is configured entirely from the **simulation** control file (the 
 | `surface save utau vector`      | *LOGICAL*: Save the friction-velocity **vector** (Cartesian components \(u_{\tau,x}, u_{\tau,y}, u_{\tau,z}\)) on no-slip walls. | `.false.`     |
 | `surface save turbulent`        | *LOGICAL*: Save the wall viscosity (`mu_ns`) and the wall-normal distance (`wall_distance`), needed for \(y^+\).                 | `.false.`     |
 
-Only no-slip wall boundaries actually receive the `utau`/`utau vector`/`turbulent` data; the other flags apply to any saved boundary (walls or slices). `surface save utau` and `surface save utau vector` are independent and can both be active at the same time. Example:
+Only no-slip wall boundaries actually receive the `utau`/`utau vector`/`turbulent` data; the other flags apply to any saved boundary (walls or slices). `surface save utau` and `surface save utau vector` are independent and can both be active at the same time. `surface save utau vector` is not supported together with wall functions (the solver stops with an error). Example:
 
 ```
 boundaries to save       = [cylinder]

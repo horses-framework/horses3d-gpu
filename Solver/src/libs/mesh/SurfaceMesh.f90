@@ -1406,8 +1406,9 @@ Module SurfaceMesh
 
         do surfID = 1, surfaces % numberOfSurfaces
             if (.not. surfaces % surfaceActive(surfID)) cycle
-            if ( (surfaces % surfaceTypes(surfID) .ne. SURFACE_TYPE_BC) .or. &
-                 (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. .not. surfaces % mergeFWHandBC) ) cycle
+            ! same condition as the writer: BC surfaces, or FWH surfaces merged with the BCs
+            if ( .not. ( (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_BC) .or. &
+                         (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. surfaces % mergeFWHandBC) ) ) cycle
              if (.not. surfaces % isNoSlip(surfID)) cycle
              ! save u_tau_NS in each face of the no slip bc zones
 !!!$omp parallel do default(shared) private(faceID,meshFaceID,i,j)

@@ -56,6 +56,7 @@ module Storage
       real(kind=RP), pointer     :: U_zout(:,:,:,:)
       real(kind=RP), pointer     :: mu_NSout(:,:,:,:)
       real(kind=RP), pointer     :: ut_NSout(:,:,:,:)
+      real(kind=RP), pointer     :: u_tau_vec_NSout(:,:,:,:)
       real(kind=RP), pointer     :: wallYout(:,:,:,:)
       real(kind=RP), pointer     :: mu_sgsout(:,:,:,:)
       real(kind=RP), pointer     :: statsout(:,:,:,:)

@@ -635,7 +635,7 @@ surface save utau vector 	& \textit{LOGICAL}: Save the friction-velocity \textbf
 surface save turbulent 	& \textit{LOGICAL}: Save the wall viscosity (\textit{mu\_ns}) and the wall-normal distance (\textit{wall\_distance}), needed for $y^+$. & \textit{.false.} \\ \hline
 \end{longtable}
 
-Only no-slip wall boundaries actually receive the \textit{utau}/\textit{utau vector}/\textit{turbulent} data; the other flags apply to any saved boundary (walls or slices). \textit{surface save utau} and \textit{surface save utau vector} are independent and can both be active at the same time. Example:
+Only no-slip wall boundaries actually receive the \textit{utau}/\textit{utau vector}/\textit{turbulent} data; the other flags apply to any saved boundary (walls or slices). \textit{surface save utau} and \textit{surface save utau vector} are independent and can both be active at the same time. \textit{surface save utau vector} is not supported together with wall functions (the solver stops with an error). Example:
 
 \begin{lstlisting}[language=bash]
 boundaries to save       = [cylinder]

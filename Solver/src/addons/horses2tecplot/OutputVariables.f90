@@ -317,8 +317,8 @@ module OutputVariables
                            U_z => e % U_zout, &
                            mu_NS => e % mu_NSout, &
                            wallY => e % wallY, &
-                           u_tau=> e % ut_NS, &
-                           u_tau_vec=> e % u_tau_vec_NS, &
+                           u_tau=> e % ut_NSout, &
+                           u_tau_vec=> e % u_tau_vec_NSout, &
                            mu_sgs => e % mu_sgsout, &
                            stats => e % statsout)
 
