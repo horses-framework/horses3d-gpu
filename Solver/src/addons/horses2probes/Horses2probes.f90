@@ -6,7 +6,7 @@ module Horses2probesModule
 !     This module implements the horses2probes functionality:
 !     - Reads a probes file with (name, x, y, z) entries
 !     - Finds each probe point in the mesh using Newton iteration
-!       accelerated with element bounding boxes
+!       accelerated with element bounding boxes + spatial hash grid
 !     - Caches probe locations (eID + xi) to a binary file for reuse
 !     - Interpolates the solution at each probe position using Lagrange basis
 !     - Writes output variables to a Tecplot .tec file
@@ -48,6 +48,20 @@ module Horses2probesModule
       real(kind=RP) :: xmin(NDIM)
       real(kind=RP) :: xmax(NDIM)
    end type ElementBBox_t
+
+!  Spatial hash grid for accelerating probe-in-mesh search.
+!  Each grid cell stores the IDs of elements whose bounding box overlaps it.
+   type SpatialGridCell_t
+      integer, allocatable :: eIDs(:)
+      integer              :: count
+   end type SpatialGridCell_t
+
+   type SpatialGrid_t
+      type(SpatialGridCell_t), allocatable :: cells(:,:,:)
+      real(kind=RP) :: origin(NDIM)
+      real(kind=RP) :: inv_dx(NDIM)
+      integer       :: ncells(NDIM)
+   end type SpatialGrid_t
 
    contains
 
@@ -387,7 +401,129 @@ module Horses2probesModule
 !
 !/////////////////////////////////////////////////////////////////////////////////////
 !
-!     Find all probes in the mesh using Newton iteration with bounding box filter.
+!     Build a spatial hash grid over the mesh elements.
+!     Grid resolution ~ cbrt(N_elements) in each direction.
+!     Each cell stores the list of element IDs whose bbox overlaps it.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine BuildSpatialGrid(mesh, bbox, grid)
+      implicit none
+      type(Mesh_t),        intent(in)  :: mesh
+      type(ElementBBox_t), intent(in)  :: bbox(:)
+      type(SpatialGrid_t), intent(out) :: grid
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      real(kind=RP) :: domain_min(NDIM), domain_max(NDIM), domain_size(NDIM), dx(NDIM)
+      integer       :: e, ci, cj, ck, ci1, ci2, cj1, cj2, ck1, ck2, n
+
+      domain_min =  huge(1.0_RP)
+      domain_max = -huge(1.0_RP)
+      do e = 1, mesh % no_of_elements
+         domain_min = min(domain_min, bbox(e) % xmin)
+         domain_max = max(domain_max, bbox(e) % xmax)
+      end do
+      domain_min = domain_min - BBOX_TOL
+      domain_max = domain_max + BBOX_TOL
+      domain_size = domain_max - domain_min
+
+      n = max(1, int(real(mesh % no_of_elements, RP)**(1.0_RP/3.0_RP)))
+      grid % ncells = n
+
+      dx = domain_size / real(n, RP)
+      where (dx < tiny(1.0_RP)) dx = 1.0_RP
+      grid % origin = domain_min
+      grid % inv_dx = 1.0_RP / dx
+
+      allocate(grid % cells(n, n, n))
+      do ck = 1, n
+         do cj = 1, n
+            do ci = 1, n
+               grid % cells(ci,cj,ck) % count = 0
+               allocate(grid % cells(ci,cj,ck) % eIDs(8))
+            end do
+         end do
+      end do
+
+      do e = 1, mesh % no_of_elements
+         ci1 = max(1, int((bbox(e) % xmin(1) - domain_min(1)) * grid % inv_dx(1)) + 1)
+         ci2 = min(n, int((bbox(e) % xmax(1) - domain_min(1)) * grid % inv_dx(1)) + 1)
+         cj1 = max(1, int((bbox(e) % xmin(2) - domain_min(2)) * grid % inv_dx(2)) + 1)
+         cj2 = min(n, int((bbox(e) % xmax(2) - domain_min(2)) * grid % inv_dx(2)) + 1)
+         ck1 = max(1, int((bbox(e) % xmin(3) - domain_min(3)) * grid % inv_dx(3)) + 1)
+         ck2 = min(n, int((bbox(e) % xmax(3) - domain_min(3)) * grid % inv_dx(3)) + 1)
+         do ck = ck1, ck2
+            do cj = cj1, cj2
+               do ci = ci1, ci2
+                  associate(cell => grid % cells(ci,cj,ck))
+                  cell % count = cell % count + 1
+                  if (cell % count > size(cell % eIDs)) &
+                     call GrowIntArray(cell % eIDs, 2*size(cell % eIDs))
+                  cell % eIDs(cell % count) = e
+                  end associate
+               end do
+            end do
+         end do
+      end do
+
+   end subroutine BuildSpatialGrid
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Deallocate a spatial hash grid.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine DestroyGrid(grid)
+      implicit none
+      type(SpatialGrid_t), intent(inout) :: grid
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer :: ci, cj, ck
+
+      do ck = 1, grid % ncells(3)
+         do cj = 1, grid % ncells(2)
+            do ci = 1, grid % ncells(1)
+               if (allocated(grid % cells(ci,cj,ck) % eIDs)) &
+                  deallocate(grid % cells(ci,cj,ck) % eIDs)
+            end do
+         end do
+      end do
+      deallocate(grid % cells)
+
+   end subroutine DestroyGrid
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Grow an integer array to newSize, preserving existing contents.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine GrowIntArray(arr, newSize)
+      implicit none
+      integer, allocatable, intent(inout) :: arr(:)
+      integer,              intent(in)    :: newSize
+      integer, allocatable :: tmp(:)
+
+      allocate(tmp(newSize))
+      tmp(1:size(arr)) = arr
+      call move_alloc(tmp, arr)
+
+   end subroutine GrowIntArray
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Find all probes in the mesh using a spatial hash grid + Newton iteration.
+!     The grid reduces element candidates per probe from O(N_elem) to O(1) on average.
 !
 !/////////////////////////////////////////////////////////////////////////////////////
 !
@@ -402,8 +538,9 @@ module Horses2probesModule
 !     Local variables
 !     ---------------
 !
-      integer         :: pID, found_count, warn_count, processed_count, new_count, milestone
-      integer(kind=8) :: t0, t1, count_rate
+      type(SpatialGrid_t) :: grid
+      integer             :: pID, found_count, warn_count, processed_count, new_count, milestone
+      integer(kind=8)     :: t0, t1, count_rate
 
       found_count     = 0
       warn_count      = 0
@@ -412,12 +549,16 @@ module Horses2probesModule
 
       write(STD_OUT,'(30X,A,I0,A)') "-> Searching ", no_of_probes, " probes..."
 
+      call BuildSpatialGrid(mesh, bbox, grid)
+      write(STD_OUT,'(30X,A,3(I0,A))') "-> Spatial grid: ", &
+         grid % ncells(1), " x ", grid % ncells(2), " x ", grid % ncells(3), " cells"
+
       call system_clock(t0, count_rate)
 
       !$OMP PARALLEL DO SCHEDULE(DYNAMIC,100) REDUCTION(+:found_count) DEFAULT(SHARED) PRIVATE(new_count)
       do pID = 1, no_of_probes
-         call FindProbeInMesh(mesh, bbox, probes(pID) % x, &
-                              probes(pID) % eID, probes(pID) % xi, probes(pID) % found)
+         call FindProbeInMeshFast(mesh, bbox, grid, probes(pID) % x, &
+                                  probes(pID) % eID, probes(pID) % xi, probes(pID) % found)
          if (probes(pID) % found) found_count = found_count + 1
          !$OMP ATOMIC CAPTURE
          processed_count = processed_count + 1
@@ -437,6 +578,8 @@ module Horses2probesModule
       write(STD_OUT,'(30X,A)') "   [done]"
       write(STD_OUT,'(30X,A,F8.3,A)') "-> Parallel search time: ", &
          real(t1-t0,RP)/real(count_rate,RP), " s"
+
+      call DestroyGrid(grid)
 
       ! Print warnings sequentially after the parallel search
       do pID = 1, no_of_probes
@@ -459,7 +602,63 @@ module Horses2probesModule
 !
 !/////////////////////////////////////////////////////////////////////////////////////
 !
+!     Search for x_probe using a spatial hash grid to limit candidate elements,
+!     then a bounding box filter, then Newton iteration.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine FindProbeInMeshFast(mesh, bbox, grid, x_probe, eID, xi, found)
+      implicit none
+      type(Mesh_t),        intent(in)  :: mesh
+      type(ElementBBox_t), intent(in)  :: bbox(:)
+      type(SpatialGrid_t), intent(in)  :: grid
+      real(kind=RP),       intent(in)  :: x_probe(NDIM)
+      integer,             intent(out) :: eID
+      real(kind=RP),       intent(out) :: xi(NDIM)
+      logical,             intent(out) :: found
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer :: ci0, cj0, ck0, ci, cj, ck, ic, e
+
+      found = .false.
+      eID   = 0
+
+      ci0 = min(grid % ncells(1), max(1, &
+            int((x_probe(1) - grid % origin(1)) * grid % inv_dx(1)) + 1))
+      cj0 = min(grid % ncells(2), max(1, &
+            int((x_probe(2) - grid % origin(2)) * grid % inv_dx(2)) + 1))
+      ck0 = min(grid % ncells(3), max(1, &
+            int((x_probe(3) - grid % origin(3)) * grid % inv_dx(3)) + 1))
+
+      do ck = max(1, ck0-1), min(grid % ncells(3), ck0+1)
+         do cj = max(1, cj0-1), min(grid % ncells(2), cj0+1)
+            do ci = max(1, ci0-1), min(grid % ncells(1), ci0+1)
+               associate(cell => grid % cells(ci,cj,ck))
+               do ic = 1, cell % count
+                  e = cell % eIDs(ic)
+                  if (any(x_probe < bbox(e) % xmin - BBOX_TOL)) cycle
+                  if (any(x_probe > bbox(e) % xmax + BBOX_TOL)) cycle
+                  call FindPointInElement(mesh % elements(e), mesh % is2D, x_probe, xi, found)
+                  if (found) then
+                     eID = e
+                     return
+                  end if
+               end do
+               end associate
+            end do
+         end do
+      end do
+
+   end subroutine FindProbeInMeshFast
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
 !     Search all elements for x_probe, using bounding box pre-filter.
+!     Kept as fallback; the fast path uses FindProbeInMeshFast.
 !
 !/////////////////////////////////////////////////////////////////////////////////////
 !
@@ -621,8 +820,11 @@ module Horses2probesModule
 !/////////////////////////////////////////////////////////////////////////////////////
 !
 !     For each solution: interpolate Q at all probe locations, compute output
-!     variables and write a Tecplot .tec file. The mock element is allocated
-!     once and reused across probes.
+!     variables and write a Tecplot .tec file.
+!
+!     Phase 1 (Lagrange interpolation) and Phase 2 (output variable computation)
+!     are both parallelised with OpenMP.  Phase 2 uses one private mock element
+!     per thread to avoid false sharing on the result arrays.
 !
 !/////////////////////////////////////////////////////////////////////////////////////
 !
@@ -639,8 +841,8 @@ module Horses2probesModule
 !     Local variables
 !     ---------------
 !
-      type(Element_t)                :: mock_e
-      real(kind=RP),     allocatable :: output(:,:,:,:)
+      type(Element_t)                :: mock_e_priv   ! thread-private in OMP region
+      real(kind=RP),     allocatable :: output_priv(:,:,:,:)
       real(kind=RP),     allocatable :: outVars(:,:)
       real(kind=RP),     allocatable :: Q_all(:,:)
       integer                        :: pID, fid, eID, found_count
@@ -666,39 +868,8 @@ module Horses2probesModule
 !     Set up output variable metadata
 !     ---------------------------------
       call getOutputVariables()
-      allocate(output (no_of_outputVariables, 0:0, 0:0, 0:0))
       allocate(outVars(no_of_outputVariables, no_of_probes))
       outVars = 0.0_RP
-!
-!     Allocate mock element once — reused for every probe
-!     -----------------------------------------------------
-      mock_e % Nout = 0
-      allocate(mock_e % Qout    (NVARS, 0:0, 0:0, 0:0))
-      allocate(mock_e % xOut    (NDIM,  0:0, 0:0, 0:0))
-      allocate(mock_e % QDot_out(NVARS, 0:0, 0:0, 0:0))
-      allocate(mock_e % U_xout  (NVARS, 0:0, 0:0, 0:0))
-      allocate(mock_e % U_yout  (NVARS, 0:0, 0:0, 0:0))
-      allocate(mock_e % U_zout  (NVARS, 0:0, 0:0, 0:0))
-      allocate(mock_e % statsout (1,    0:0, 0:0, 0:0))
-      allocate(mock_e % mu_NSout (1,    0:0, 0:0, 0:0))
-      allocate(mock_e % ut_NSout (1,    0:0, 0:0, 0:0))
-      allocate(mock_e % wallYout (1,    0:0, 0:0, 0:0))
-      allocate(mock_e % mu_sgsout(1,    0:0, 0:0, 0:0))
-      allocate(mock_e % wallY    (1,    0:0, 0:0, 0:0))
-      allocate(mock_e % ut_NS    (1,    0:0, 0:0, 0:0))
-
-      mock_e % QDot_out  = 0.0_RP
-      mock_e % U_xout    = 0.0_RP
-      mock_e % U_yout    = 0.0_RP
-      mock_e % U_zout    = 0.0_RP
-      mock_e % wallY     = 0.0_RP
-      mock_e % ut_NS     = 0.0_RP
-      mock_e % statsout  = 0.0_RP
-      mock_e % mu_NSout  = 0.0_RP
-      mock_e % ut_NSout  = 0.0_RP
-      mock_e % wallYout  = 0.0_RP
-      mock_e % mu_sgsout = 0.0_RP
-      mock_e % sensor    = 0.0_RP
 !
 !     Phase 1: interpolate Q at all probe locations (parallel)
 !     ----------------------------------------------------------
@@ -713,30 +884,64 @@ module Horses2probesModule
       end do
       !$OMP END PARALLEL DO
 !
-!     Phase 2: compute output variables (sequential — shared mock element)
-!     ---------------------------------------------------------------------
-      do pID = 1, no_of_probes
-         if (.not. probes(pID) % found) cycle
+!     Phase 2: compute output variables — each thread owns a private mock element
+!     so there are no write conflicts on mock_e or output.
+!     -----------------------------------------------------------------------------
+      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(pID, mock_e_priv, output_priv)
 
-         mock_e % Qout(:,0,0,0) = Q_all(:,pID)
-         mock_e % xOut(:,0,0,0) = probes(pID) % x
+         mock_e_priv % Nout = 0
+         allocate(mock_e_priv % Qout    (NVARS, 0:0, 0:0, 0:0))
+         allocate(mock_e_priv % xOut    (NDIM,  0:0, 0:0, 0:0))
+         allocate(mock_e_priv % QDot_out(NVARS, 0:0, 0:0, 0:0))
+         allocate(mock_e_priv % U_xout  (NVARS, 0:0, 0:0, 0:0))
+         allocate(mock_e_priv % U_yout  (NVARS, 0:0, 0:0, 0:0))
+         allocate(mock_e_priv % U_zout  (NVARS, 0:0, 0:0, 0:0))
+         allocate(mock_e_priv % statsout (1,    0:0, 0:0, 0:0))
+         allocate(mock_e_priv % mu_NSout (1,    0:0, 0:0, 0:0))
+         allocate(mock_e_priv % ut_NSout (1,    0:0, 0:0, 0:0))
+         allocate(mock_e_priv % wallYout (1,    0:0, 0:0, 0:0))
+         allocate(mock_e_priv % mu_sgsout(1,    0:0, 0:0, 0:0))
+         allocate(mock_e_priv % wallY    (1,    0:0, 0:0, 0:0))
+         allocate(mock_e_priv % ut_NS    (1,    0:0, 0:0, 0:0))
+         allocate(output_priv(no_of_outputVariables, 0:0, 0:0, 0:0))
 
-         call ComputeOutputVariables(no_of_outputVariables, outputVariableNames, &
-                                      mock_e % Nout, mock_e, output, mesh % refs, &
-                                      .false., .false., .false.)
-         outVars(:,pID) = output(:,0,0,0)
-      end do
+         mock_e_priv % QDot_out  = 0.0_RP
+         mock_e_priv % U_xout    = 0.0_RP
+         mock_e_priv % U_yout    = 0.0_RP
+         mock_e_priv % U_zout    = 0.0_RP
+         mock_e_priv % wallY     = 0.0_RP
+         mock_e_priv % ut_NS     = 0.0_RP
+         mock_e_priv % statsout  = 0.0_RP
+         mock_e_priv % mu_NSout  = 0.0_RP
+         mock_e_priv % ut_NSout  = 0.0_RP
+         mock_e_priv % wallYout  = 0.0_RP
+         mock_e_priv % mu_sgsout = 0.0_RP
+         mock_e_priv % sensor    = 0.0_RP
+
+         !$OMP DO SCHEDULE(DYNAMIC,256)
+         do pID = 1, no_of_probes
+            if (.not. probes(pID) % found) cycle
+
+            mock_e_priv % Qout(:,0,0,0) = Q_all(:,pID)
+            mock_e_priv % xOut(:,0,0,0) = probes(pID) % x
+
+            call ComputeOutputVariables(no_of_outputVariables, outputVariableNames, &
+                                         mock_e_priv % Nout, mock_e_priv, output_priv, &
+                                         mesh % refs, .false., .false., .false.)
+            outVars(:,pID) = output_priv(:,0,0,0)
+         end do
+         !$OMP END DO
+
+         deallocate(mock_e_priv % Qout, mock_e_priv % xOut, mock_e_priv % QDot_out)
+         deallocate(mock_e_priv % U_xout, mock_e_priv % U_yout, mock_e_priv % U_zout)
+         deallocate(mock_e_priv % statsout, mock_e_priv % mu_NSout, mock_e_priv % ut_NSout)
+         deallocate(mock_e_priv % wallYout, mock_e_priv % mu_sgsout)
+         deallocate(mock_e_priv % wallY, mock_e_priv % ut_NS)
+         deallocate(output_priv)
+
+      !$OMP END PARALLEL
 
       deallocate(Q_all)
-!
-!     Deallocate mock element
-!     ------------------------
-      deallocate(mock_e % Qout, mock_e % xOut, mock_e % QDot_out)
-      deallocate(mock_e % U_xout, mock_e % U_yout, mock_e % U_zout)
-      deallocate(mock_e % statsout, mock_e % mu_NSout, mock_e % ut_NSout)
-      deallocate(mock_e % wallYout, mock_e % mu_sgsout)
-      deallocate(mock_e % wallY, mock_e % ut_NS)
-      deallocate(output)
 !
 !     Write output .tec file
 !     -----------------------
@@ -808,6 +1013,6 @@ module Horses2probesModule
                        - A(1,2)*(A(2,1)*b(3) - b(2)*A(3,1))   &
                        + b(1)*(A(2,1)*A(3,2) - A(2,2)*A(3,1)) )
 
-   end function Solve3x3 
+   end function Solve3x3
 
 end module Horses2probesModule
