@@ -1,0 +1,6 @@
+!
+!  horses2plt CI: volumetric statistics, default variables
+!
+hmesh file    = MESH/Cylinder_0000000000.hmesh
+hsol file     = RESULTS/Cylinder.stats.hsol
+has gradients = .true.

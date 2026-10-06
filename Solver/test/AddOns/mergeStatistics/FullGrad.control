@@ -1,0 +1,43 @@
+!
+!  mergeStatistics CI (with gradients): statistics accumulated over iterations 0-19 without reset (reference).
+!  With "reset interval = 10", ResetGrad.stats.0000000010.hsol holds iterations 0-9 and
+!  ResetGrad.stats.0000000020.hsol iterations 10-19, so merging them must give this result
+!
+Flow equations        = "NS"
+mesh file name        = "../../TestMeshes/CylinderNSpol3.mesh"
+Polynomial order      = 3
+Number of time steps  = 19
+Output Interval       = 10
+Convergence tolerance = 1.d-10
+cfl                   = 0.3
+dcfl                  = 0.3
+mach number           = 0.3
+Reynolds number       = 200.0
+AOA theta             = 0.0
+AOA phi               = 90.0
+solution file name    = "RESULTS/FullGrad.hsol"
+save gradients with solution = .true.
+restart               = .false.
+restart file name     = "RESULTS/FullGrad.hsol"
+riemann solver        = roe
+
+#define boundary InnerCylinder
+  type = NoSlipWall
+#end
+
+#define boundary bottom__top
+  type = FreeSlipWall
+#end
+
+#define boundary back__left__front
+  type = Inflow
+#end
+
+#define boundary right
+  type = Outflow
+#end
+
+#define statistics
+   Sampling interval  = 1
+   Starting iteration = 0
+#end

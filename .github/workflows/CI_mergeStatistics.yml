@@ -1,0 +1,183 @@
+name: CI MERGE STATISTICS
+
+########################################################################
+# Tests the horses.mergeStats tool (Solver/src/addons/mergeStatistics).
+#
+# Short NS cylinder runs (Solver/test/AddOns/mergeStatistics) generate:
+#   * Reset:  statistics dumped and reset every 10 iterations
+#             -> RESULTS/Reset.stats.0000000010.hsol (iterations 0-9)
+#             -> RESULTS/Reset.stats.0000000020.hsol (iterations 10-19)
+#   * Full:   statistics accumulated over iterations 0-19 without reset
+#             -> RESULTS/Full.stats.hsol (reference)
+# and the same pair saving gradients (ResetGrad / FullGrad).
+#
+# Merging the partial files must reproduce the reference statistics. Both
+# files are converted to Tecplot with horses2plt and compared with
+# compare_tec.py.
+########################################################################
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Permissions for codecov
+    permissions:
+      id-token: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['gfortran']
+        mode: ['RELEASE']
+        comm: ['SEQUENTIAL']
+        enable_threads: ['NO']
+
+    name: MERGE STATISTICS - ${{ matrix.compiler }} - ${{ matrix.mode }} - ${{ matrix.comm }}
+
+    env:
+      MAKE_FLAGS: MODE=${{ matrix.mode }} COMPILER=${{ matrix.compiler }} COMM=${{ matrix.comm }} ENABLE_THREADS=${{ matrix.enable_threads }} WITH_METIS=NO
+      # Relative tolerance of the comparisons (the Tecplot files have 10 significant digits)
+      TOL: 1.0e-8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Coverage Flags
+        run: |
+          if [ "${{ matrix.mode }}" = "DEBUG" ]; then
+            echo "EXTRA_COV=-Og -fprofile-arcs -ftest-coverage" >> $GITHUB_ENV
+          else
+            echo "EXTRA_COV=" >> $GITHUB_ENV
+          fi
+
+      - name: Show ${{ matrix.compiler }} version
+        run: ${{ matrix.compiler }} --version
+
+      - name: Configure
+        working-directory: ./Solver
+        run: ./configure
+
+      - name: Compile horses3d.ns, horses.mergeStats and horses2plt
+        working-directory: ./Solver
+        run: |
+          make allclean $MAKE_FLAGS
+          make ns $MAKE_FLAGS EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+          make addons ADDONS="mergeStatistics horses2tecplot" $MAKE_FLAGS EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+          ls -l bin
+
+########################################################################
+#######              GENERATE THE STATISTICS FILES              ########
+########################################################################
+
+      - name: Run NS Cylinder - statistics without gradients
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          ./horses3d.ns Full.control
+          ./horses3d.ns Reset.control
+          ls -l RESULTS
+          for f in RESULTS/Full.stats.hsol RESULTS/Reset.stats.0000000010.hsol RESULTS/Reset.stats.0000000020.hsol; do
+            [ -s "$f" ] || { echo "Missing $f"; exit 1; }
+          done
+
+      - name: Run NS Cylinder - statistics with gradients
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          ./horses3d.ns FullGrad.control
+          ./horses3d.ns ResetGrad.control
+          ls -l RESULTS
+          for f in RESULTS/FullGrad.stats.hsol RESULTS/ResetGrad.stats.0000000010.hsol RESULTS/ResetGrad.stats.0000000020.hsol; do
+            [ -s "$f" ] || { echo "Missing $f"; exit 1; }
+          done
+        if: '!cancelled()'
+
+      - name: Convert reference statistics to Tecplot
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          ./stats2tec.sh MESH/Full_0000000000.hmesh     RESULTS/Full.stats.hsol
+          ./stats2tec.sh MESH/FullGrad_0000000000.hmesh RESULTS/FullGrad.stats.hsol --has-gradients
+        if: '!cancelled()'
+
+########################################################################
+#######              MERGE STATISTICS                           ########
+########################################################################
+
+      - name: Merge - without gradients, --file-name
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          rm -f RESULTS/Merged.stats.hsol
+          ./horses.mergeStats RESULTS/Reset.stats.0000000010.hsol RESULTS/Reset.stats.0000000020.hsol \
+                              --file-name=RESULTS/Merged.stats.hsol
+          ./stats2tec.sh MESH/Full_0000000000.hmesh RESULTS/Merged.stats.hsol
+          ./compare_tec.py RESULTS/Full.stats.tec RESULTS/Merged.stats.tec $TOL
+        if: '!cancelled()'
+
+      - name: Merge - default output name, --initial-iteration
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          rm -f Merged.stats.hsol
+          ./horses.mergeStats RESULTS/Reset.stats.0000000010.hsol RESULTS/Reset.stats.0000000020.hsol --initial-iteration=1
+          ./stats2tec.sh MESH/Full_0000000000.hmesh Merged.stats.hsol
+          ./compare_tec.py RESULTS/Full.stats.tec Merged.stats.tec $TOL
+        if: '!cancelled()'
+
+      - name: Merge - single file must reproduce the input
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          rm -f RESULTS/Single.stats.hsol
+          ./horses.mergeStats RESULTS/Reset.stats.0000000020.hsol --initial-iteration=11 --file-name=RESULTS/Single.stats.hsol
+          ./stats2tec.sh MESH/Full_0000000000.hmesh RESULTS/Reset.stats.0000000020.hsol
+          ./stats2tec.sh MESH/Full_0000000000.hmesh RESULTS/Single.stats.hsol
+          ./compare_tec.py RESULTS/Reset.stats.0000000020.tec RESULTS/Single.stats.tec $TOL
+        if: '!cancelled()'
+
+      - name: Merge - with gradients, --has-gradients
+        working-directory: ./Solver/test/AddOns/mergeStatistics
+        run: |
+          rm -f RESULTS/MergedGrad.stats.hsol
+          ./horses.mergeStats RESULTS/ResetGrad.stats.0000000010.hsol RESULTS/ResetGrad.stats.0000000020.hsol \
+                              --has-gradients --file-name=RESULTS/MergedGrad.stats.hsol
+          ./stats2tec.sh MESH/FullGrad_0000000000.hmesh RESULTS/MergedGrad.stats.hsol --has-gradients
+          ./compare_tec.py RESULTS/FullGrad.stats.tec RESULTS/MergedGrad.stats.tec $TOL
+        if: '!cancelled()'
+
+      # TODO: known failure, enable once fixed
+      #  * The final statistics file of a run with "reset interval" gets a wrong weight.
+      #    Intermediate files at iteration N hold iterations N-10..N-1 (they are dumped
+      #    before sampling), but the final file at iteration N holds the last reset
+      #    iteration up to N, so it has one more sample than the weight mergeStats gives it:
+      #      ./horses3d.ns Full25.control && ./horses3d.ns Reset25.control
+      #      ./horses.mergeStats RESULTS/Reset25.stats.0000000010.hsol RESULTS/Reset25.stats.0000000020.hsol \
+      #                          RESULTS/Reset25.stats.hsol --file-name=RESULTS/Merged25.stats.hsol
+      #      ./stats2tec.sh MESH/Full25_0000000000.hmesh RESULTS/Full25.stats.hsol
+      #      ./stats2tec.sh MESH/Full25_0000000000.hmesh RESULTS/Merged25.stats.hsol
+      #      ./compare_tec.py RESULTS/Full25.stats.tec RESULTS/Merged25.stats.tec $TOL
+
+#
+# CHECK CODE COVERAGE
+# -------------------
+
+      - name: Install gcovr
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcovr
+
+      - name: Generate Coverage Report
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        run: gcovr --root . --print-summary --xml coverage.xml
+
+      - name: Upload Coverage to Codecov
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          flags: mergestatistics
+          slug: horses-framework/horses3d-gpu
+          use_oidc: true
