@@ -28,6 +28,7 @@ module Horses2probesModule
    public ReadProbesFile
    public FindAndCacheProbes
    public InterpolateAndWriteProbes
+   public SortProbesByEID
 
    integer,       parameter :: MAX_NEWTON = 100
    real(kind=RP), parameter :: NEWTON_TOL = 1.0e-10_RP
@@ -840,7 +841,8 @@ module Horses2probesModule
       real(kind=RP),     allocatable :: output_priv(:,:,:,:)
       real(kind=RP),     allocatable :: outVars(:,:)
       real(kind=RP),     allocatable :: Q_all(:,:)
-      integer                        :: pID, fid, eID, found_count
+      integer,           allocatable :: sort_idx(:)
+      integer                        :: pID, k, fid, eID, found_count
       integer(kind=8)                :: t_total, t_end, count_rate
       character(len=LINE_LENGTH)     :: outputFile, formatout
       character(len=1024)            :: title
@@ -866,16 +868,23 @@ module Horses2probesModule
       allocate(outVars(no_of_outputVariables, no_of_probes))
       outVars = 0.0_RP
 !
-!     Phase 1: interpolate Q at all probe locations (parallel)
-!     ----------------------------------------------------------
+!     Phase 1: interpolate Q at all probe locations.
+!     Probes are visited in element-ID order (counting sort) so that
+!     consecutive probes access the same e%Q — keeping it in cache.
+!     ------------------------------------------------------------------
       allocate(Q_all(NVARS, no_of_probes))
+      allocate(sort_idx(no_of_probes))
       Q_all = 0.0_RP
 
-      do pID = 1, no_of_probes
+      call SortProbesByEID(probes, no_of_probes, mesh % no_of_elements, sort_idx)
+
+      do k = 1, no_of_probes
+         pID = sort_idx(k)
          if (.not. probes(pID) % found) cycle
          Q_all(:,pID) = InterpolateQAtProbe(mesh % elements(probes(pID) % eID), &
                                              probes(pID) % xi, mesh % nodeType)
       end do
+      deallocate(sort_idx)
 !
 !     Phase 2: compute output variables
 !     -----------------------------------
@@ -957,6 +966,64 @@ module Horses2probesModule
       deallocate(outVars)
 
    end subroutine InterpolateAndWriteProbes
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Counting sort of probes by element ID — O(N_probes + N_elem).
+!     Returns sort_idx(k) = original probe index of the k-th probe in eID order.
+!     Unfound probes (eID=0) are placed at the end.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine SortProbesByEID(probes, no_of_probes, no_of_elements, sort_idx)
+      implicit none
+      type(ProbeData_t), intent(in)  :: probes(:)
+      integer,           intent(in)  :: no_of_probes
+      integer,           intent(in)  :: no_of_elements
+      integer,           intent(out) :: sort_idx(:)
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer, allocatable :: count(:), offset(:)
+      integer              :: pID, eID, tail
+
+      allocate(count(0:no_of_elements))
+      count = 0
+      do pID = 1, no_of_probes
+         eID = probes(pID) % eID
+         if (eID >= 1 .and. eID <= no_of_elements) then
+            count(eID) = count(eID) + 1
+         else
+            count(0) = count(0) + 1
+         end if
+      end do
+
+      allocate(offset(0:no_of_elements))
+      offset(1) = 1
+      do eID = 2, no_of_elements
+         offset(eID) = offset(eID-1) + count(eID-1)
+      end do
+      ! unfound probes go to the tail
+      tail = offset(no_of_elements) + count(no_of_elements)
+      offset(0) = tail
+
+      do pID = 1, no_of_probes
+         eID = probes(pID) % eID
+         if (eID >= 1 .and. eID <= no_of_elements) then
+            sort_idx(offset(eID)) = pID
+            offset(eID) = offset(eID) + 1
+         else
+            sort_idx(offset(0)) = pID
+            offset(0) = offset(0) + 1
+         end if
+      end do
+
+      deallocate(count, offset)
+
+   end subroutine SortProbesByEID
 
 !
 !/////////////////////////////////////////////////////////////////////////////////////
