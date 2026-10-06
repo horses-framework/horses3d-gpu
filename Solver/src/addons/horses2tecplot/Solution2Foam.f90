@@ -420,6 +420,26 @@ MODULE Solution2FoamModule
 
          end if
 
+         if (hasUt_NS) then
+            allocate( e % ut_NSout(1,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % ut_NSout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % ut_NSout(:,i,j,k) = e % ut_NSout(:,i,j,k) + e % ut_NS(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
+            end do            ; end do            ; end do
+         end if
+
+         if (hasUTauVec_NS) then
+            allocate( e % u_tau_vec_NSout(1:NDIM,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % u_tau_vec_NSout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % u_tau_vec_NSout(:,i,j,k) = e % u_tau_vec_NSout(:,i,j,k) + e % u_tau_vec_NS(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
+            end do            ; end do            ; end do
+         end if
+
       end subroutine ProjectStorageHomogeneousPoints
 	  
 !

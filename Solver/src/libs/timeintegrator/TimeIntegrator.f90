@@ -489,7 +489,14 @@
       t = self % time
 
 #if defined(NAVIERSTOKES)
-      if( .not. sem % mesh % IBM % active ) call Initialize_WallConnection(controlVariables, sem % mesh)
+      if( .not. sem % mesh % IBM % active ) then
+         call Initialize_WallConnection(controlVariables, sem % mesh)
+!        The friction-velocity vector is only computed from the resolved velocity gradient
+!        (getU_tauInSurfaces), which is skipped when wall functions are active
+         if ( useWallFunc .and. surfacesMesh % active .and. surfacesMesh % saveUtauVector ) then
+            error stop "'surface save utau vector' is not supported together with wall functions"
+         end if
+      end if
       if (useTrip) call randomTrip % construct(sem % mesh, controlVariables)
       call initializeChannel(controlVariables)
 #endif
