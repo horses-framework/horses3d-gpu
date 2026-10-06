@@ -2913,6 +2913,8 @@ slavecoord:             DO l = 1, 4
          CALL genHexMap % destruct()
          DEALLOCATE(genHexMap)
 
+         call self % BuildSpatialGrid
+
       end subroutine HexMesh_ConstructGeometry
 
       subroutine CommunicateMPIFaceMinimumDistance(self)
@@ -4039,7 +4041,7 @@ slavecoord:             DO l = 1, 4
 !
       logical function HexMesh_FindPointWithCoords(self, x, eID, xi, optionalElements, eID_hint)
          implicit none
-         class(HexMesh), intent(inout)      :: self
+         class(HexMesh), intent(in)         :: self
          real(kind=RP),    intent(in)       :: x(NDIM)
          integer,          intent(out)      :: eID
          real(kind=RP),    intent(out)      :: xi(NDIM)
@@ -4085,9 +4087,8 @@ slavecoord:             DO l = 1, 4
             end do
          end if
 !
-!        Search using spatial grid (built lazily on first call)
-!        -------------------------------------------------------
-         if ( .not. self % sgrid % built ) call self % BuildSpatialGrid
+!        Search using spatial grid
+!        -------------------------
          eID = 0
          block
             integer :: cx0, cy0, cz0, cx1, cy1, cz1, cx, cy, cz, k, cand
