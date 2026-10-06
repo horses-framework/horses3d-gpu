@@ -48,8 +48,24 @@ MODULE HexMeshClass
 !
 !     -----------------------------------------------------------------------
 !     Uniform-grid spatial index for fast point-in-element queries.
+!     Built once (lazy) the first time FindPointWithCoords is called without
+!     a hint that succeeds.  Each cell stores a list of element IDs whose
+!     linearised bounding box overlaps it; a probe query only visits the
+!     ~3×3×3 = 27 cells surrounding the probe instead of all N_elem.
 !     -----------------------------------------------------------------------
 !
+      type :: MeshSGCell_t
+         integer              :: n   = 0
+         integer, allocatable :: eID(:)
+      end type MeshSGCell_t
+
+      type :: MeshSpatialGrid_t
+         logical :: built = .false.
+         integer :: ncx, ncy, ncz
+         real(kind=RP) :: xmin(3), dx(3)
+         type(MeshSGCell_t), allocatable :: cells(:,:,:)
+      end type MeshSpatialGrid_t
+
 !     ---------------
 !     Mesh definition
 !     ---------------
@@ -77,6 +93,7 @@ MODULE HexMeshClass
          type(MPI_FacesSet_t)                      :: MPIfaces
          type(IBM_type)                            :: IBM
          type(Zone_t), dimension(:), allocatable   :: zones
+         type(MeshSpatialGrid_t)                   :: sgrid
          logical                                   :: child       = .FALSE.         ! Is this a (multigrid) child mesh? default .FALSE.
          logical                                   :: meshIs2D    = .FALSE.         ! Is this a 2D mesh? default .FALSE.
          integer                                   :: dir2D       = 0               ! If it is in fact a 2D mesh, dir 2D stores the global direction IX, IY or IZ
@@ -140,6 +157,7 @@ MODULE HexMeshClass
             procedure :: GatherMPIFacesAviscFlux       => HexMesh_GatherMPIFacesAviscFlux
             procedure :: FindPointWithCoords           => HexMesh_FindPointWithCoords
             procedure :: FindPointWithCoordsInNeighbors=> HexMesh_FindPointWithCoordsInNeighbors
+            procedure :: BuildSpatialGrid              => HexMesh_BuildSpatialGrid
             procedure :: ComputeWallDistances          => HexMesh_ComputeWallDistances
             procedure :: ConformingOnZone              => HexMesh_ConformingOnZone
             procedure :: SetStorageToEqn               => HexMesh_SetStorageToEqn
@@ -4040,7 +4058,7 @@ slavecoord:             DO l = 1, 4
 !
       logical function HexMesh_FindPointWithCoords(self, x, eID, xi, optionalElements, eID_hint)
          implicit none
-         class(HexMesh), intent(in)         :: self
+         class(HexMesh), intent(inout)      :: self
          real(kind=RP),    intent(in)       :: x(NDIM)
          integer,          intent(out)      :: eID
          real(kind=RP),    intent(out)      :: xi(NDIM)
@@ -4086,15 +4104,55 @@ slavecoord:             DO l = 1, 4
             end do
          end if
 !
-!        Search in linear (not curved) mesh (faster and safer)
-!        -----------------------------------------------------
+!        Search using spatial grid (built lazily on first call)
+!        -------------------------------------------------------
+         if ( .not. self % sgrid % built ) call self % BuildSpatialGrid
+         eID = 0
+         block
+            integer :: cx0, cy0, cz0, cx1, cy1, cz1, cx, cy, cz, k, cand
+            integer :: ncx_loc, ncy_loc, ncz_loc
+            ncx_loc = self % sgrid % ncx
+            ncy_loc = self % sgrid % ncy
+            ncz_loc = self % sgrid % ncz
+            cx0 = max(1, int((x(1)-self%sgrid%xmin(1))/self%sgrid%dx(1)))
+            cy0 = max(1, int((x(2)-self%sgrid%xmin(2))/self%sgrid%dx(2)))
+            cz0 = max(1, int((x(3)-self%sgrid%xmin(3))/self%sgrid%dx(3)))
+            cx1 = min(ncx_loc, cx0+1)
+            cy1 = min(ncy_loc, cy0+1)
+            cz1 = min(ncz_loc, cz0+1)
+            cx0 = max(1, cx0-1)
+            cy0 = max(1, cy0-1)
+            cz0 = max(1, cz0-1)
+            outer: do cz = cz0, cz1 ; do cy = cy0, cy1 ; do cx = cx0, cx1
+               associate(cell => self % sgrid % cells(cx,cy,cz))
+               do k = 1, cell % n
+                  cand = cell % eID(k)
+                  success = self % elements(cand) % FindPointInLinElement(x, self % nodes)
+                  if ( success ) then
+                     eID = cand
+                     exit outer
+                  end if
+               end do
+               end associate
+            end do ; end do ; end do outer
+         end block
+!
+!        If found in linear mesh, use FindPointWithCoords in that element and, if necessary, in neighbors...
+!        ---------------------------------------------------------------------------------------------------
+         if (eID >= 1 .and. eID <= self % no_of_elements) then
+            success = self % FindPointWithCoordsInNeighbors(x, xi, eID, 2)
+            if ( success ) then
+               HexMesh_FindPointWithCoords = .true.
+               return
+            end if
+         end if
+!
+!        Fallback: linear scan (point near boundary or grid cell boundary)
+!        -----------------------------------------------------------------
          do eID = 1, self % no_of_elements
             success = self % elements(eID) % FindPointInLinElement(x, self % nodes)
             if ( success ) exit
          end do
-!
-!        If found in linear mesh, use FindPointWithCoords in that element and, if necessary, in neighbors...
-!        ---------------------------------------------------------------------------------------------------
          if (eID <= self % no_of_elements) then
             success = self % FindPointWithCoordsInNeighbors(x, xi, eID, 2)
             if ( success ) then
@@ -4118,6 +4176,82 @@ slavecoord:             DO l = 1, 4
          end do
 
       end function HexMesh_FindPointWithCoords
+!
+!////////////////////////////////////////////////////////////////////////
+!
+!     Build a uniform spatial grid index over the linearised element bounding
+!     boxes.  Resolution: cbrt(N_elem) cells per side (capped at 200).
+!     Called once lazily from FindPointWithCoords.
+!
+      subroutine HexMesh_BuildSpatialGrid(self)
+         implicit none
+         class(HexMesh), intent(inout) :: self
+         integer  :: eID, i, ncx, ncy, ncz
+         integer  :: ix0, iy0, iz0, ix1, iy1, iz1, ix, iy, iz
+         real(kind=RP) :: xlo(3), xhi(3), glo(3), ghi(3), dx(3)
+         real(kind=RP) :: cbrt_n
+
+         if ( self % sgrid % built ) return
+
+         cbrt_n = self % no_of_elements ** (1.0_RP/3.0_RP)
+         ncx = min(200, max(1, nint(cbrt_n)))
+         ncy = ncx
+         ncz = ncx
+
+!        Compute global bounding box from node coordinates
+         glo = huge(1.0_RP)
+         ghi = -huge(1.0_RP)
+         do i = 1, size(self % nodes)
+            glo = min(glo, self % nodes(i) % x)
+            ghi = max(ghi, self % nodes(i) % x)
+         end do
+         dx = (ghi - glo) / real([ncx,ncy,ncz], RP)
+         where (dx < tiny(1.0_RP)) dx = 1.0_RP
+
+         self % sgrid % ncx   = ncx
+         self % sgrid % ncy   = ncy
+         self % sgrid % ncz   = ncz
+         self % sgrid % xmin  = glo
+         self % sgrid % dx    = dx
+         allocate( self % sgrid % cells(ncx, ncy, ncz) )
+
+!        Insert each element into every cell its bbox overlaps
+         do eID = 1, self % no_of_elements
+            xlo = huge(1.0_RP)
+            xhi = -huge(1.0_RP)
+            do i = 1, 8
+               xlo = min(xlo, self % nodes(self % elements(eID) % nodeIDs(i)) % x)
+               xhi = max(xhi, self % nodes(self % elements(eID) % nodeIDs(i)) % x)
+            end do
+
+            ix0 = max(1,   int((xlo(1)-glo(1))/dx(1)) + 1)
+            iy0 = max(1,   int((xlo(2)-glo(2))/dx(2)) + 1)
+            iz0 = max(1,   int((xlo(3)-glo(3))/dx(3)) + 1)
+            ix1 = min(ncx, int((xhi(1)-glo(1))/dx(1)) + 1)
+            iy1 = min(ncy, int((xhi(2)-glo(2))/dx(2)) + 1)
+            iz1 = min(ncz, int((xhi(3)-glo(3))/dx(3)) + 1)
+
+            do iz = iz0, iz1 ; do iy = iy0, iy1 ; do ix = ix0, ix1
+               associate(cell => self % sgrid % cells(ix,iy,iz))
+               cell % n = cell % n + 1
+               if ( .not. allocated(cell % eID) ) then
+                  allocate( cell % eID(4) )
+               else if ( cell % n > size(cell % eID) ) then
+                  block
+                     integer, allocatable :: tmp(:)
+                     allocate( tmp(size(cell%eID)*2) )
+                     tmp(1:size(cell%eID)) = cell % eID
+                     call move_alloc(tmp, cell % eID)
+                  end block
+               end if
+               cell % eID(cell % n) = eID
+               end associate
+            end do ; end do ; end do
+         end do
+
+         self % sgrid % built = .true.
+
+      end subroutine HexMesh_BuildSpatialGrid
 !
 !////////////////////////////////////////////////////////////////////////
 !
