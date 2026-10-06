@@ -711,7 +711,7 @@ contains
 !
     pointsToFind = 0
     newPointToFind = 0
-!$omp do schedule(runtime)private(ii,jj,kk,eID,Q,Qtemp,delta_temp,xi,found,allfound)
+!$omp do schedule(runtime)private(ii,jj,kk,eID,delta_temp,xi,found,allfound)
     do kk = 1, self%num_turbines
       do jj = 1, self%turbine_t(kk)%num_blades
 
@@ -751,6 +751,7 @@ contains
          end do
       enddo
     enddo
+!$omp end do
 
 !   update MPI partitions and look for points that have changed
 !   -----------------------------------------------------------
@@ -832,7 +833,6 @@ contains
       enddo
     enddo
 
-!$omp end do
     ! send local forces arrays and angle to device
     do kk=1, self % num_turbines
         do jj=1, self % turbine_t(kk) % num_blades
