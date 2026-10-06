@@ -14,7 +14,7 @@ module DGIntegrals
 
    public ScalarWeakIntegrals_StdVolumeGreen, ScalarWeakIntegrals_StdFace
    public VectorWeakIntegrals_StdFace
-#if defined(NAVIERSTOKES) || defined(INCNS)
+#if defined(NAVIERSTOKES)
    public   ScalarWeakIntegrals_SplitVolumeDivergence
 #endif
 
@@ -23,8 +23,10 @@ module DGIntegrals
       contains
          procedure, nopass    :: StdVolumeGreen  => ScalarWeakIntegrals_StdVolumeGreen
          procedure, nopass    :: StdFace => ScalarWeakIntegrals_StdFace
-#if defined(NAVIERSTOKES) || defined(INCNS)
+#if defined(NAVIERSTOKES)
          procedure, nopass    :: SplitVolumeDivergence => ScalarWeakIntegrals_SplitVolumeDivergence
+#endif
+#if defined(NAVIERSTOKES) || defined(INCNS)
          procedure, nopass    :: TelescopicVolumeDivergence => ScalarWeakIntegrals_TelescopicVolumeDivergence
 #endif
    end type ScalarWeakIntegrals_t
@@ -102,52 +104,88 @@ module DGIntegrals
 !
 !/////////////////////////////////////////////////////////////////////////////////
 !
-#if defined(NAVIERSTOKES) || defined(INCNS)
-      subroutine ScalarWeakIntegrals_SplitVolumeDivergence( e, fSharp, gSharp, hSharp, Fv, volInt )
+!>       Fused divergence: split-form (two-point) advective term
+!>       computed on the fly, plus the standard weak-form (hatD) viscous
+!>       term from a precomputed contravariant flux Fv. Register-accumulated
+!>       per (i,j,k) point.
+!>       WARNING: Not supported yet for INCNS
+!
+!/////////////////////////////////////////////////////////////////////////////////
+!
+#if defined(NAVIERSTOKES)
+      subroutine ScalarWeakIntegrals_SplitVolumeDivergence( e, Fv, QDot )
          !$acc routine vector
+         use ElementClass
+         use RiemannSolvers_NS
          implicit none
-         type(Element),       intent(in)  :: e
-         real(kind=RP),       intent(in)  :: fSharp(1:NCONS, 0:e%Nxyz(1), 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3))
-         real(kind=RP),       intent(in)  :: gSharp(1:NCONS, 0:e%Nxyz(2), 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3))
-         real(kind=RP),       intent(in)  :: hSharp(1:NCONS, 0:e%Nxyz(3), 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3))
-         real(kind=RP),       intent(in)  :: Fv(1:NCONS, 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3), 1:NDIM )
-         real(kind=RP),       intent(inout) :: volInt(1:NCONS, 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3))
+         type(Element), intent(in)    :: e
+         real(kind=RP), intent(in)    :: Fv  (1:NCONS, 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3), 1:NDIM)
+         real(kind=RP), intent(inout) :: QDot(1:NCONS, 0:e%Nxyz(1), 0:e%Nxyz(2), 0:e%Nxyz(3))
 !
 !        ---------------
 !        Local variables
 !        ---------------
 !
-         integer     :: i, j, k, l, eq
+         integer       :: i, j, k, l, eq, Nx, Ny, Nz
+         real(kind=RP) :: Fs(1:NCONS)
+         real(kind=RP) :: r_QDot(1:NCONS)
 
-         volInt = 0.0_RP
+         Nx = e % Nxyz(1) ; Ny = e % Nxyz(2) ; Nz = e % Nxyz(3)
 
-         !$acc loop vector collapse(4)
-         do k = 0, e%Nxyz(3) ; do j = 0, e%Nxyz(2)   ; do i = 0, e%Nxyz(1) ; do eq = 1, NCONS
-         !$acc loop seq 
-         do l = 0, e%Nxyz(1) 
+         !$acc loop vector collapse(3) private(Fs, r_QDot)
+         do k = 0, Nz ; do j = 0, Ny ; do i = 0, Nx
 
-            volInt(eq,i,j,k) = volInt(eq,i,j,k) + NodalStorage(e % Nxyz(1)) % sharpD(i,l) * fSharp(eq,l,i,j,k) &
-                                                + NodalStorage(e % Nxyz(1)) % hatD(i,l) * Fv(eq,l,j,k,IX)
-         end do             ; end do               ; end do             ; end do             ; end do
-         !$acc loop vector collapse(4)
-         do k = 0, e%Nxyz(3) ; do j = 0, e%Nxyz(2)   ; do i = 0, e%Nxyz(1) ; do eq = 1, NCONS
-         !$acc loop seq 
-         do l = 0, e%Nxyz(2) 
+            !$acc loop seq
+            do eq = 1, NCONS
+               r_QDot(eq) = QDot(eq,i,j,k)          ! single read from global memory
+            end do
 
-            volInt(eq,i,j,k) = volInt(eq,i,j,k) + NodalStorage(e % Nxyz(2)) % sharpD(j,l) * gSharp(eq,l,i,j,k) &
-                                                + NodalStorage(e % Nxyz(2)) % hatD(j,l) * Fv(eq,i,l,k,IY)
-         end do             ; end do               ; end do             ; end do             ; end do
-         !$acc loop vector collapse(4)
-         do k = 0, e%Nxyz(3) ; do j = 0, e%Nxyz(2) ; do i = 0, e%Nxyz(1) ; do eq = 1, NCONS
-         !$acc loop seq 
-         do l = 0, e%Nxyz(3) 
+            ! xi
+            !$acc loop seq
+            do l = 0, Nx
+               call TwoPointFlux_Selector(e % storage % Q(:,i,j,k), e % storage % Q(:,l,j,k), &
+                                          e % geom % jGradXi(:,i,j,k), e % geom % jGradXi(:,l,j,k), Fs )
+               !$acc loop seq
+               do eq = 1, NCONS
+                  r_QDot(eq) = r_QDot(eq) - NodalStorage(Nx) % sharpD(i,l) * Fs(eq) &
+                                          + NodalStorage(Nx) % hatD(i,l)   * Fv(eq,l,j,k,IX)
+               end do
+            end do
 
-            volInt(eq,i,j,k) = volInt(eq,i,j,k) + NodalStorage(e % Nxyz(3)) % sharpD(k,l) * hSharp(eq,l,i,j,k) &
-                                                + NodalStorage(e % Nxyz(3)) % hatD(k,l) * Fv(eq,i,j,l,IZ)
-         end do             ; end do             ; end do               ; end do             ; end do
+            ! eta
+            !$acc loop seq
+            do l = 0, Ny
+               call TwoPointFlux_Selector( e % storage % Q(:,i,j,k), e % storage % Q(:,i,l,k), &
+                                          e % geom % jGradEta(:,i,j,k), e % geom % jGradEta(:,i,l,k), Fs )
+               !$acc loop seq
+               do eq = 1, NCONS
+                  r_QDot(eq) = r_QDot(eq) - NodalStorage(Ny) % sharpD(j,l) * Fs(eq) &
+                                          + NodalStorage(Ny) % hatD(j,l)   * Fv(eq,i,l,k,IY)
+               end do
+            end do
+
+            ! zeta
+            !$acc loop seq
+            do l = 0, Nz
+               call TwoPointFlux_Selector( e % storage % Q(:,i,j,k), e % storage % Q(:,i,j,l), &
+                                          e % geom % jGradZeta(:,i,j,k), e % geom % jGradZeta(:,i,j,l), Fs )
+               !$acc loop seq
+               do eq = 1, NCONS
+                  r_QDot(eq) = r_QDot(eq) - NodalStorage(Nz) % sharpD(k,l) * Fs(eq) &
+                                          + NodalStorage(Nz) % hatD(k,l)   * Fv(eq,i,j,l,IZ)
+               end do
+            end do
+
+            !$acc loop seq
+            do eq = 1, NCONS
+               QDot(eq,i,j,k) = r_QDot(eq)          ! single write back to global memory
+            end do
+
+         end do ; end do ; end do
 
       end subroutine ScalarWeakIntegrals_SplitVolumeDivergence
-
+#endif
+#if defined(NAVIERSTOKES) || defined(INCNS)
 !
 !/////////////////////////////////////////////////////////////////////////////////
 !
