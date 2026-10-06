@@ -43,6 +43,11 @@ module Horses2probesModule
       real(kind=RP)              :: xi(NDIM)
       integer                    :: eID
       logical                    :: found
+      ! Precomputed Lagrange basis — loaded from .wcache or computed on first interpolation
+      integer                    :: Nsol(NDIM)
+      real(kind=RP), allocatable :: Lxi(:)    ! (0:Nsol(1))
+      real(kind=RP), allocatable :: Leta(:)   ! (0:Nsol(2))
+      real(kind=RP), allocatable :: Lzeta(:)  ! (0:Nsol(3)), or scalar for 2D
    end type ProbeData_t
 
    type ElementBBox_t
@@ -844,6 +849,8 @@ module Horses2probesModule
       integer,           allocatable :: sort_idx(:)
       integer                        :: pID, k, fid, eID, found_count
       integer(kind=8)                :: t_total, t_end, count_rate
+      character(len=LINE_LENGTH)     :: wcacheFileName
+      logical                        :: weightsLoaded
       character(len=LINE_LENGTH)     :: outputFile, formatout
       character(len=1024)            :: title
 
@@ -871,7 +878,16 @@ module Horses2probesModule
 !     Phase 1: interpolate Q at all probe locations.
 !     Probes are visited in element-ID order (counting sort) so that
 !     consecutive probes access the same e%Q — keeping it in cache.
+!     Lagrange weights are loaded from .wcache (or computed once and saved).
 !     ------------------------------------------------------------------
+      wcacheFileName = trim(getFileName(probesFileName)) // ".wcache"
+      call LoadWeightCache(wcacheFileName, probes, no_of_probes, mesh, weightsLoaded)
+      if (.not. weightsLoaded) then
+         write(STD_OUT,'(30X,A)') "-> Computing and caching Lagrange weights..."
+         call ComputeProbeWeights(probes, no_of_probes, mesh)
+         call SaveWeightCache(wcacheFileName, probes, no_of_probes)
+      end if
+
       allocate(Q_all(NVARS, no_of_probes))
       allocate(sort_idx(no_of_probes))
       Q_all = 0.0_RP
@@ -881,8 +897,9 @@ module Horses2probesModule
       do k = 1, no_of_probes
          pID = sort_idx(k)
          if (.not. probes(pID) % found) cycle
-         Q_all(:,pID) = InterpolateQAtProbe(mesh % elements(probes(pID) % eID), &
-                                             probes(pID) % xi, mesh % nodeType)
+         Q_all(:,pID) = InterpolateQWithWeights(mesh % elements(probes(pID) % eID), &
+                                                 probes(pID) % Lxi, probes(pID) % Leta, &
+                                                 probes(pID) % Lzeta)
       end do
       deallocate(sort_idx)
 !
@@ -966,6 +983,210 @@ module Horses2probesModule
       deallocate(outVars)
 
    end subroutine InterpolateAndWriteProbes
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Compute and store Lagrange basis values Lxi/Leta/Lzeta for every found probe.
+!     These depend on xi (reference coords) and the solution order Nsol of the element.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine ComputeProbeWeights(probes, no_of_probes, mesh)
+      implicit none
+      type(ProbeData_t), intent(inout) :: probes(:)
+      integer,           intent(in)    :: no_of_probes
+      type(Mesh_t),      intent(in)    :: mesh
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer :: pID, n1, n2, n3
+
+      do pID = 1, no_of_probes
+         if (.not. probes(pID) % found) cycle
+
+         associate(e => mesh % elements(probes(pID) % eID), p => probes(pID))
+
+         n1 = e % Nsol(1)
+         n2 = e % Nsol(2)
+         n3 = e % Nsol(3)
+
+         p % Nsol = e % Nsol
+
+         if (allocated(p % Lxi))   deallocate(p % Lxi)
+         if (allocated(p % Leta))  deallocate(p % Leta)
+         if (allocated(p % Lzeta)) deallocate(p % Lzeta)
+
+         allocate(p % Lxi  (0:n1))
+         allocate(p % Leta (0:n2))
+         p % Lxi  = spA(n1) % lj(p % xi(1))
+         p % Leta = spA(n2) % lj(p % xi(2))
+
+         if (n3 .eq. 0) then
+            allocate(p % Lzeta(0:0))
+            p % Lzeta(0) = 1.0_RP
+         else
+            allocate(p % Lzeta(0:n3))
+            p % Lzeta = spA(n3) % lj(p % xi(3))
+         end if
+
+         end associate
+      end do
+
+   end subroutine ComputeProbeWeights
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Interpolate Q at a probe using precomputed Lagrange weights.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   function InterpolateQWithWeights(e, Lxi, Leta, Lzeta) result(Q_probe)
+      implicit none
+      type(Element_t), intent(in) :: e
+      real(kind=RP),   intent(in) :: Lxi(0:)
+      real(kind=RP),   intent(in) :: Leta(0:)
+      real(kind=RP),   intent(in) :: Lzeta(0:)
+      real(kind=RP)               :: Q_probe(NVARS)
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer :: i, j, k
+
+      Q_probe = 0.0_RP
+      do k = 0, e % Nsol(3)
+         do j = 0, e % Nsol(2)
+            do i = 0, e % Nsol(1)
+               Q_probe = Q_probe + e % Q(:,i,j,k) * Lxi(i) * Leta(j) * Lzeta(k)
+            end do
+         end do
+      end do
+
+   end function InterpolateQWithWeights
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Load Lagrange weights from a .wcache binary file.
+!     Validates that stored Nsol matches the current mesh element orders.
+!     Returns success=.false. if file missing, stale, or Nsol mismatch.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine LoadWeightCache(wcacheFileName, probes, no_of_probes, mesh, success)
+      implicit none
+      character(len=*),  intent(in)    :: wcacheFileName
+      type(ProbeData_t), intent(inout) :: probes(:)
+      integer,           intent(in)    :: no_of_probes
+      type(Mesh_t),      intent(in)    :: mesh
+      logical,           intent(out)   :: success
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer       :: fid, io, pID, stored_n, n1, n2, n3
+      integer       :: stored_Nsol(NDIM)
+      logical       :: found_flag
+
+      success = .false.
+
+      open(newunit=fid, file=trim(wcacheFileName), action="read", form="unformatted", &
+           access="stream", status="old", iostat=io)
+      if (io .ne. 0) return
+
+      read(fid, iostat=io) stored_n
+      if (io .ne. 0 .or. stored_n .ne. no_of_probes) then
+         close(fid) ; return
+      end if
+
+      do pID = 1, no_of_probes
+         read(fid, iostat=io) found_flag
+         if (io .ne. 0) then ; close(fid) ; return ; end if
+         if (.not. found_flag) cycle
+
+         read(fid, iostat=io) stored_Nsol
+         if (io .ne. 0) then ; close(fid) ; return ; end if
+
+         ! Validate Nsol against current mesh
+         associate(e => mesh % elements(probes(pID) % eID))
+         if (any(stored_Nsol .ne. e % Nsol)) then
+            write(STD_OUT,'(30X,A)') "-> Weight cache stale (Nsol mismatch). Recomputing."
+            close(fid)
+            return
+         end if
+         end associate
+
+         n1 = stored_Nsol(1) ; n2 = stored_Nsol(2) ; n3 = stored_Nsol(3)
+
+         if (allocated(probes(pID) % Lxi))   deallocate(probes(pID) % Lxi)
+         if (allocated(probes(pID) % Leta))  deallocate(probes(pID) % Leta)
+         if (allocated(probes(pID) % Lzeta)) deallocate(probes(pID) % Lzeta)
+
+         allocate(probes(pID) % Lxi(0:n1))
+         allocate(probes(pID) % Leta(0:n2))
+         allocate(probes(pID) % Lzeta(0:max(0,n3)))
+
+         read(fid, iostat=io) probes(pID) % Lxi
+         if (io .ne. 0) then ; close(fid) ; return ; end if
+         read(fid, iostat=io) probes(pID) % Leta
+         if (io .ne. 0) then ; close(fid) ; return ; end if
+         read(fid, iostat=io) probes(pID) % Lzeta
+         if (io .ne. 0) then ; close(fid) ; return ; end if
+
+         probes(pID) % Nsol = stored_Nsol
+      end do
+
+      close(fid)
+      success = .true.
+
+   end subroutine LoadWeightCache
+
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+!     Save Lagrange weights to a .wcache binary file.
+!
+!/////////////////////////////////////////////////////////////////////////////////////
+!
+   subroutine SaveWeightCache(wcacheFileName, probes, no_of_probes)
+      implicit none
+      character(len=*),  intent(in) :: wcacheFileName
+      type(ProbeData_t), intent(in) :: probes(:)
+      integer,           intent(in) :: no_of_probes
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer :: fid, io, pID
+
+      open(newunit=fid, file=trim(wcacheFileName), action="write", form="unformatted", &
+           access="stream", status="replace", iostat=io)
+      if (io .ne. 0) then
+         write(STD_OUT,'(30X,A,A)') "WARNING: Could not write weight cache: ", trim(wcacheFileName)
+         return
+      end if
+
+      write(fid) no_of_probes
+      do pID = 1, no_of_probes
+         write(fid) probes(pID) % found
+         if (.not. probes(pID) % found) cycle
+         write(fid) probes(pID) % Nsol
+         write(fid) probes(pID) % Lxi
+         write(fid) probes(pID) % Leta
+         write(fid) probes(pID) % Lzeta
+      end do
+      close(fid)
+
+      write(STD_OUT,'(30X,A,A)') "-> Weight cache saved: ", trim(wcacheFileName)
+
+   end subroutine SaveWeightCache
 
 !
 !/////////////////////////////////////////////////////////////////////////////////////
