@@ -1551,9 +1551,9 @@ end subroutine getNoOfMonitors
 
       if ( fp_timer_calls .eq. FP_TIMER_PERIOD .and. MPI_Process % isRoot ) then
          write(STD_OUT,'(/,30X,A)') "--- File-probe timing (last 100 calls, rank 0) ---"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  ComputeFileProbes  : ", dt_compute *1.d3, " ms total"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  MPI_Gatherv+unpack : ", dt_reduce  *1.d3, " ms total"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  Per-call average   : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  ComputeFileProbes  : ", dt_compute *1.d3, " ms total"
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  MPI_Gatherv+unpack : ", dt_reduce  *1.d3, " ms total"
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  Per-call average   : ", &
             (dt_zero+dt_compute+dt_reduce)*1.d3/real(FP_TIMER_PERIOD,8), " ms/call"
          dt_zero    = 0.d0
          dt_compute = 0.d0
@@ -2257,17 +2257,17 @@ end subroutine getNoOfMonitors
          write(STD_OUT,'(/,30X,A)') "--- InitializeProbesFromFile timing (rank 0) ---"
          write(STD_OUT,'(30X,A,I0)')    "  Total probes         : ", nFound
          write(STD_OUT,'(30X,A,I0)')    "  Owned by this rank   : ", Monitors % fp_nOwned
-         write(STD_OUT,'(30X,A,F10.4,A)') "  File read + Bcast    : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  File read + Bcast    : ", &
             real(tinit_t1-tinit_t0,8)/real(tinit_rate,8)*1.d3, " ms"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  FindPointWithCoords  : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  FindPointWithCoords  : ", &
             real(tinit_t2-tinit_t1,8)/real(tinit_rate,8)*1.d3, " ms"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  Allreduce ownership  : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  Allreduce ownership  : ", &
             real(tinit_t3-tinit_t2,8)/real(tinit_rate,8)*1.d3, " ms"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  SoA build (pass 2)   : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  SoA build (pass 2)   : ", &
             real(tinit_t4-tinit_t3,8)/real(tinit_rate,8)*1.d3, " ms"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  Sort by eID          : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  Sort by eID          : ", &
             real(tinit_t5-tinit_t4,8)/real(tinit_rate,8)*1.d3, " ms"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  TOTAL                : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  TOTAL                : ", &
             real(tinit_t5-tinit_t0,8)/real(tinit_rate,8)*1.d3, " ms"
       end if
 #endif
