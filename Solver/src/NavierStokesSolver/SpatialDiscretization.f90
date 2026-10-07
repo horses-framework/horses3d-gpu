@@ -258,7 +258,9 @@ module SpatialDiscretization
 !        Prolongation of the solution to the faces
 !        -----------------------------------------
 !
+#ifndef _OPENACC
 !$omp parallel shared(mesh, time)
+#endif
          call HexMesh_ProlongSolToFaces(mesh, NCONS)
 !        ----------------
 !        Update MPI Faces
@@ -310,7 +312,9 @@ module SpatialDiscretization
                                           t    = time)
          
          end if
+#ifndef _OPENACC
 !$omp end parallel
+#endif
 !
       END SUBROUTINE ComputeTimeDerivative
 !
@@ -343,7 +347,9 @@ module SpatialDiscretization
 !        Prolongation of the solution to the faces
 !        -----------------------------------------
 !
+#ifndef _OPENACC
 !$omp parallel shared(mesh, time)
+#endif
          call mesh % ProlongSolutionToFaces(NCONS)
 !
 !        -----------------------------------------------------
@@ -365,7 +371,9 @@ module SpatialDiscretization
 !
          call TimeDerivative_ComputeQDotIsolated(mesh = mesh , &
                                                  t    = time )
+#ifndef _OPENACC
 !$omp end parallel
+#endif
 !
       END SUBROUTINE ComputeTimeDerivativeIsolated
 
@@ -405,8 +413,11 @@ module SpatialDiscretization
 !        ***********************************************
 !
          if (flowIsNavierStokes) then
-!$omp do schedule(runtime) private(i,j,k)
+#ifdef _OPENACC
             !$acc parallel loop gang present(mesh) async(1)
+#else
+!$omp do schedule(runtime) private(i,j,k)
+#endif
             do eID = 1, size(mesh % elements)
                !$acc loop vector collapse(3)
                do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
@@ -415,14 +426,20 @@ module SpatialDiscretization
                                             mesh % elements(eID) % storage % mu_NS(2,i,j,k))
                end do                ; end do                ; end do
             end do
+#ifdef _OPENACC
             !$acc end parallel loop
+#else
 !$omp end do
+#endif
          end if
 
 
          if ( LESModel % active) then
-!$omp do schedule(runtime) private(i,j,k,delta,mu_smag)
+#ifdef _OPENACC
             !$acc parallel loop gang present(mesh, LESModel) async(1)
+#else
+!$omp do schedule(runtime) private(i,j,k,delta,mu_smag)
+#endif
             do eID = 1, size(mesh % elements)
                delta = (mesh % elements(eID) % geom % Volume / product(mesh % elements(eID) % Nxyz + 1)) ** (1.0_RP / 3.0_RP)
                !$acc loop vector collapse(3)
@@ -440,8 +457,11 @@ module SpatialDiscretization
                                                                     mesh % elements(eID) % storage % mu_turb_NS(i,j,k) * dimensionless % mu_to_kappa
                end do                ; end do                ; end do
             end do
+#ifdef _OPENACC
             !$acc end parallel loop
+#else
 !$omp end do
+#endif
       end if
 !
 !        Compute viscosity at interior and boundary faces
@@ -472,38 +492,64 @@ module SpatialDiscretization
 !        Compute Riemann solver of non-shared faces
 !        ******************************************
 !
-!$omp do schedule(runtime) private(fID)
+#ifdef _OPENACC
 !$acc parallel loop gang collapse(2) present(mesh) async(1)
+#else
+!$omp do schedule(runtime) private(fID)
+#endif
       do iFace = 1, size(mesh % faces_interior) ; do side = 1,2
          fID = mesh % faces_interior(iFace)
          call computeElementInterfaceFlux_viscous(mesh % faces(fID), side)
-      end do ; end do 
+      end do ; end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
       
-!$omp do schedule(runtime) private(fID)
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh) async(1)
+#else
+!$omp do schedule(runtime) private(fID)
+#endif
          do iFace = 1, size(mesh % faces_interior)
             fID = mesh % faces_interior(iFace)
             call computeElementInterfaceFlux(mesh % faces(fID))
          end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do nowait
+#endif
 
+#ifndef _OPENACC
+         ! we had hanging issues and correctness when we ran without this
+         ! because i wanted to get the cpu values
+         !$omp single
+#endif
          call computeBoundaryFlux(mesh, t)
+#ifndef _OPENACC
+         !$omp end single
+#endif
 !
 !        ***************************************************************
 !        Surface integrals and scaling of elements with non-shared faces
 !        ***************************************************************
 !
-!$omp do schedule(runtime) private(i,j,k,eID)
+#ifdef _OPENACC
 !$acc parallel loop gang num_gangs(size(mesh % elements_sequential)) vector_length(128) present(mesh) async(1)
+#else
+!$omp do schedule(runtime) private(i,j,k,eID)
+#endif
          do iEl = 1, size(mesh % elements_sequential)
             eID = mesh % elements_sequential(iEl)
             call TimeDerivative_FacesContribution(mesh % elements(eID), mesh)
          end do
-!$acc end parallel loop 
+#ifdef _OPENACC
+!$acc end parallel loop
+#else
 !$omp end do
+#endif
 !
 !        ****************************
 !        Wait until messages are sent
@@ -536,27 +582,39 @@ module SpatialDiscretization
 !           Compute Riemann solver of shared faces
 !           **************************************
 !
-!$omp do schedule(runtime) private(fID)
+#ifdef _OPENACC
 !$acc parallel loop gang num_gangs(size(mesh % faces_mpi)) present(mesh) private(fID) async(1)
+#else
+!$omp do schedule(runtime) private(fID)
+#endif
             do iFace = 1, size(mesh % faces_mpi)
                fID = mesh % faces_mpi(iFace)
                call computeMPIFaceFlux(mesh % faces(fID))
             end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 !
 !           ***********************************************************
 !           Surface integrals and scaling of elements with shared faces
 !           ***********************************************************
 !
-!$omp do schedule(runtime) private(i,j,k,eID)
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh) async(1)
+#else
+!$omp do schedule(runtime) private(i,j,k,eID)
+#endif
             do iEl = 1, size(mesh % elements_mpi)
                eID = mesh % elements_mpi(iEl)
                call TimeDerivative_FacesContribution(mesh % elements(eID), mesh)
             end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 !
 !           Add an MPI Barrier
 !           ------------------
@@ -646,26 +704,36 @@ module SpatialDiscretization
 !        ***********************
 !        Now add the source term
 !        ***********************
-!$omp do schedule(runtime) private(i,j,k)
+#ifdef _OPENACC
 !$acc parallel loop gang vector_length(128) present(mesh) async(1)
+#else
+!$omp do schedule(runtime) private(i,j,k)
+#endif
          do eID = 1, mesh % no_of_elements
             !$acc loop vector collapse(4)
             do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1) ; do eq = 1, NCONS
                mesh % elements(eID) % storage % QDot(eq,i,j,k) = mesh % elements(eID) % storage % QDot(eq,i,j,k) + mesh % elements(eID) % storage % S_NS(eq,i,j,k)
             end do   ;  end do   ;  end do   ;  end do
          end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
 !
 !        *********************
 !        Add IBM source term
 !        *********************
          if( mesh % IBM % active ) then
             if( .not. mesh % IBM % semiImplicit ) then 
-!$omp do schedule(runtime) private(i,j,k,Source,Q_target)
+#ifdef _OPENACC
                   ! Check if update(t) is required
                   !$acc parallel loop gang present(mesh) copyin(t) async(1)
-                  do eID = 1, mesh % no_of_elements  
+#else
+!$omp do schedule(runtime) private(i,j,k,Source,Q_target)
+                  ! Check if update(t) is required
+#endif
+                  do eID = 1, mesh % no_of_elements
                      !$acc loop vector collapse(3) private(Source, Q_target)
                      do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
                         if( mesh % elements(eID) % isInsideBody(i,j,k) ) then
@@ -680,8 +748,11 @@ module SpatialDiscretization
                         end if
                      end do                  ; end do                ; end do
                   end do
+#ifdef _OPENACC
                   !$acc end parallel loop
-!$omp end do       
+#else
+!$omp end do
+#endif
                if( mesh % IBM % Wallfunction ) then
 !$omp single
                   call mesh % IBM % GetBandRegionStates( mesh % elements )
@@ -750,8 +821,11 @@ module SpatialDiscretization
          end if
 
          if ( LESModel % active) then
-            !$omp do schedule(runtime) private(i,j,k,delta,mu_smag)
+#ifdef _OPENACC
                         !$acc parallel loop gang present(mesh, LESModel)
+#else
+            !$omp do schedule(runtime) private(i,j,k,delta,mu_smag)
+#endif
                         do eID = 1, size(mesh % elements)
                            delta = (mesh % elements(eID) % geom % Volume / product(mesh % elements(eID) % Nxyz + 1)) ** (1.0_RP / 3.0_RP)
                            !$acc loop vector collapse(3)
@@ -771,8 +845,11 @@ module SpatialDiscretization
                                                                                 mesh % elements(eID) % storage % mu_turb_NS(i,j,k) * dimensionless % mu_to_kappa
                            end do                ; end do                ; end do
                         end do
+#ifdef _OPENACC
                         !$acc end parallel loop
+#else
             !$omp end do
+#endif
          end if
 !
 !        Compute viscosity at interior and boundary faces
@@ -1043,8 +1120,11 @@ module SpatialDiscretization
          real(kind=RP) :: delta, mu_smag
 
          if (flowIsNavierStokes) then
-!$omp do schedule(runtime) private(i,j)
+#ifdef _OPENACC
             !$acc parallel loop gang present(mesh, face_ids) async(1)
+#else
+!$omp do schedule(runtime) private(i,j)
+#endif
             do iFace = 1, no_of_faces
                fID = face_ids(iFace)
                !$acc loop vector collapse(3)
@@ -1056,13 +1136,19 @@ module SpatialDiscretization
                   end do
                end do              ; end do
             end do
+#ifdef _OPENACC
             !$acc end parallel loop
+#else
 !$omp end do
+#endif
          end if
 
          if ( LESModel % Active ) then
-!$omp do schedule(runtime) private(i,j,delta,mu_smag)
+#ifdef _OPENACC
             !$acc parallel loop gang present(mesh, LESModel, face_ids) async(1)
+#else
+!$omp do schedule(runtime) private(i,j,delta,mu_smag)
+#endif
             do iFace = 1, no_of_faces
                delta = sqrt(mesh % faces(face_ids(iFace)) % geom % surface / product(mesh % faces(face_ids(iFace)) % Nf + 1))
                !$acc loop vector collapse(3)
@@ -1079,8 +1165,11 @@ module SpatialDiscretization
                   end do
                end do              ; end do
             end do
+#ifdef _OPENACC
             !$acc end parallel loop
+#else
 !$omp end do
+#endif
          end if
 
       end subroutine compute_viscosity_at_faces
@@ -1309,8 +1398,11 @@ module SpatialDiscretization
 !
 !        Compute inviscid - viscous contravariant flux
 !        ---------------------------------------------
-         !$omp do schedule(runtime)
+#ifdef _OPENACC
          !$acc parallel loop gang vector_length(128) num_gangs(9700) present(mesh) async(1)
+#else
+         !$omp do schedule(runtime) private(i,j,k,eq,mu,kappa,beta,inviscidFlux,viscousFlux)
+#endif
          do eID = 1 , size(mesh % elements)
 
             !$acc loop vector collapse(3) private(inviscidFlux, viscousFlux)
@@ -1322,7 +1414,7 @@ module SpatialDiscretization
                beta  = 0.0_RP
                kappa = mesh % elements(eID) % storage % mu_ns(2,i,j,k)
 
-               call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
+               call ViscousFlux_SELECTED( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , &
                                        mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, kappa, viscousFlux)
                
                do eq =1, NCONS
@@ -1353,8 +1445,11 @@ module SpatialDiscretization
                                                      mesh % elements(eID) % storage % QDot)
       
          end do
-         !$acc end parallel loop 
+#ifdef _OPENACC
+         !$acc end parallel loop
+#else
          !$omp end do
+#endif
 
       end subroutine TimeDerivative_VolumetricContribution
 
@@ -1387,7 +1482,7 @@ module SpatialDiscretization
                do j = 0, mesh % elements(eID) % Nxyz(2)  
                   do i = 0, mesh % elements(eID) % Nxyz(1)
 
-                  call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
+                  call ViscousFlux_SELECTED( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), &
                                           mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), &
                                           mesh % elements(eID) % storage % mu_ns(1,i,j,k), 0.0_RP, &
                                           mesh % elements(eID) % storage % mu_ns(2,i,j,k), Flux)
@@ -1766,7 +1861,7 @@ module SpatialDiscretization
             do k = 0, Nz
                do j = 0, Ny
                   do i = 0, Nx
-                     call ViscousFlux_STATE(nEqn, nGradEqn, Q(:,i,j,k),  U_x(:,i,j,k), U_y(:,i,j,k), U_z(:,i,j,k), &
+                     call ViscousFlux_SELECTED(nEqn, nGradEqn, Q(:,i,j,k),  U_x(:,i,j,k), U_y(:,i,j,k), U_z(:,i,j,k), &
                                             mu(1,i,j,k), 0.0_RP, mu(2,i,j,k), flux_cart(:,:,i,j,k))
                   enddo
                enddo

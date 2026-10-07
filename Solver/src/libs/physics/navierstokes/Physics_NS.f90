@@ -31,6 +31,7 @@
       private
       public  EulerFlux
       public  ViscousFlux_STATE, ViscousFlux_ENTROPY, ViscousFlux_ENERGY
+      public  ViscousFlux_SELECTED
       public  GuermondPopovFlux_ENTROPY
       public  InviscidJacobian, ComputeEigenvaluesForState
       public  getStressTensor, ViscousJacobian, getFrictionVelocity, getFrictionVelocityWithSign
@@ -356,6 +357,23 @@
          F(IRHOE,IZ) = F(IRHOU,IZ) * u(IX) + F(IRHOV,IZ) * u(IY) + F(IRHOW,IZ) * u(IZ) + kappa  * nablaT(IZ)
 
       end subroutine ViscousFlux_ENTROPY
+
+      pure subroutine ViscousFlux_SELECTED(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
+         !$acc routine seq
+         integer, intent(in) :: nEqn, nGradEqn
+         real(RP), intent(in) :: Q(nEqn), Q_x(nGradEqn), Q_y(nGradEqn), Q_z(nGradEqn)
+         real(RP), intent(in) :: mu, beta, kappa
+         real(RP), intent(out) :: F(nEqn,NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENERGY)
+            call ViscousFlux_ENERGY(nEqn,nGradEqn,Q,Q_x,Q_y,Q_z,mu,beta,kappa,F)
+         case (GRADVARS_ENTROPY)
+            call ViscousFlux_ENTROPY(nEqn,nGradEqn,Q,Q_x,Q_y,Q_z,mu,beta,kappa,F)
+         case default
+            call ViscousFlux_STATE(nEqn,nGradEqn,Q,Q_x,Q_y,Q_z,mu,beta,kappa,F)
+         end select
+      end subroutine ViscousFlux_SELECTED
 
       pure subroutine ViscousFlux_ENERGY(nEqn, nGradEqn, Q, Q_x, Q_y, Q_z, mu, beta, kappa, F)
          !$acc routine seq   
