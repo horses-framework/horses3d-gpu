@@ -610,13 +610,16 @@ module MonitorsClass
             call self % probes(i) % Update( mesh , self % bufferLine )
          end do
 !
-!        Update file probes: compute into slot 1, then flush immediately.
-!        File probes use a size-1 values buffer to avoid large memory
-!        allocations when the number of probes is O(1e6).
+!        Update file probes: skip entirely if it is not yet time to save.
+!        With O(1e6) probes and MPI, the Gatherv dominates; evaluating
+!        every step when save_timestep >> dt wastes most of that cost.
 !        ----------------------------------------------------------
          if ( self % no_of_fileProbes .gt. 0 ) then
-            call Monitor_UpdateFileProbes( self, mesh, 1 )
-            call Monitor_FlushFileProbesNow( self, t, iter )
+            if ( self % probeFileSaveTimestep .le. 0.0_RP .or. &
+                 t .ge. self % fp_lastSavedTime + self % probeFileSaveTimestep ) then
+               call Monitor_UpdateFileProbes( self, mesh, 1 )
+               call Monitor_FlushFileProbesNow( self, t, iter )
+            end if
          end if
 #endif
 
@@ -1364,18 +1367,18 @@ end subroutine getNoOfMonitors
          if ( t_now .lt. self % fp_lastSavedTime + self % probeFileSaveTimestep ) do_write = .false.
       end if
 
+      if ( do_write ) then
+         self % fp_lastSavedTime = t_now
 #ifdef HAS_HDF5
-      if ( trim(self % probeFileOutputFormat) .eq. "HDF5" ) then
-         call Monitor_WriteFileProbesHDF5( self, iter_arr, t_arr, 1 )
-      else
+         if ( trim(self % probeFileOutputFormat) .eq. "HDF5" ) then
+            call Monitor_WriteFileProbesHDF5( self, iter_arr, t_arr, 1 )
+         else
 #endif
-         if ( do_write ) then
-            self % fp_lastSavedTime = t_now
             call Monitor_WriteFileProbesASCII( self, iter_arr, t_arr, 1 )
-         end if
 #ifdef HAS_HDF5
-      end if
+         end if
 #endif
+      end if
 
    end subroutine Monitor_FlushFileProbesNow
 
