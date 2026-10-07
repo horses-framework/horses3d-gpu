@@ -1441,6 +1441,11 @@ end subroutine getNoOfMonitors
 #ifdef _OPENACC
       integer        :: Nm
 #endif
+!     --- timing ---
+      integer(kind=8), save :: t0, t1, t2, t3, rate
+      real(kind=8),    save :: dt_zero = 0.d0, dt_compute = 0.d0, dt_reduce = 0.d0
+      integer,         save :: fp_timer_calls = 0
+      integer, parameter    :: FP_TIMER_PERIOD = 100
 
       nfp       = self % no_of_fileProbes
       nv        = size(self % probesVariables)
@@ -1472,14 +1477,36 @@ end subroutine getNoOfMonitors
 !     fp_cpu_* arrays built once at init time (InitializeProbesFromFile),
 !     writes directly into fp_buf.
 !
+      call system_clock(t0, rate)
       self % fp_buf = 0.0_RP
+      call system_clock(t1)
       call Monitor_ComputeFileProbesCPU(self, mesh, nv)
+      call system_clock(t2)
 
 #ifdef _HAS_MPI_
       if ( MPI_Process % doMPIAction ) then
          call MPI_Allreduce(MPI_IN_PLACE, self % fp_buf, nfp * nv, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
       end if
 #endif
+      call system_clock(t3)
+
+      dt_zero    = dt_zero    + real(t1-t0,8)/real(rate,8)
+      dt_compute = dt_compute + real(t2-t1,8)/real(rate,8)
+      dt_reduce  = dt_reduce  + real(t3-t2,8)/real(rate,8)
+      fp_timer_calls = fp_timer_calls + 1
+
+      if ( fp_timer_calls .eq. FP_TIMER_PERIOD .and. MPI_Process % isRoot ) then
+         write(STD_OUT,'(/,30X,A)') "--- File-probe timing (last 100 calls, rank 0) ---"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  fp_buf zero-fill   : ", dt_zero    *1.d3, " ms total"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  ComputeFileProbes  : ", dt_compute *1.d3, " ms total"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  MPI_Allreduce      : ", dt_reduce  *1.d3, " ms total"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  Per-call average   : ", &
+            (dt_zero+dt_compute+dt_reduce)*1.d3/real(FP_TIMER_PERIOD,8), " ms/call"
+         dt_zero    = 0.d0
+         dt_compute = 0.d0
+         dt_reduce  = 0.d0
+         fp_timer_calls = 0
+      end if
 #endif
 
    end subroutine Monitor_UpdateFileProbes
@@ -1749,6 +1776,8 @@ end subroutine getNoOfMonitors
       logical,          allocatable :: foundLocal(:)
       integer,          allocatable :: ownerCandidate(:)
       integer,          allocatable :: globalOwner(:)
+!     --- timing ---
+      integer(kind=8) :: tinit_t0, tinit_t1, tinit_t2, tinit_t3, tinit_t4, tinit_t5, tinit_rate
 !
 !     nfp is the caller's own countProbesInFile result (Monitors_Construct),
 !     not re-derived here: at O(1e3) MPI ranks every rank would otherwise
@@ -1759,6 +1788,8 @@ end subroutine getNoOfMonitors
 !     via Monitors % no_of_fileProbes - a silent out-of-bounds write.
 !     --------------------------------------------------------------------
       if ( nfp .le. 0 ) return
+
+      call system_clock(tinit_t0, tinit_rate)
 
       allocate( allX          (NDIM, nfp) )
       allocate( xi_local      (NDIM, nfp) )
@@ -1814,6 +1845,8 @@ end subroutine getNoOfMonitors
       end if
 #endif
 !
+      call system_clock(tinit_t1)
+!
 !     Pass 1b: every rank does its OWN local point search (no I/O, no MPI)
 !     over the now-identical allX/nFound. The eID hint is cascaded from
 !     one probe to the next only when the search ACTUALLY succeeded
@@ -1826,6 +1859,8 @@ end subroutine getNoOfMonitors
                                                       xi_local(:,i), eID_hint=prev_eID_local)
          if ( foundLocal(i) ) prev_eID_local = eID_local(i)
       end do
+!
+      call system_clock(tinit_t2)
 !
 !     Resolve, for EVERY file-probe at once, which rank owns it with a
 !     single bulk MPI collective - not one mpi_allgather per probe (the
@@ -1850,6 +1885,8 @@ end subroutine getNoOfMonitors
 #else
       globalOwner = ownerCandidate
 #endif
+!
+      call system_clock(tinit_t3)
 !
 !     Pass 2: build Monitors' own SoA buffers directly from the LOCAL
 !     eID_local/xi_local/globalOwner computed above - no Probe_t, no
@@ -2007,6 +2044,7 @@ end subroutine getNoOfMonitors
             end if
          end do
 
+      call system_clock(tinit_t4)
 !        Sort owned probes by ascending eID so Monitor_ComputeFileProbesCPU
 !        accesses mesh%elements(eID)%storage%Q sequentially, improving cache
 !        reuse when many probes share the same or nearby elements.
@@ -2076,6 +2114,26 @@ end subroutine getNoOfMonitors
             end block
          end if
       end block
+
+      call system_clock(tinit_t5)
+
+      if ( MPI_Process % isRoot ) then
+         write(STD_OUT,'(/,30X,A)') "--- InitializeProbesFromFile timing (rank 0) ---"
+         write(STD_OUT,'(30X,A,I0)')    "  Total probes         : ", nFound
+         write(STD_OUT,'(30X,A,I0)')    "  Owned by this rank   : ", Monitors % fp_nOwned
+         write(STD_OUT,'(30X,A,F10.4,A)') "  File read + Bcast    : ", &
+            real(tinit_t1-tinit_t0,8)/real(tinit_rate,8)*1.d3, " ms"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  FindPointWithCoords  : ", &
+            real(tinit_t2-tinit_t1,8)/real(tinit_rate,8)*1.d3, " ms"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  Allreduce ownership  : ", &
+            real(tinit_t3-tinit_t2,8)/real(tinit_rate,8)*1.d3, " ms"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  SoA build (pass 2)   : ", &
+            real(tinit_t4-tinit_t3,8)/real(tinit_rate,8)*1.d3, " ms"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  Sort by eID          : ", &
+            real(tinit_t5-tinit_t4,8)/real(tinit_rate,8)*1.d3, " ms"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  TOTAL                : ", &
+            real(tinit_t5-tinit_t0,8)/real(tinit_rate,8)*1.d3, " ms"
+      end if
 #endif
 
    end subroutine InitializeProbesFromFile
