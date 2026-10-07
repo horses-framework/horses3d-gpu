@@ -79,6 +79,16 @@ module MonitorsClass
       real(kind=RP)       , allocatable          :: fp_cpu_leta(:,:)
       real(kind=RP)       , allocatable          :: fp_cpu_lzeta(:,:)
       integer             , allocatable          :: fp_cpu_varCodes(:)
+!     MPI_Gatherv infrastructure: replaces MPI_Allreduce(fp_buf) with a
+!     many-to-one gather to root, eliminating the zero-fill of fp_buf and
+!     reducing communication from all-to-all to many-to-one.
+!     fp_owned_buf: compact result buffer, size fp_nOwned*nv (all ranks).
+!     fp_gatherv_counts/displs: counts and byte-offsets for MPI_Gatherv (root).
+!     fp_gatherv_perm: for each gathered entry k, the global probe index in fp_buf (root).
+      real(kind=RP)       , allocatable          :: fp_owned_buf(:)
+      integer             , allocatable          :: fp_gatherv_counts(:)
+      integer             , allocatable          :: fp_gatherv_displs(:)
+      integer             , allocatable          :: fp_gatherv_perm(:)
 #endif
       integer                                    :: bufferLine
       integer                      , allocatable :: iter(:)
@@ -878,6 +888,10 @@ module MonitorsClass
          safedeallocate( self % fp_cpu_leta )
          safedeallocate( self % fp_cpu_lzeta )
          safedeallocate( self % fp_cpu_varCodes )
+         safedeallocate( self % fp_owned_buf )
+         safedeallocate( self % fp_gatherv_counts )
+         safedeallocate( self % fp_gatherv_displs )
+         safedeallocate( self % fp_gatherv_perm )
 #endif
          
 #if defined(NAVIERSTOKES) || defined(INCNS)
@@ -991,6 +1005,17 @@ module MonitorsClass
             safedeallocate(to % fp_values_gpu); allocate(to % fp_values_gpu(size(from%fp_values_gpu,1),size(from%fp_values_gpu,2))) ; to % fp_values_gpu = from % fp_values_gpu
          end if
 #else
+         if ( allocated(from % fp_owned_buf) ) then
+            safedeallocate(to % fp_owned_buf) ; allocate(to % fp_owned_buf(size(from % fp_owned_buf))) ; to % fp_owned_buf = from % fp_owned_buf
+         end if
+         if ( allocated(from % fp_gatherv_counts) ) then
+            safedeallocate(to % fp_gatherv_counts) ; allocate(to % fp_gatherv_counts(size(from % fp_gatherv_counts))) ; to % fp_gatherv_counts = from % fp_gatherv_counts
+            safedeallocate(to % fp_gatherv_displs) ; allocate(to % fp_gatherv_displs(size(from % fp_gatherv_displs))) ; to % fp_gatherv_displs = from % fp_gatherv_displs
+         end if
+         if ( allocated(from % fp_gatherv_perm) ) then
+            safedeallocate(to % fp_gatherv_perm) ; allocate(to % fp_gatherv_perm(size(from % fp_gatherv_perm))) ; to % fp_gatherv_perm = from % fp_gatherv_perm
+         end if
+
          if ( allocated(from % fp_cpu_eID) ) then
             safedeallocate(to % fp_cpu_eID)      ; allocate(to % fp_cpu_eID(size(from % fp_cpu_eID)))           ; to % fp_cpu_eID      = from % fp_cpu_eID
             safedeallocate(to % fp_cpu_Nx)       ; allocate(to % fp_cpu_Nx(size(from % fp_cpu_Nx)))             ; to % fp_cpu_Nx       = from % fp_cpu_Nx
@@ -1446,6 +1471,9 @@ end subroutine getNoOfMonitors
       real(kind=8),    save :: dt_zero = 0.d0, dt_compute = 0.d0, dt_reduce = 0.d0
       integer,         save :: fp_timer_calls = 0
       integer, parameter    :: FP_TIMER_PERIOD = 100
+!     --- gatherv ---
+      real(kind=RP), allocatable :: gather_tmp(:)
+      integer :: k, jbuf_g
 
       nfp       = self % no_of_fileProbes
       nv        = size(self % probesVariables)
@@ -1478,15 +1506,38 @@ end subroutine getNoOfMonitors
 !     writes directly into fp_buf.
 !
       call system_clock(t0, rate)
-      self % fp_buf = 0.0_RP
+!     (no zero-fill needed: ComputeFileProbesCPU writes compact fp_owned_buf)
       call system_clock(t1)
       call Monitor_ComputeFileProbesCPU(self, mesh, nv)
       call system_clock(t2)
 
 #ifdef _HAS_MPI_
-      if ( MPI_Process % doMPIAction ) then
-         call MPI_Allreduce(MPI_IN_PLACE, self % fp_buf, nfp * nv, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
+      if ( MPI_Process % doMPIAction .and. allocated(self % fp_gatherv_counts) ) then
+!        MPI_Gatherv: each rank sends its compact fp_owned_buf to root.
+!        Root unpacks using fp_gatherv_perm into fp_buf.
+         if ( MPI_Process % isRoot ) allocate( gather_tmp(nfp * nv) )
+         call MPI_Gatherv(self % fp_owned_buf, self % fp_nOwned * nv, MPI_DOUBLE_PRECISION, &
+                          gather_tmp, self % fp_gatherv_counts, self % fp_gatherv_displs, &
+                          MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+         if ( MPI_Process % isRoot ) then
+            do k = 1, nfp
+               jbuf_g = (self % fp_gatherv_perm(k) - 1) * nv
+               self % fp_buf(jbuf_g+1:jbuf_g+nv) = gather_tmp((k-1)*nv+1:k*nv)
+            end do
+            deallocate(gather_tmp)
+         end if
+      else
+!        Single-rank fallback: copy compact buffer directly into fp_buf.
+         do k = 1, self % fp_nOwned
+            jbuf_g = (self % fp_ownedIdx(k) - 1) * nv
+            self % fp_buf(jbuf_g+1:jbuf_g+nv) = self % fp_owned_buf((k-1)*nv+1:k*nv)
+         end do
       end if
+#else
+      do k = 1, self % fp_nOwned
+         jbuf_g = (self % fp_ownedIdx(k) - 1) * nv
+         self % fp_buf(jbuf_g+1:jbuf_g+nv) = self % fp_owned_buf((k-1)*nv+1:k*nv)
+      end do
 #endif
       call system_clock(t3)
 
@@ -1497,9 +1548,8 @@ end subroutine getNoOfMonitors
 
       if ( fp_timer_calls .eq. FP_TIMER_PERIOD .and. MPI_Process % isRoot ) then
          write(STD_OUT,'(/,30X,A)') "--- File-probe timing (last 100 calls, rank 0) ---"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  fp_buf zero-fill   : ", dt_zero    *1.d3, " ms total"
          write(STD_OUT,'(30X,A,F10.4,A)') "  ComputeFileProbes  : ", dt_compute *1.d3, " ms total"
-         write(STD_OUT,'(30X,A,F10.4,A)') "  MPI_Allreduce      : ", dt_reduce  *1.d3, " ms total"
+         write(STD_OUT,'(30X,A,F10.4,A)') "  MPI_Gatherv+unpack : ", dt_reduce  *1.d3, " ms total"
          write(STD_OUT,'(30X,A,F10.4,A)') "  Per-call average   : ", &
             (dt_zero+dt_compute+dt_reduce)*1.d3/real(FP_TIMER_PERIOD,8), " ms/call"
          dt_zero    = 0.d0
@@ -1548,7 +1598,7 @@ end subroutine getNoOfMonitors
          Nx   = self % fp_cpu_Nx(p)
          Ny   = self % fp_cpu_Ny(p)
          Nz   = self % fp_cpu_Nz(p)
-         jbuf = (self % fp_ownedIdx(p) - 1) * nv
+         jbuf = (p - 1) * nv
          acc(1:nv) = 0.0_RP
          associate(Qe => mesh%elements(eID)%storage%Q)
          do kk = 0, Nz ; do jj = 0, Ny ; do ii = 0, Nx
@@ -1622,7 +1672,7 @@ end subroutine getNoOfMonitors
             end do
          end do ; end do ; end do
          end associate
-         self % fp_buf(jbuf+1:jbuf+nv) = acc(1:nv)
+         self % fp_owned_buf(jbuf+1:jbuf+nv) = acc(1:nv)
       end do
 
    end subroutine Monitor_ComputeFileProbesCPU
@@ -2123,6 +2173,80 @@ end subroutine getNoOfMonitors
             end block
          end if
       end block
+
+!     Build MPI_Gatherv infrastructure: allows Monitor_UpdateFileProbes to use
+!     MPI_Gatherv to root instead of MPI_Allreduce on the full fp_buf, avoiding
+!     both the 43 MB zero-fill and the all-to-all reduction.
+!     fp_owned_buf(p, v) = compact result buffer, size fp_nOwned*nv.
+!     fp_gatherv_counts/displs: for MPI_Gatherv call (root receives from all ranks).
+!     fp_gatherv_perm(k): global probe index of the k-th gathered entry (root only).
+      allocate( Monitors % fp_owned_buf(max(1, Monitors % fp_nOwned * nv)) )
+      Monitors % fp_owned_buf = 0.0_RP
+
+#ifdef _HAS_MPI_
+      if ( MPI_Process % doMPIAction ) then
+         block
+            integer :: nranks, my_owned_nv, ii, rank_offset, p_g
+            integer, allocatable :: all_nowned(:), all_ownedIdx(:)
+            integer, allocatable :: idx_counts(:), idx_displs(:)
+
+            call MPI_Comm_size(MPI_COMM_WORLD, nranks, ierr)
+            my_owned_nv = Monitors % fp_nOwned * nv
+
+            if ( MPI_Process % isRoot ) then
+               allocate( Monitors % fp_gatherv_counts(0:nranks-1) )
+               allocate( Monitors % fp_gatherv_displs(0:nranks-1) )
+            end if
+
+            if ( MPI_Process % isRoot ) then
+               call MPI_Gather(my_owned_nv, 1, MPI_INTEGER, &
+                               Monitors % fp_gatherv_counts, 1, MPI_INTEGER, &
+                               0, MPI_COMM_WORLD, ierr)
+            else
+               block
+                  integer :: dummy_counts(1)
+                  dummy_counts = 0
+                  call MPI_Gather(my_owned_nv, 1, MPI_INTEGER, &
+                                  dummy_counts, 1, MPI_INTEGER, &
+                                  0, MPI_COMM_WORLD, ierr)
+               end block
+            end if
+
+            if ( MPI_Process % isRoot ) then
+               Monitors % fp_gatherv_displs(0) = 0
+               do ii = 1, nranks-1
+                  Monitors % fp_gatherv_displs(ii) = Monitors % fp_gatherv_displs(ii-1) + &
+                                                     Monitors % fp_gatherv_counts(ii-1)
+               end do
+               allocate( Monitors % fp_gatherv_perm(nFound) )
+               allocate( all_nowned(0:nranks-1) )
+               all_nowned = Monitors % fp_gatherv_counts / max(1, nv)
+               allocate( idx_counts(0:nranks-1), idx_displs(0:nranks-1) )
+               idx_counts = all_nowned
+               idx_displs(0) = 0
+               do ii = 1, nranks-1
+                  idx_displs(ii) = idx_displs(ii-1) + idx_counts(ii-1)
+               end do
+               allocate( all_ownedIdx(nFound) )
+               call MPI_Gatherv(Monitors % fp_ownedIdx, Monitors % fp_nOwned, MPI_INTEGER, &
+                                all_ownedIdx, idx_counts, idx_displs, MPI_INTEGER, &
+                                0, MPI_COMM_WORLD, ierr)
+               do p_g = 1, nFound
+                  Monitors % fp_gatherv_perm(p_g) = all_ownedIdx(p_g)
+               end do
+               deallocate(all_nowned, all_ownedIdx, idx_counts, idx_displs)
+            else
+               block
+                  integer :: dummy_recv(1), dummy_counts(1), dummy_displs(1)
+                  dummy_recv = 0 ; dummy_counts = 0 ; dummy_displs = 0
+                  call MPI_Gatherv(Monitors % fp_ownedIdx, Monitors % fp_nOwned, MPI_INTEGER, &
+                                   dummy_recv, dummy_counts, dummy_displs, MPI_INTEGER, &
+                                   0, MPI_COMM_WORLD, ierr)
+               end block
+            end if
+         end block
+      end if
+#endif
 
       call system_clock(tinit_t5)
 
