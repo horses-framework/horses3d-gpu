@@ -1853,11 +1853,17 @@ end subroutine getNoOfMonitors
 !     locally, so it is always either -1 or a genuinely valid local
 !     element on this rank.
 !     --------------------------------------------------------------------
+      if ( MPI_Process % isRoot ) &
+         write(STD_OUT,'(30X,A,I0,A)') "-> Searching ", nFound, " probes in mesh..."
+
       prev_eID_local = -1
       do i = 1, nFound
          foundLocal(i) = mesh % FindPointWithCoords(allX(:,i), eID_local(i), &
                                                       xi_local(:,i), eID_hint=prev_eID_local)
          if ( foundLocal(i) ) prev_eID_local = eID_local(i)
+         if ( MPI_Process % isRoot .and. mod(i, max(1,nFound/10)) .eq. 0 ) then
+            write(STD_OUT,'(30X,A,I3,A)') "   ... ", (i*100)/nFound, "% done"
+         end if
       end do
 !
       call system_clock(tinit_t2)
@@ -1886,6 +1892,9 @@ end subroutine getNoOfMonitors
       globalOwner = ownerCandidate
 #endif
 !
+      if ( MPI_Process % isRoot ) &
+         write(STD_OUT,'(30X,A)') "-> Resolving probe ownership across ranks..."
+
       call system_clock(tinit_t3)
 !
 !     Pass 2: build Monitors' own SoA buffers directly from the LOCAL
