@@ -40,17 +40,32 @@ MODULE HexMeshClass
       public      GetOriginalNumberOfFaces
       public      ConstructFaces, ConstructPeriodicFaces
       public      DeletePeriodicMinusFaces, GetElementsFaceIDs
-      public      no_of_stats_variables, HexMesh_ProlongSolToFaces, HexMesh_ProlongGradientsToFaces
+      public      no_of_stats_variables, no_of_reynolds_variables, no_of_favre_variables
+      public      HexMesh_ProlongSolToFaces, HexMesh_ProlongGradientsToFaces
       public      HexMesh_UpdateMPIFacesSolution, HexMesh_UpdateMPIFacesGradients
       public      HexMesh_GatherMPIFacesSolution, HexMesh_GatherMPIFacesGradients
-      public      HexMesh_ComputeLocalGradientNS
-#ifdef INCNS
-      public      HexMesh_ComputeLocalGradientiNS
-#endif
-#if defined(CAHNHILLIARD)
-      public      HexMesh_ComputeLocalGradientCH, HexMesh_ComputeLocalGradientMU
-#endif
+      public      HexMesh_ComputeLocalGradient
 !
+!     -----------------------------------------------------------------------
+!     Uniform-grid spatial index for fast point-in-element queries.
+!     Built once (lazy) the first time FindPointWithCoords is called without
+!     a hint that succeeds.  Each cell stores a list of element IDs whose
+!     linearised bounding box overlaps it; a probe query only visits the
+!     ~3×3×3 = 27 cells surrounding the probe instead of all N_elem.
+!     -----------------------------------------------------------------------
+!
+      type :: MeshSGCell_t
+         integer              :: n   = 0
+         integer, allocatable :: eID(:)
+      end type MeshSGCell_t
+
+      type :: MeshSpatialGrid_t
+         logical :: built = .false.
+         integer :: ncx, ncy, ncz
+         real(kind=RP) :: xmin(3), dx(3)
+         type(MeshSGCell_t), allocatable :: cells(:,:,:)
+      end type MeshSpatialGrid_t
+
 !     ---------------
 !     Mesh definition
 !     ---------------
@@ -78,6 +93,7 @@ MODULE HexMeshClass
          type(MPI_FacesSet_t)                      :: MPIfaces
          type(IBM_type)                            :: IBM
          type(Zone_t), dimension(:), allocatable   :: zones
+         type(MeshSpatialGrid_t)                   :: sgrid
          logical                                   :: child       = .FALSE.         ! Is this a (multigrid) child mesh? default .FALSE.
          logical                                   :: meshIs2D    = .FALSE.         ! Is this a 2D mesh? default .FALSE.
          integer                                   :: dir2D       = 0               ! If it is in fact a 2D mesh, dir 2D stores the global direction IX, IY or IZ
@@ -98,6 +114,7 @@ MODULE HexMeshClass
             procedure :: CreateDeviceData              => HexMesh_CreateDeviceData
             procedure :: ExitDeviceData                => HexMesh_ExitDeviceData
             procedure :: UpdateHostData                => HexMesh_UpdateHostData
+            procedure :: UpdateDeviceSolution          => HexMesh_UpdateDeviceSolution
             procedure :: UpdateFacesHostData           => HexMesh_UpdateFacesHostData
             procedure :: UpdateHostStatistics          => HexMesh_UpdateHostStatistics
             procedure :: ConstructZones                => HexMesh_ConstructZones
@@ -140,6 +157,7 @@ MODULE HexMeshClass
             procedure :: GatherMPIFacesAviscFlux       => HexMesh_GatherMPIFacesAviscFlux
             procedure :: FindPointWithCoords           => HexMesh_FindPointWithCoords
             procedure :: FindPointWithCoordsInNeighbors=> HexMesh_FindPointWithCoordsInNeighbors
+            procedure :: BuildSpatialGrid              => HexMesh_BuildSpatialGrid
             procedure :: ComputeWallDistances          => HexMesh_ComputeWallDistances
             procedure :: ConformingOnZone              => HexMesh_ConformingOnZone
             procedure :: SetStorageToEqn               => HexMesh_SetStorageToEqn
@@ -154,6 +172,8 @@ MODULE HexMeshClass
 
       integer, parameter :: NUM_OF_NEIGHBORS = 6 ! Hardcoded: Hexahedral conforming meshes
       integer            :: no_of_stats_variables
+      integer            :: no_of_reynolds_variables = 0
+      integer            :: no_of_favre_variables    = 0
 
       TYPE Neighbor_t         ! added to introduce colored computation of numerical Jacobian (is this the best place to define this type??) - only usable for conforming meshes
          INTEGER :: elmnt(NUM_OF_NEIGHBORS+1) ! "7" hardcoded for 3D hexahedrals in conforming meshes (the last one is itself)... This definition must change if the code is expected to be more general
@@ -1704,6 +1724,8 @@ slavecoord:             DO l = 1, 4
       integer           :: zoneID
       integer           :: no_of_bdry_faces
       integer           :: no_of_faces
+      integer           :: Nmin, Nmax, Nmin_g, Nmax_g
+      integer           :: local_dof, total_dof
       integer, allocatable :: facesPerZone(:)
       character(len=LINE_LENGTH) :: str
       !----------------------------------------------------
@@ -1713,6 +1735,10 @@ slavecoord:             DO l = 1, 4
 !     Gather information
 !     ------------------
 
+      local_dof = sum( (self % Nx + 1) * (self % Ny + 1) * (self % Nz + 1) )
+      Nmin      = min(minval(self % Nx), minval(self % Ny), minval(self % Nz))
+      Nmax      = max(maxval(self % Nx), maxval(self % Ny), maxval(self % Nz))
+
       if (  MPI_Process % doMPIAction ) then
 #ifdef _HAS_MPI_
          do zoneID = 1, size(self % zones)
@@ -1721,6 +1747,10 @@ slavecoord:             DO l = 1, 4
 
          no_of_bdry_faces = sum(facesPerZone)
          no_of_faces      = (6*self % no_of_allElements + no_of_bdry_faces)/2
+
+         call mpi_reduce ( local_dof, total_dof, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr )
+         call mpi_reduce ( Nmin,      Nmin_g,    1, MPI_INTEGER, MPI_MIN, 0, MPI_COMM_WORLD, ierr )
+         call mpi_reduce ( Nmax,      Nmax_g,    1, MPI_INTEGER, MPI_MAX, 0, MPI_COMM_WORLD, ierr )
 #endif
       else
          do zoneID = 1, size(self % zones)
@@ -1728,7 +1758,10 @@ slavecoord:             DO l = 1, 4
          end do
 
          no_of_bdry_faces = sum(facesPerZone)
-         no_of_faces = size ( self % faces )
+         no_of_faces      = size ( self % faces )
+         total_dof        = local_dof
+         Nmin_g           = Nmin
+         Nmax_g           = Nmax
       end if
 
 
@@ -1745,8 +1778,13 @@ slavecoord:             DO l = 1, 4
 
       write(STD_OUT,'(30X,A,A28,I10)') "->" , "Number of elements: " , self % no_of_allElements
       write(STD_OUT,'(30X,A,A28,I10)') "->" , "Number of faces: " , no_of_faces
-
       write(STD_OUT,'(30X,A,A28,I10)') "->" , "Number of boundary faces: " , no_of_bdry_faces
+      if ( Nmin_g .eq. Nmax_g ) then
+         write(STD_OUT,'(30X,A,A28,I10)')      "->" , "Polynomial order: " , Nmin_g
+      else
+         write(STD_OUT,'(30X,A,A28,I4,A,I4)') "->" , "Polynomial order: " , Nmin_g, " -", Nmax_g
+      end if
+      write(STD_OUT,'(30X,A,A28,I10)') "->" , "Degrees of freedom: " , total_dof
       write(STD_OUT,'(30X,A,A28,I10)') "->" , "Order of curved faces: " , bFaceOrder
       write(STD_OUT,'(30X,A,A28,L10)') "->" , "2D extruded mesh: " , self % meshIs2D
 
@@ -2873,6 +2911,8 @@ slavecoord:             DO l = 1, 4
          CALL genHexMap % destruct()
          DEALLOCATE(genHexMap)
 
+         call self % BuildSpatialGrid
+
       end subroutine HexMesh_ConstructGeometry
 
       subroutine CommunicateMPIFaceMinimumDistance(self)
@@ -3389,7 +3429,6 @@ slavecoord:             DO l = 1, 4
          refs(V_REF)     = refValues      % V
          refs(T_REF)     = refValues      % T
          refs(MACH_REF)  = dimensionless  % Mach
-         refs(RE_REF)    = dimensionless  % Re
 
 !
 !        Update the host data from the GPU
@@ -3407,23 +3446,34 @@ slavecoord:             DO l = 1, 4
          do eID = 1, self % no_of_elements
             associate( e => self % elements(eID) )
             pos = POS_INIT_DATA + (e % globID-1)*5_AddrInt*SIZEOF_INT + 1_AddrInt*no_of_stats_variables*e % offsetIO*SIZEOF_RP
-            no_stat_s = 9
-            call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            no_stat_s = no_of_reynolds_variables
+            if (no_stat_s > 0) then
+               call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            end if
             allocate(Q(NCONS, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
-            ! write(fid) e%storage%stats%data(7:,:,:,:)
             Q(1:NCONS,:,:,:) = e % storage % stats % data(no_stat_s+1:no_stat_s+NCONS,:,:,:)
-            write(fid) Q
+            if (no_stat_s == 0) then
+               call writeArray(fid, Q, position=pos)
+            else
+               write(fid) Q
+            end if
             deallocate(Q)
+            if (no_of_favre_variables > 0) then
+               allocate(Q(no_of_favre_variables, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+               Q(1:no_of_favre_variables,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+no_of_favre_variables,:,:,:)
+               write(fid) Q
+               deallocate(Q)
+            end if
             if ( saveGradients .and. computeGradients ) then
                allocate(Q(NGRAD,0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
                ! UX
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1:no_stat_s+NCONS+no_of_favre_variables+NGRAD,:,:,:)
                write(fid) Q
                ! UY
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+NGRAD:no_stat_s+NCONS+2*NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+NGRAD:no_stat_s+NCONS+no_of_favre_variables+2*NGRAD,:,:,:)
                write(fid) Q
                ! UZ
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+2*NGRAD:,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+2*NGRAD:,:,:,:)
                write(fid) Q
                deallocate(Q)
             end if
@@ -3439,7 +3489,7 @@ slavecoord:             DO l = 1, 4
 
 #endif
 
-#if defined(INCNS) 
+#if defined(INCNS)
       subroutine HexMesh_SaveStatistics(self, iter, time, name, saveGradients)
          use SolutionFile
          implicit none
@@ -3485,23 +3535,34 @@ slavecoord:             DO l = 1, 4
          do eID = 1, self % no_of_elements
             associate( e => self % elements(eID) )
             pos = POS_INIT_DATA + (e % globID-1)*5_AddrInt*SIZEOF_INT + no_of_stats_variables*e % offsetIO*SIZEOF_RP
-            no_stat_s = 9
-            call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            no_stat_s = no_of_reynolds_variables
+            if (no_stat_s > 0) then
+               call writeArray(fid, e % storage % stats % data(1:no_stat_s,:,:,:), position=pos)
+            end if
             allocate(Q(NCONS, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
-         !    ! write(fid) e%storage%stats%data(7:,:,:,:)
-             Q(1:NCONS,:,:,:) = e % storage % stats % data(no_stat_s+1:no_stat_s+NCONS,:,:,:)
-             write(fid) Q
-             deallocate(Q)
+            Q(1:NCONS,:,:,:) = e % storage % stats % data(no_stat_s+1:no_stat_s+NCONS,:,:,:)
+            if (no_stat_s == 0) then
+               call writeArray(fid, Q, position=pos)
+            else
+               write(fid) Q
+            end if
+            deallocate(Q)
+            if (no_of_favre_variables > 0) then
+               allocate(Q(no_of_favre_variables, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+               Q(1:no_of_favre_variables,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+no_of_favre_variables,:,:,:)
+               write(fid) Q
+               deallocate(Q)
+            end if
             if ( saveGradients .and. computeGradients ) then
                allocate(Q(NGRAD,0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
                ! UX
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1:no_stat_s+NCONS+NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1:no_stat_s+NCONS+no_of_favre_variables+NGRAD,:,:,:)
                write(fid) Q
                ! UY
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+NGRAD:no_stat_s+NCONS+2*NGRAD,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+NGRAD:no_stat_s+NCONS+no_of_favre_variables+2*NGRAD,:,:,:)
                write(fid) Q
                ! UZ
-               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+1+2*NGRAD:,:,:,:)
+               Q(1:NGRAD,:,:,:) = e % storage % stats % data(no_stat_s+NCONS+no_of_favre_variables+1+2*NGRAD:,:,:,:)
                write(fid) Q
                deallocate(Q)
             end if
@@ -3997,23 +4058,37 @@ slavecoord:             DO l = 1, 4
 !
 !////////////////////////////////////////////////////////////////////////
 !
-      logical function HexMesh_FindPointWithCoords(self, x, eID, xi, optionalElements)
+      logical function HexMesh_FindPointWithCoords(self, x, eID, xi, optionalElements, eID_hint)
          implicit none
          class(HexMesh), intent(in)         :: self
          real(kind=RP),    intent(in)       :: x(NDIM)
          integer,          intent(out)      :: eID
          real(kind=RP),    intent(out)      :: xi(NDIM)
          integer, optional,intent(in)       :: optionalElements(:)
+         integer, optional,intent(in)       :: eID_hint
 !
 !        ---------------
 !        Local variables
 !        ---------------
 !
-         integer     :: op_eID
+         integer     :: op_eID, hint
          integer     :: zoneID, fID
          logical     :: success
 
          HexMesh_FindPointWithCoords = .false.
+!
+!        Try local search from hint element first (for spatially ordered probe sets)
+!        ---------------------------------------------------------------------------
+         if ( present(eID_hint) ) then
+            hint = eID_hint
+            if ( hint >= 1 .and. hint <= self % no_of_elements ) then
+               if ( self % FindPointWithCoordsInNeighbors(x, xi, hint, 6) ) then
+                  eID = hint
+                  HexMesh_FindPointWithCoords = .true.
+                  return
+               end if
+            end if
+         end if
 !
 !        Search in optionalElements (if present)
 !        ---------------------------------------
@@ -4031,22 +4106,55 @@ slavecoord:             DO l = 1, 4
             end do
          end if
 !
-!        Search in linear (not curved) mesh (faster and safer)
-!        -----------------------------------------------------
-         do eID = 1, self % no_of_elements
-            success = self % elements(eID) % FindPointInLinElement(x, self % nodes)
-            if ( success ) exit
-         end do
+!        Search using spatial grid
+!        -------------------------
+         eID = 0
+         block
+            integer :: cx0, cy0, cz0, cx1, cy1, cz1, cx, cy, cz, k, cand
+            integer :: ncx_loc, ncy_loc, ncz_loc
+            ncx_loc = self % sgrid % ncx
+            ncy_loc = self % sgrid % ncy
+            ncz_loc = self % sgrid % ncz
+            cx0 = max(1, int((x(1)-self%sgrid%xmin(1))/self%sgrid%dx(1)))
+            cy0 = max(1, int((x(2)-self%sgrid%xmin(2))/self%sgrid%dx(2)))
+            cz0 = max(1, int((x(3)-self%sgrid%xmin(3))/self%sgrid%dx(3)))
+            cx1 = min(ncx_loc, cx0+1)
+            cy1 = min(ncy_loc, cy0+1)
+            cz1 = min(ncz_loc, cz0+1)
+            cx0 = max(1, cx0-1)
+            cy0 = max(1, cy0-1)
+            cz0 = max(1, cz0-1)
+            outer: do cz = cz0, cz1 ; do cy = cy0, cy1 ; do cx = cx0, cx1
+               associate(cell => self % sgrid % cells(cx,cy,cz))
+               do k = 1, cell % n
+                  cand = cell % eID(k)
+                  success = self % elements(cand) % FindPointInLinElement(x, self % nodes)
+                  if ( success ) then
+                     eID = cand
+                     exit outer
+                  end if
+               end do
+               end associate
+            end do ; end do ; end do outer
+         end block
 !
 !        If found in linear mesh, use FindPointWithCoords in that element and, if necessary, in neighbors...
 !        ---------------------------------------------------------------------------------------------------
-         if (eID <= self % no_of_elements) then
+         if (eID >= 1 .and. eID <= self % no_of_elements) then
             success = self % FindPointWithCoordsInNeighbors(x, xi, eID, 2)
             if ( success ) then
                HexMesh_FindPointWithCoords = .true.
                return
             end if
          end if
+!
+!        If the spatial hash found nothing the point is almost certainly outside
+!        this rank's partition; skip the O(N_elem) linear scan entirely and let
+!        the boundary-elements pass below handle the rare curved-boundary edge
+!        cases.  The original O(N_elem) fallback was catastrophic for runs with
+!        O(1e6) probes on O(1e2) ranks because every non-owning rank executed
+!        the full scan for every probe in its bounding box.
+         return
 !
 !        As a last resource, search using FindPointWithCoords only in boundary elements
 !        ------------------------------------------------------------------------------
@@ -4063,6 +4171,82 @@ slavecoord:             DO l = 1, 4
          end do
 
       end function HexMesh_FindPointWithCoords
+!
+!////////////////////////////////////////////////////////////////////////
+!
+!     Build a uniform spatial grid index over the linearised element bounding
+!     boxes.  Resolution: cbrt(N_elem) cells per side (capped at 200).
+!     Called once lazily from FindPointWithCoords.
+!
+      subroutine HexMesh_BuildSpatialGrid(self)
+         implicit none
+         class(HexMesh), intent(inout) :: self
+         integer  :: eID, i, ncx, ncy, ncz
+         integer  :: ix0, iy0, iz0, ix1, iy1, iz1, ix, iy, iz
+         real(kind=RP) :: xlo(3), xhi(3), glo(3), ghi(3), dx(3)
+         real(kind=RP) :: cbrt_n
+
+         if ( self % sgrid % built ) return
+
+         cbrt_n = self % no_of_elements ** (1.0_RP/3.0_RP)
+         ncx = min(200, max(1, nint(cbrt_n)))
+         ncy = ncx
+         ncz = ncx
+
+!        Compute global bounding box from node coordinates
+         glo = huge(1.0_RP)
+         ghi = -huge(1.0_RP)
+         do i = 1, size(self % nodes)
+            glo = min(glo, self % nodes(i) % x)
+            ghi = max(ghi, self % nodes(i) % x)
+         end do
+         dx = (ghi - glo) / real([ncx,ncy,ncz], RP)
+         where (dx < tiny(1.0_RP)) dx = 1.0_RP
+
+         self % sgrid % ncx   = ncx
+         self % sgrid % ncy   = ncy
+         self % sgrid % ncz   = ncz
+         self % sgrid % xmin  = glo
+         self % sgrid % dx    = dx
+         allocate( self % sgrid % cells(ncx, ncy, ncz) )
+
+!        Insert each element into every cell its bbox overlaps
+         do eID = 1, self % no_of_elements
+            xlo = huge(1.0_RP)
+            xhi = -huge(1.0_RP)
+            do i = 1, 8
+               xlo = min(xlo, self % nodes(self % elements(eID) % nodeIDs(i)) % x)
+               xhi = max(xhi, self % nodes(self % elements(eID) % nodeIDs(i)) % x)
+            end do
+
+            ix0 = max(1,   int((xlo(1)-glo(1))/dx(1)) + 1)
+            iy0 = max(1,   int((xlo(2)-glo(2))/dx(2)) + 1)
+            iz0 = max(1,   int((xlo(3)-glo(3))/dx(3)) + 1)
+            ix1 = min(ncx, int((xhi(1)-glo(1))/dx(1)) + 1)
+            iy1 = min(ncy, int((xhi(2)-glo(2))/dx(2)) + 1)
+            iz1 = min(ncz, int((xhi(3)-glo(3))/dx(3)) + 1)
+
+            do iz = iz0, iz1 ; do iy = iy0, iy1 ; do ix = ix0, ix1
+               associate(cell => self % sgrid % cells(ix,iy,iz))
+               cell % n = cell % n + 1
+               if ( .not. allocated(cell % eID) ) then
+                  allocate( cell % eID(4) )
+               else if ( cell % n > size(cell % eID) ) then
+                  block
+                     integer, allocatable :: tmp(:)
+                     allocate( tmp(size(cell%eID)*2) )
+                     tmp(1:size(cell%eID)) = cell % eID
+                     call move_alloc(tmp, cell % eID)
+                  end block
+               end if
+               cell % eID(cell % n) = eID
+               end associate
+            end do ; end do ; end do
+         end do
+
+         self % sgrid % built = .true.
+
+      end subroutine HexMesh_BuildSpatialGrid
 !
 !////////////////////////////////////////////////////////////////////////
 !
@@ -4092,11 +4276,19 @@ slavecoord:             DO l = 1, 4
 
          if (depth > 1) then
             do fID=1, FACES_PER_ELEMENT
+!
+!              globID == 0 means this face has no neighbor at all (boundary
+!              face, never passed through ConstructConnectivity, left at its
+!              default). Must be skipped before indexing global2localeID,
+!              which is only valid for globID >= 1.
+!              -----------------------------------------------------------
+               if (self % elements(eID) % Connection(fID) % globID <= 0) cycle
 
                new_eID = mpi_partition % global2localeID (self % elements(eID) % Connection(fID) % globID)
                if (new_eID == 0) cycle
                success = self % FindPointWithCoordsInNeighbors(x, xi, new_eID, depth-1)
                if ( success ) then
+                  eID = new_eID
                   HexMesh_FindPointWithCoordsInNeighbors = .TRUE.
                   return
                end if
@@ -4481,8 +4673,10 @@ slavecoord:             DO l = 1, 4
 
          !$acc enter data copyin(self % elements(eID) % isInsideBody)
          !$acc enter data copyin(self % elements(eID) % STL)
-#ifdef INCNS
-         !$acc enter data copyin(self % elements(eID) % storage % Q_grad_iNS) !iNS state to calculate the gradient
+#ifdef FLOW
+         if (allocated(self % elements(eID) % storage % Q_grad)) then
+            !$acc enter data copyin(self % elements(eID) % storage % Q_grad) ! Gradient variables to calculate the gradient
+         end if
 #endif
 #ifdef CAHNHILLIARD
          !$acc enter data copyin(self % elements(eID) % storage % c)     ! CHE concentration
@@ -4496,10 +4690,8 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % elements(eID) % storage % mu_z)  ! CHE chemical potential z-gradient
          !$acc enter data copyin(self % elements(eID) % storage % v)     ! CHE flow field velocity
          !$acc enter data copyin(self % elements(eID) % storage % G_CH)  ! CHE auxiliary storage
-         !$acc enter data copyin(self % elements(eID) % storage % Q_grad_CH) !CH state to calculate the gradient
 #endif
 #ifdef MULTIPHASE
-      !$acc enter data copyin(self % elements(eID) % storage % Q_grad_mu) ! Multiphase state to calculate the gradient
       !$acc enter data copyin(self % elements(eID) % storage % invMa2)    ! Storage for the density*artificial compressibility factor
 #endif
 
@@ -4651,8 +4843,10 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % faceSide)
          !$acc exit data delete(self % elements(eID) % storage)
          !$acc exit data delete(self % elements(eID) % geom)
-#ifdef INCNS
-         !$acc exit data delete(self % elements(eID) % storage % Q_grad_iNS) !iNS state to calculate the gradient
+#ifdef FLOW
+         if (allocated(self % elements(eID) % storage % Q_grad)) then
+            !$acc exit data delete(self % elements(eID) % storage % Q_grad) ! Gradient variables to calculate the gradient
+         end if
 #endif
 #ifdef CAHNHILLIARD
          !$acc exit data delete(self % elements(eID) % storage % c)     ! CHE concentration
@@ -4666,10 +4860,8 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % storage % mu_z)  ! CHE chemical potential z-gradient
          !$acc exit data delete(self % elements(eID) % storage % v)     ! CHE flow field velocity
          !$acc exit data delete(self % elements(eID) % storage % G_CH)  ! CHE auxiliary storage
-         !$acc exit data delete(self % elements(eID) % storage % Q_grad_CH) !CH state to calculate the gradient
 #endif
 #ifdef MULTIPHASE
-         !$acc exit data delete(self % elements(eID) % storage % Q_grad_mu) ! Multiphase state to calculate the gradient'
          !$acc exit data delete(self % elements(eID) % storage % invMa2)    ! Storage for the density*artificial compressibility factor
 #endif
 
@@ -4802,6 +4994,31 @@ slavecoord:             DO l = 1, 4
       !$acc wait
 
    end subroutine HexMesh_UpdateHostData
+
+   subroutine HexMesh_UpdateDeviceSolution(self)
+!
+!     -----------------------------------------------------------
+!     Copy the host solution Q to the device, e.g. after it has
+!     been modified on the host by a problem file. No-op in CPU
+!     builds and before the device data has been created.
+!     -----------------------------------------------------------
+!
+      implicit none
+      !-----------------------------------------------------------
+      class(HexMesh)                  :: self
+      !-----------------------------------------------------------
+      integer :: eID
+      !-----------------------------------------------------------
+
+      !$acc wait
+
+      do eID = 1, SIZE(self % elements)
+         !$acc update device(self % elements(eID) % storage % Q) if_present
+      enddo
+
+      !$acc wait
+
+   end subroutine HexMesh_UpdateDeviceSolution
 
    subroutine HexMesh_UpdateFacesHostData(self)
       use Physics
@@ -5657,106 +5874,110 @@ call elementMPIList % destruct
 
    end subroutine HexMesh_UpdateHOArrays
 
-   subroutine HexMesh_ComputeLocalGradientNS(self, set_mu)
+!
+!////////////////////////////////////////////////////////////////////////
+!
+!     -----------------------------------------------------------------------------
+!     Computes the local (element-wise) gradients of the gradient variables using
+!     the DG differentiation matrix. The gradients are stored in U_x, U_y, U_z.
+!
+!        * gradVars = GRADVARS_STATE: the gradients of the first nGradEqn entries
+!          of the state, Q, are computed directly (no conversion, no scratch).
+!        * Otherwise: the state is first transformed into the requested gradient
+!          variables (GradientVariables_Selector), which are stored in the
+!          scratch array Q_grad, and the gradients of Q_grad are computed.
+!     -----------------------------------------------------------------------------
+!
+   subroutine HexMesh_ComputeLocalGradient(self, nEqn, nGradEqn, gradVars)
       implicit none
       !-arguments-----------------------------------------
-      type(HexMesh), intent(inout)    :: self
-      logical, intent(in)             :: set_mu
-      !-local-variables-----------------------------------
-      integer :: eID
-
+      type(HexMesh), intent(inout)   :: self
+      integer,       intent(in)      :: nEqn
+      integer,       intent(in)      :: nGradEqn
+      integer,       intent(in)      :: gradVars
       !--------------------------------------------------
+
+      if ( gradVars == GRADVARS_STATE ) then
+         call HexMesh_ComputeLocalGradient_State(self, nGradEqn)
+      else
+         call HexMesh_ComputeLocalGradient_GradVars(self, nEqn, nGradEqn, gradVars)
+      end if
+
+   end subroutine HexMesh_ComputeLocalGradient
+
+   subroutine HexMesh_ComputeLocalGradient_State(self, nGradEqn)
+      implicit none
+      !-arguments-----------------------------------------
+      type(HexMesh), intent(inout)   :: self
+      integer,       intent(in)      :: nGradEqn
+      !-local-variables-----------------------------------
+      integer :: eID, nStored
+      !--------------------------------------------------
+      if ( size(self % elements) == 0 ) return
+!
+!     Number of variables stored in Q (e.g. the multiphase solver computes
+!     the concentration gradient from the first entry of the flow state)
+!     --------------------------------------------------------------------
+      nStored = size(self % elements(1) % storage % Q, 1)
+
 !$omp do schedule(runtime)
       !$acc parallel loop gang vector_length(128) present(self) async(1)
-         do eID = 1 , size(self % elements)
-            call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q)
-         end do
+      do eID = 1 , size(self % elements)
+         call HexElement_ComputeLocalGradient(self % elements(eID), nStored, nGradEqn, self % elements(eID) % storage % Q)
+      end do
       !$acc end parallel loop
-!$omp end do nowait
+!$omp end do
 
-   end subroutine HexMesh_ComputeLocalGradientNS
+   end subroutine HexMesh_ComputeLocalGradient_State
 
-#ifdef INCNS
-   subroutine HexMesh_ComputeLocalGradientiNS(self)
-      use VariableConversion
+   subroutine HexMesh_ComputeLocalGradient_GradVars(self, nEqn, nGradEqn, gradVars)
       implicit none
       !-arguments-----------------------------------------
       type(HexMesh), intent(inout)   :: self
+      integer,       intent(in)      :: nEqn
+      integer,       intent(in)      :: nGradEqn
+      integer,       intent(in)      :: gradVars
       !-local-variables-----------------------------------
       integer :: eID, i, j, k
-
       !--------------------------------------------------
+#ifdef FLOW
+      if ( nGradEqn /= NGRAD ) then
+         write(STD_OUT,'(A,I0,A)') "Gradient variables are only available for the flow equations (nGradEqn = ", nGradEqn, ")."
+         errorMessage(STD_OUT)
+         error stop
+      end if
+
 !$omp do schedule(runtime)
       !$acc parallel loop gang vector_length(128) present(self) async(1)
       do eID = 1 , size(self % elements)
-
-         !$acc loop vector collapse(3) 
+!
+!        Transform the state into the gradient variables
+!        -----------------------------------------------
+         !$acc loop vector collapse(3)
          do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
-            call iNSGradientVariables(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_iNS(:,i,j,k))
-         end do         ; end do         ; end do
-
-         call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_iNS)
-      end do
-   !$acc end parallel loop
-!$omp end do nowait
-
-   end subroutine HexMesh_ComputeLocalGradientiNS
-#endif 
-
-#ifdef CAHNHILLIARD
-   subroutine HexMesh_ComputeLocalGradientCH(self, set_mu)
-      implicit none
-      !-arguments-----------------------------------------
-      type(HexMesh), intent(inout)   :: self
-      logical, intent(in)            :: set_mu
-      !-local-variables-----------------------------------
-      integer :: eID, i, j, k
-
-      !--------------------------------------------------
-!$omp do schedule(runtime)
-      !$acc parallel loop gang vector_length(128) present(self) copyin(set_mu) async(1)
-      do eID = 1 , size(self % elements)
-
-         !$acc loop vector collapse(3) 
-         do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
-            call chGradientVariables(NCOMP, NCOMP, self % elements(eID) % storage % Q(1:IMC,i,j,k), self % elements(eID) % storage % Q_grad_CH(1:IMC,i,j,k))
-            !if ( set_mu ) self % elements(eID) % storage % Q_grad_CH(IGMU,i,j,k) = self % elements(eID) % storage % mu(1,i,j,k)
-         end do         ; end do         ; end do
-
-         call HexElement_ComputeLocalGradient(self % elements(eID), NCOMP, NCOMP, self % elements(eID) % storage % Q_grad_CH)
-      end do
-   !$acc end parallel loop
-!$omp end do nowait
-
-   end subroutine HexMesh_ComputeLocalGradientCH
-
-   subroutine HexMesh_ComputeLocalGradientMU(self, set_mu)
-      use VariableConversion
-      implicit none
-      !-arguments-----------------------------------------
-      type(HexMesh), intent(inout)   :: self
-      logical, intent(in)            :: set_mu
-      !-local-variables-----------------------------------
-      integer :: eID, i, j, k
-
-      !--------------------------------------------------
-!$omp do schedule(runtime)
-      !$acc parallel loop gang vector_length(128) present(self) copyin(set_mu) async(1)
-      do eID = 1 , size(self % elements)
-
-         !$acc loop vector collapse(3) 
-         do k = 0, self % elements(eID) % Nxyz(3) ; do j = 0, self % elements(eID) % Nxyz(2) ; do i = 0, self % elements(eID) % Nxyz(1)
-            call mGradientVariables(NCONS, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), self % elements(eID) % storage % Q_grad_mu(:,i,j,k), self % elements(eID) % storage % rho(i,j,k))
-            !if ( set_mu == .true.) then ! This is not working - weird - above it works
-                  self % elements(eID) % storage % Q_grad_mu(IGMU,i,j,k) = self % elements(eID) % storage % mu(1,i,j,k)
-            !end if
-         end do         ; end do         ; end do
-
-         call HexElement_ComputeLocalGradient(self % elements(eID), NCONS, NGRAD, self % elements(eID) % storage % Q_grad_mu)
-      end do
-   !$acc end parallel loop
-!$omp end do nowait
-   end subroutine HexMesh_ComputeLocalGradientMU
+#ifdef MULTIPHASE
+            call GradientVariables_Selector(gradVars, nEqn, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), &
+                                            self % elements(eID) % storage % Q_grad(:,i,j,k), &
+                                            self % elements(eID) % storage % rho(i,j,k), &
+                                            self % elements(eID) % storage % mu(1,i,j,k))
+#else
+            call GradientVariables_Selector(gradVars, nEqn, NGRAD, self % elements(eID) % storage % Q(:,i,j,k), &
+                                            self % elements(eID) % storage % Q_grad(:,i,j,k), 0.0_RP, 0.0_RP)
 #endif
+         end do         ; end do         ; end do
+!
+!        Compute their gradients
+!        -----------------------
+         call HexElement_ComputeLocalGradient(self % elements(eID), NGRAD, NGRAD, self % elements(eID) % storage % Q_grad)
+      end do
+      !$acc end parallel loop
+!$omp end do
+#else
+      write(STD_OUT,'(A)') "Gradient variables other than the state are only available for the flow equations."
+      errorMessage(STD_OUT)
+      error stop
+#endif
+
+   end subroutine HexMesh_ComputeLocalGradient_GradVars
 
 END MODULE HexMeshClass
