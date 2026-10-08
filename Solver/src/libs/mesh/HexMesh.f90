@@ -4148,34 +4148,13 @@ slavecoord:             DO l = 1, 4
             end if
          end if
 !
-!        Fallback: linear scan only if point is inside this rank's bounding box.
-!        Points outside the bbox cannot belong to any local element; skipping
-!        the O(N_elem) scan is critical for performance when most probes lie in
-!        other MPI partitions (the common case with many ranks).
-!        -----------------------------------------------------------------------
-         block
-            real(kind=RP) :: margin
-            logical       :: in_bbox
-            margin = 2.0_RP * maxval(self % sgrid % dx)
-            in_bbox = ( x(1) >= self%sgrid%xmin(1) - margin .and. &
-                        x(1) <= self%sgrid%xmin(1) + self%sgrid%ncx*self%sgrid%dx(1) + margin .and. &
-                        x(2) >= self%sgrid%xmin(2) - margin .and. &
-                        x(2) <= self%sgrid%xmin(2) + self%sgrid%ncy*self%sgrid%dx(2) + margin .and. &
-                        x(3) >= self%sgrid%xmin(3) - margin .and. &
-                        x(3) <= self%sgrid%xmin(3) + self%sgrid%ncz*self%sgrid%dx(3) + margin )
-            if ( .not. in_bbox ) return
-         end block
-         do eID = 1, self % no_of_elements
-            success = self % elements(eID) % FindPointInLinElement(x, self % nodes)
-            if ( success ) exit
-         end do
-         if (eID <= self % no_of_elements) then
-            success = self % FindPointWithCoordsInNeighbors(x, xi, eID, 2)
-            if ( success ) then
-               HexMesh_FindPointWithCoords = .true.
-               return
-            end if
-         end if
+!        If the spatial hash found nothing the point is almost certainly outside
+!        this rank's partition; skip the O(N_elem) linear scan entirely and let
+!        the boundary-elements pass below handle the rare curved-boundary edge
+!        cases.  The original O(N_elem) fallback was catastrophic for runs with
+!        O(1e6) probes on O(1e2) ranks because every non-owning rank executed
+!        the full scan for every probe in its bounding box.
+         return
 !
 !        As a last resource, search using FindPointWithCoords only in boundary elements
 !        ------------------------------------------------------------------------------
