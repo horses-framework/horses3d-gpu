@@ -59,10 +59,13 @@ Usage
 """
 
 import argparse
+import os
+import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -83,80 +86,143 @@ X_MIN, X_MAX = -1.0, 3.0
 N_RANS_PROBES = 14_000
 
 
-# ── HDF5 reader ───────────────────────────────────────────────────────────────
+# ── HDF5 reader via h5dump (no h5py, no MPI conflicts) ───────────────────────
+#
+# Uses the h5dump and h5ls CLI tools from the HDF5 module already loaded in
+# the environment.  Requires only numpy (built into pvpython) and subprocess
+# (Python standard library).  Avoids all MPI / library-version conflicts.
+
+def _h5ls_shapes(h5_file: str) -> dict:
+    """Return {dataset_name: shape_tuple} by parsing h5ls output."""
+    result = subprocess.run(["h5ls", h5_file],
+                            capture_output=True, text=True, check=True)
+    shapes = {}
+    for line in result.stdout.splitlines():
+        m = re.match(r'^(\S+)\s+Dataset\s+\{([^}]+)\}', line)
+        if m:
+            name = m.group(1)
+            # dimensions like "3, 1073000" or "1234" or "1234/Inf, 1073000/1073000"
+            parts = [d.strip().split('/')[0] for d in m.group(2).split(',')]
+            shapes[name] = tuple(int(p) for p in parts)
+    return shapes
+
+
+def _h5dump_array(h5_file: str, dset: str,
+                  start: tuple, count: tuple, dtype) -> np.ndarray:
+    """
+    Extract a hyperslab from an HDF5 dataset using h5dump binary output.
+
+    h5dump writes the selected region as raw little-endian binary to a temp
+    file; numpy.fromfile reads it and reshapes to `count`.
+    """
+    fd, tmppath = tempfile.mkstemp(suffix=".bin")
+    os.close(fd)
+    try:
+        start_str = ",".join(str(s) for s in start)
+        count_str = ",".join(str(c) for c in count)
+        cmd = ["h5dump",
+               "-d", dset,
+               "-s", start_str,
+               "-c", count_str,
+               "-b", "LE",
+               "-o", tmppath,
+               h5_file]
+        subprocess.run(cmd, check=True, capture_output=True)
+        data = np.fromfile(tmppath, dtype=dtype).reshape(count)
+    finally:
+        if os.path.exists(tmppath):
+            os.unlink(tmppath)
+    return data
+
 
 def load_h5(h5_file: Path, nx: int, ny: int, nz: int,
             n_rans: int, var_names: dict):
     """
     Read the Horses3d .probes.h5 file and return the RANS sub-set.
 
+    Uses h5dump + numpy only — no h5py, no MPI.
+    Requires h5dump/h5ls on PATH (load the HDF5 module before running).
+
     Parameters
     ----------
     h5_file   : path to the .probes.h5 file
     nx,ny,nz  : RANS grid dimensions (nx*ny*nz must equal n_rans)
-    n_rans    : number of RANS probes (first rows in the file)
+    n_rans    : number of RANS probes (first columns in the file)
     var_names : mapping from logical name to HDF5 dataset name
                 keys: "u","v","w","p","rho"
 
     Returns
     -------
-    x_locs     : (nx,)       x coordinates
-    y_locs     : (nx, ny)    y coordinates (wall-adapted per x station)
-    z_locs     : (nz,)       z coordinates
-    probe_order: list of (ix, iy, iz) for each of the n_rans probe rows
-    G          : (n_steps, nx, ny, nz, 4)  u v w p
-    time       : (n_steps,)  simulation time
-    iteration  : (n_steps,)  iteration number
+    x_locs, y_locs, z_locs, probe_order, G, time, iteration
     """
     if nx * ny * nz != n_rans:
         sys.exit(f"[ERROR] nx({nx}) × ny({ny}) × nz({nz}) = {nx*ny*nz} ≠ n_rans({n_rans})")
 
-    with h5py.File(h5_file, "r") as fh:
-        # ── coordinates (RANS subset only) ────────────────────────────────────
-        # shape in file: (3, nProbes_total) — Fortran column-major
-        coords = fh["coordinates"][:, :n_rans]   # (3, n_rans)
-        x_all, y_all, z_all = coords[0], coords[1], coords[2]
+    h5str = str(h5_file)
 
-        x_locs = np.unique(x_all)
-        z_locs = np.unique(z_all)
-        if len(x_locs) != nx:
-            sys.exit(f"[ERROR] Found {len(x_locs)} unique x values, expected {nx}")
-        if len(z_locs) != nz:
-            sys.exit(f"[ERROR] Found {len(z_locs)} unique z values, expected {nz}")
+    # ── inspect dataset shapes ─────────────────────────────────────────────────
+    try:
+        shapes = _h5ls_shapes(h5str)
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"[ERROR] h5ls failed — is the HDF5 module loaded?\n{e.stderr}")
 
-        y_per_x = [np.unique(y_all[x_all == xv]) for xv in x_locs]
-        ny_vals = [len(y) for y in y_per_x]
-        if len(set(ny_vals)) != 1 or ny_vals[0] != ny:
-            sys.exit(f"[ERROR] Unexpected ny distribution across x: {ny_vals}")
-        y_locs = np.array(y_per_x)   # (nx, ny)
+    if "coordinates" not in shapes:
+        sys.exit(f"[ERROR] /coordinates not found. Datasets: {list(shapes.keys())}")
 
-        probe_order = []
-        for xv, yv, zv in zip(x_all, y_all, z_all):
-            ix = int(np.searchsorted(x_locs, xv))
-            iy = int(np.searchsorted(y_locs[ix], yv))
-            iz = int(np.searchsorted(z_locs, zv))
-            probe_order.append((ix, iy, iz))
+    n_steps_time = shapes.get("time", (0,))[0]
+    if n_steps_time == 0:
+        sys.exit("[ERROR] /time dataset is empty — no data saved yet.")
+    n_steps = n_steps_time
+    print(f"  Shapes   : {shapes}")
 
-        # ── time / iteration ──────────────────────────────────────────────────
-        time      = fh["time"][:]
-        iteration = fh["iteration"][:]
-        n_steps   = len(time)
-        print(f"  Steps    : {n_steps}")
-        print(f"  Time     : {time[0]:.6g} → {time[-1]:.6g}")
-        print(f"  Iteration: {iteration[0]} → {iteration[-1]}")
+    # ── coordinates (RANS subset: columns 0..n_rans-1) ────────────────────────
+    # /coordinates shape: (3, nProbes_total)
+    coords = _h5dump_array(h5str, "coordinates",
+                           start=(0, 0), count=(3, n_rans), dtype="<f8")
+    x_all, y_all, z_all = coords[0], coords[1], coords[2]
 
-        # ── flow variables  ───────────────────────────────────────────────────
-        # Each dataset: (n_steps, nProbes_total) — read RANS columns only
-        G = np.empty((n_steps, nx, ny, nz, 4), dtype=np.float64)
-        for vi, key in enumerate(["u", "v", "w", "p"]):
-            dset_name = var_names[key]
-            if dset_name not in fh:
-                sys.exit(f"[ERROR] Dataset '{dset_name}' not found in {h5_file}. "
-                         f"Available: {list(fh.keys())}")
-            raw = fh[dset_name][:, :n_rans]   # (n_steps, n_rans)
-            print(f"  Loading  : {dset_name}  {raw.shape}")
-            for p_idx, (ix, iy, iz) in enumerate(probe_order):
-                G[:, ix, iy, iz, vi] = raw[:, p_idx]
+    x_locs = np.unique(x_all)
+    z_locs = np.unique(z_all)
+    if len(x_locs) != nx:
+        sys.exit(f"[ERROR] Found {len(x_locs)} unique x values, expected {nx}")
+    if len(z_locs) != nz:
+        sys.exit(f"[ERROR] Found {len(z_locs)} unique z values, expected {nz}")
+
+    y_per_x = [np.unique(y_all[x_all == xv]) for xv in x_locs]
+    ny_vals = [len(y) for y in y_per_x]
+    if len(set(ny_vals)) != 1 or ny_vals[0] != ny:
+        sys.exit(f"[ERROR] Unexpected ny distribution across x: {ny_vals}")
+    y_locs = np.array(y_per_x)   # (nx, ny)
+
+    probe_order = []
+    for xv, yv, zv in zip(x_all, y_all, z_all):
+        ix = int(np.searchsorted(x_locs, xv))
+        iy = int(np.searchsorted(y_locs[ix], yv))
+        iz = int(np.searchsorted(z_locs, zv))
+        probe_order.append((ix, iy, iz))
+
+    # ── time & iteration ───────────────────────────────────────────────────────
+    time = _h5dump_array(h5str, "time",
+                         start=(0,), count=(n_steps,), dtype="<f8")
+    iteration = _h5dump_array(h5str, "iteration",
+                               start=(0,), count=(n_steps,), dtype="<i4")
+    print(f"  Steps    : {n_steps}")
+    print(f"  Time     : {time[0]:.6g} → {time[-1]:.6g}")
+    print(f"  Iteration: {iteration[0]} → {iteration[-1]}")
+
+    # ── flow variables — only RANS columns ────────────────────────────────────
+    # Each dataset: (n_steps, nProbes_total); select first n_rans columns.
+    G = np.empty((n_steps, nx, ny, nz, 4), dtype=np.float64)
+    for vi, key in enumerate(["u", "v", "w", "p"]):
+        dset_name = var_names[key]
+        if dset_name not in shapes:
+            sys.exit(f"[ERROR] Dataset '{dset_name}' not found. "
+                     f"Available: {list(shapes.keys())}")
+        print(f"  Loading  : /{dset_name}  ({n_steps} × {n_rans}) …", flush=True)
+        raw = _h5dump_array(h5str, dset_name,
+                            start=(0, 0), count=(n_steps, n_rans), dtype="<f8")
+        for p_idx, (ix, iy, iz) in enumerate(probe_order):
+            G[:, ix, iy, iz, vi] = raw[:, p_idx]
 
     return x_locs, y_locs, z_locs, probe_order, G, time, iteration
 
