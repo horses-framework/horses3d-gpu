@@ -473,7 +473,9 @@ jobs:
 
       - name: Validate NSCylinderProbeFileASCII output
         working-directory: ./Solver/test/NavierStokes/CylinderProbeFileASCII
-        run: python3 validate.py RESULTS
+        run: |
+          pip3 install --quiet numpy
+          python3 validate.py RESULTS
         if: '!cancelled()'
 
       - name: Build NSCylinderProbeFileHDF5
@@ -490,7 +492,9 @@ jobs:
 
       - name: Validate NSCylinderProbeFileHDF5 output
         working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
-        run: python3 validate.py RESULTS
+        run: |
+          pip3 install --quiet numpy
+          python3 validate.py RESULTS
         if: '!cancelled()'
 
 #
