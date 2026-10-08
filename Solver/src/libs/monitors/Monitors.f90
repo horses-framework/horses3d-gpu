@@ -1531,13 +1531,28 @@ end subroutine getNoOfMonitors
       call system_clock(t2)
 
 #ifdef _HAS_MPI_
-      if ( MPI_Process % doMPIAction .and. allocated(self % fp_gatherv_counts) ) then
+      if ( MPI_Process % doMPIAction ) then
 !        MPI_Gatherv: each rank sends its compact fp_owned_buf to root.
 !        Root unpacks using fp_gatherv_perm into fp_buf.
+!        ALL ranks must call MPI_Gatherv (collective); only root uses the
+!        recv-side arguments (recvcounts/recvdispls), so non-root passes
+!        dummy arrays.  The previous guard "allocated(fp_gatherv_counts)"
+!        was TRUE only on root, causing non-root to skip the collective and
+!        leaving root blocked in MPI_Gatherv forever (deadlock).
          allocate( gather_tmp(merge(nfp * nv, 1, MPI_Process % isRoot)) )
-         call MPI_Gatherv(self % fp_owned_buf, self % fp_nOwned * nv, MPI_DOUBLE_PRECISION, &
-                          gather_tmp, self % fp_gatherv_counts, self % fp_gatherv_displs, &
-                          MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+         if ( MPI_Process % isRoot ) then
+            call MPI_Gatherv(self % fp_owned_buf, self % fp_nOwned * nv, MPI_DOUBLE_PRECISION, &
+                             gather_tmp, self % fp_gatherv_counts, self % fp_gatherv_displs, &
+                             MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+         else
+            block
+               integer :: dummy_counts(1), dummy_displs(1)
+               dummy_counts(1) = 0 ; dummy_displs(1) = 0
+               call MPI_Gatherv(self % fp_owned_buf, self % fp_nOwned * nv, MPI_DOUBLE_PRECISION, &
+                                gather_tmp, dummy_counts, dummy_displs, &
+                                MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+            end block
+         end if
          if ( MPI_Process % isRoot ) then
             do k = 1, nfp
                jbuf_g = (self % fp_gatherv_perm(k) - 1) * nv
@@ -2424,21 +2439,12 @@ end subroutine getNoOfMonitors
       nv        = size(self % probesVariables)
       fp_offset = self % no_of_probes - nfp
 
-      ! Build write mask (apply saveTimestep filter)
+      ! All no_of_lines slots are written: the caller (Monitor_FlushFileProbesNow)
+      ! already applied the probeFileSaveTimestep filter and updated fp_lastSavedTime
+      ! before invoking this routine.  No second filter here.
       allocate( wmask(no_of_lines) )
-      wmask = .false.
-      do i = 1, no_of_lines
-         if ( self % probeFileSaveTimestep .gt. 0.0_RP ) then
-            if ( t(i) .lt. self % fp_lastSavedTime + self % probeFileSaveTimestep ) cycle
-         end if
-         wmask(i) = .true.
-         self % fp_lastSavedTime = t(i)
-      end do
-      n_write = count(wmask)
-      if ( n_write .eq. 0 ) then
-         deallocate(wmask)
-         return
-      end if
+      wmask  = .true.
+      n_write = no_of_lines
 
       ! Reuse the persistent file handle opened by Monitor_InitFileProbesHDF5.
       ! On restart (FirstCall=.false.) the init routine is skipped, so open
