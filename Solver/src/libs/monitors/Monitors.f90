@@ -18,6 +18,9 @@ module MonitorsClass
    use StatisticsMonitor
    use SurfaceMonitorClass
 #endif
+#ifdef HAS_HDF5
+   use HDF5
+#endif
    implicit none
 !
 
@@ -35,6 +38,16 @@ module MonitorsClass
    integer, parameter :: FPVAR_RHO        = 8
    integer, parameter :: FPVAR_STATICPRES = 9
    integer, parameter :: FPVAR_DENSITY    = 10
+!
+!  HDF5 persistent file handle for file-probe output.
+!  Opening and closing the .probes.h5 file on every write is expensive
+!  on network filesystems.  The file is created once in
+!  Monitor_InitFileProbesHDF5 and kept open until Monitor_Destruct.
+!
+#ifdef HAS_HDF5
+   integer(HID_T), save :: hdf5_fp_fid  = 0_HID_T
+   logical,        save :: hdf5_fp_open = .false.
+#endif
 !
 !  *****************************
 !  Main monitor class definition
@@ -870,6 +883,9 @@ module MonitorsClass
          safedeallocate( self % fp_x )
          safedeallocate( self % fp_fileUnit )
          safedeallocate( self % fp_active )
+#ifdef HAS_HDF5
+         call Monitor_CloseHDF5FP()
+#endif
 #endif
 #ifdef _OPENACC
          if ( allocated(self % fp_eID) ) then
@@ -2366,8 +2382,10 @@ end subroutine getNoOfMonitors
          call h5pclose_f(dcpl_id, iError)
       end do
 
-      call h5fclose_f(file_id, iError)
-      call h5close_f(iError)
+      ! Keep the file open so Monitor_WriteFileProbesHDF5 can reuse the
+      ! handle without paying a filesystem open/close on every probe save.
+      hdf5_fp_fid  = file_id
+      hdf5_fp_open = .true.
 
    end subroutine Monitor_InitFileProbesHDF5
 
@@ -2422,10 +2440,18 @@ end subroutine getNoOfMonitors
          return
       end if
 
-      write(fname,'(A,A)') trim(self % probes_solution_file), ".probes.h5"
-
-      call h5open_f(iError)
-      call h5fopen_f(trim(fname), H5F_ACC_RDWR_F, file_id, iError)
+      ! Reuse the persistent file handle opened by Monitor_InitFileProbesHDF5.
+      ! On restart (FirstCall=.false.) the init routine is skipped, so open
+      ! lazily here if the handle is not yet valid.
+      if ( hdf5_fp_open ) then
+         file_id = hdf5_fp_fid
+      else
+         write(fname,'(A,A)') trim(self % probes_solution_file), ".probes.h5"
+         call h5open_f(iError)
+         call h5fopen_f(trim(fname), H5F_ACC_RDWR_F, file_id, iError)
+         hdf5_fp_fid  = file_id
+         hdf5_fp_open = .true.
+      end if
 
       ! Query current extent of /time to get append offset
       call h5dopen_f(file_id, "time", dset_id, iError)
@@ -2523,11 +2549,22 @@ end subroutine getNoOfMonitors
 
       deallocate(vbuf)
       deallocate(wmask)
-
-      call h5fclose_f(file_id, iError)
-      call h5close_f(iError)
+      ! File stays open; closed by Monitor_Destruct via Monitor_CloseHDF5FP.
 
    end subroutine Monitor_WriteFileProbesHDF5
+
+   subroutine Monitor_CloseHDF5FP()
+!     Close the persistent file-probe HDF5 handle opened by
+!     Monitor_InitFileProbesHDF5 (or lazily by Monitor_WriteFileProbesHDF5).
+      implicit none
+      integer :: iError
+      if ( hdf5_fp_open ) then
+         call h5fclose_f(hdf5_fp_fid, iError)
+         call h5close_f(iError)
+         hdf5_fp_open = .false.
+      end if
+   end subroutine Monitor_CloseHDF5FP
+
 #endif   ! HAS_HDF5
 
 #endif   ! FLOW
