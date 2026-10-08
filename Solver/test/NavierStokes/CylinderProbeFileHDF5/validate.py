@@ -47,7 +47,9 @@ def _h5ls_shapes(h5_file):
             continue
         dims_str = line[brace_start + 1:brace_end]
         try:
-            dims = tuple(int(d.strip()) for d in dims_str.split(","))
+            # h5ls shows "100" for fixed dims and "100/Inf" for extendible ones;
+            # take the part before "/" (current extent) in both cases.
+            dims = tuple(int(d.strip().split("/")[0]) for d in dims_str.split(","))
         except ValueError:
             continue
         shapes[name] = dims
