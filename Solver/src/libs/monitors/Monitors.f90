@@ -2276,17 +2276,17 @@ end subroutine getNoOfMonitors
          write(STD_OUT,'(30X,A,I0)')    "  Total probes         : ", nFound
          write(STD_OUT,'(30X,A,I0)')    "  Owned by this rank   : ", Monitors % fp_nOwned
          write(STD_OUT,'(30X,A,ES12.4,A)') "  File read + Bcast    : ", &
-            real(tinit_t1-tinit_t0,8)/real(tinit_rate,8)*1.d3, " ms"
+            real(tinit_t1-tinit_t0,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  FindPointWithCoords  : ", &
-            real(tinit_t2-tinit_t1,8)/real(tinit_rate,8)*1.d3, " ms"
+            real(tinit_t2-tinit_t1,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  Allreduce ownership  : ", &
-            real(tinit_t3-tinit_t2,8)/real(tinit_rate,8)*1.d3, " ms"
+            real(tinit_t3-tinit_t2,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  SoA build (pass 2)   : ", &
-            real(tinit_t4-tinit_t3,8)/real(tinit_rate,8)*1.d3, " ms"
+            real(tinit_t4-tinit_t3,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  Sort by eID          : ", &
-            real(tinit_t5-tinit_t4,8)/real(tinit_rate,8)*1.d3, " ms"
+            real(tinit_t5-tinit_t4,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  TOTAL                : ", &
-            real(tinit_t5-tinit_t0,8)/real(tinit_rate,8)*1.d3, " ms"
+            real(tinit_t5-tinit_t0,8)/real(tinit_rate,8), " s"
       end if
 #endif
 
