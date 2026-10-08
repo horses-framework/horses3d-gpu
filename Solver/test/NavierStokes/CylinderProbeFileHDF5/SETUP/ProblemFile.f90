@@ -503,6 +503,7 @@ end module ProblemFileFunctions
             use PhysicsStorage
             use FluidData
             use MonitorsClass
+            use MPI_Process_Info
             IMPLICIT NONE
             CLASS(HexMesh)                        :: mesh
             REAL(KIND=RP)                         :: time
@@ -620,52 +621,55 @@ end module ProblemFileFunctions
 !           to the ASCII one.
 !           -----------------------------------------------------------------
 !
-            nv = size(monitors % probesVariables)
-            DO k = 1, 4
-               CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
-                                  actualValue   = monitors % fp_buf((k-1)*nv + 1) + 1.0_RP, &
-                                  tol           = 1.d-11, &
-                                  msg           = "File-probe x-velocity at the point [0,2.0,4.0]")
-            END DO
+!           fp_buf is root-only (MPI_Gatherv to rank 0); guard assertions.
+            if ( MPI_Process % isRoot ) then
+               nv = size(monitors % probesVariables)
+               DO k = 1, 4
+                  CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
+                                     actualValue   = monitors % fp_buf((k-1)*nv + 1) + 1.0_RP, &
+                                     tol           = 1.d-11, &
+                                     msg           = "File-probe x-velocity at the point [0,2.0,4.0]")
+               END DO
 !
-!           Remaining file-probe variables (v, w, rho, pressure, mach, k,
-!           velocity) at file-probe 1, hardened with ground-truth values
-!           captured from an actual CI run (CI_parallel_NS, run 36995526283).
-!           -----------------------------------------------------------------
-            CALL FTAssertEqual(expectedValue = -5.1694788113224519E-12_RP + 1.0_RP, &
-                               actualValue   = monitors % fp_buf(2) + 1.0_RP, &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe v at the point [0,2.0,4.0]")
+!              Remaining file-probe variables (v, w, rho, pressure, mach, k,
+!              velocity) at file-probe 1, hardened with ground-truth values
+!              captured from an actual CI run (CI_parallel_NS, run 36995526283).
+!              ---------------------------------------------------------------
+               CALL FTAssertEqual(expectedValue = -5.1694788113224519E-12_RP + 1.0_RP, &
+                                  actualValue   = monitors % fp_buf(2) + 1.0_RP, &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe v at the point [0,2.0,4.0]")
 
-            CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
-                               actualValue   = monitors % fp_buf(3), &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe w at the point [0,2.0,4.0]")
+               CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
+                                  actualValue   = monitors % fp_buf(3), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe w at the point [0,2.0,4.0]")
 
-            CALL FTAssertEqual(expectedValue = 1.0000000480383817_RP, &
-                               actualValue   = monitors % fp_buf(4), &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe rho at the point [0,2.0,4.0]")
+               CALL FTAssertEqual(expectedValue = 1.0000000480383817_RP, &
+                                  actualValue   = monitors % fp_buf(4), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe rho at the point [0,2.0,4.0]")
 
-            CALL FTAssertEqual(expectedValue = 7.9365084721826635_RP, &
-                               actualValue   = monitors % fp_buf(5), &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe pressure at the point [0,2.0,4.0]")
+               CALL FTAssertEqual(expectedValue = 7.9365084721826635_RP, &
+                                  actualValue   = monitors % fp_buf(5), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe pressure at the point [0,2.0,4.0]")
 
-            CALL FTAssertEqual(expectedValue = 0.30000004403061858_RP, &
-                               actualValue   = monitors % fp_buf(6), &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe mach at the point [0,2.0,4.0]")
+               CALL FTAssertEqual(expectedValue = 0.30000004403061858_RP, &
+                                  actualValue   = monitors % fp_buf(6), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe mach at the point [0,2.0,4.0]")
 
-            CALL FTAssertEqual(expectedValue = 0.50000018051624784_RP, &
-                               actualValue   = monitors % fp_buf(7), &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe k at the point [0,2.0,4.0]")
+               CALL FTAssertEqual(expectedValue = 0.50000018051624784_RP, &
+                                  actualValue   = monitors % fp_buf(7), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe k at the point [0,2.0,4.0]")
 
-            CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
-                               actualValue   = monitors % fp_buf(8), &
-                               tol           = 1.d-11, &
-                               msg           = "File-probe velocity at the point [0,2.0,4.0]")
+               CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
+                                  actualValue   = monitors % fp_buf(8), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe velocity at the point [0,2.0,4.0]")
+            end if
 
             CALL FTAssertEqual(expectedValue = cd, &
                                actualValue   = monitors % surfaceMonitors(1) % values(1), &
