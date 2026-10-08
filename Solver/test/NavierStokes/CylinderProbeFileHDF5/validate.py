@@ -109,10 +109,12 @@ def parse_probe_file(path):
 def main():
     results_dir = sys.argv[1] if len(sys.argv) > 1 else "RESULTS"
     probes_dir = os.path.join(results_dir, "probes")
-    case = "CylinderProbeFileHDF5"
+    # solution file name is CylinderProbeFileHDF5.hsol, so probe files
+    # carry that stem: CylinderProbeFileHDF5.hsol.<name>.probe / .probes.h5
+    stem = "CylinderProbeFileHDF5.hsol"
 
-    h5_path = os.path.join(probes_dir, f"{case}.probes.h5")
-    inline_path = os.path.join(probes_dir, f"{case}.wake_u.probe")
+    h5_path = os.path.join(probes_dir, f"{stem}.probes.h5")
+    inline_path = os.path.join(probes_dir, f"{stem}.wake_u.probe")
 
     errors = []
 
