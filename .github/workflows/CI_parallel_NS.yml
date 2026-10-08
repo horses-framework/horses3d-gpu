@@ -475,6 +475,8 @@ jobs:
         working-directory: ./Solver/test/NavierStokes/CylinderProbeFileASCII
         run: |
           pip3 install --quiet numpy
+          echo "=== RESULTS/probes contents ==="
+          ls -la RESULTS/probes/ || echo "(directory missing)"
           python3 validate.py RESULTS
         if: '!cancelled()'
 
@@ -494,6 +496,8 @@ jobs:
         working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
         run: |
           pip3 install --quiet numpy
+          echo "=== RESULTS/probes contents ==="
+          ls -la RESULTS/probes/ || echo "(directory missing)"
           python3 validate.py RESULTS
         if: '!cancelled()'
 
