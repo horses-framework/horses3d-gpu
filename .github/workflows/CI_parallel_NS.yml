@@ -95,6 +95,7 @@ jobs:
           make -j8 install
           echo "HDF5_ROOT=$PWD/hdf5" >> $GITHUB_ENV
           echo "HDF5_DIR=$PWD/hdf5" >> $GITHUB_ENV
+          echo "$PWD/hdf5/bin" >> $GITHUB_PATH
           ./hdf5/bin/h5pfc -show
       - name: Check HDF5 PATH
         run: echo "HDF5_ROOT=$HDF5_ROOT"
