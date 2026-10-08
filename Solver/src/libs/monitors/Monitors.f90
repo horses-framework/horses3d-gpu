@@ -1502,18 +1502,22 @@ end subroutine getNoOfMonitors
 !     The kernel is in Monitor_FileProbeKernel so arrays arrive as dummy arguments — this avoids
 !     NVFORTRAN accessing them through the host-side 'self' struct pointer on the GPU.
 !
+         call system_clock(t0, rate)
+         call system_clock(t1)
          Nm = self % fp_Nmax
          call Monitor_FileProbeKernel(self % fp_eID, self % fp_ownsProbe, &
                                       self % fp_lxi, self % fp_leta, self % fp_lzeta, &
                                       self % fp_varCodes, self % fp_values_gpu, &
                                       mesh, nfp, nv, Nm)
          !$acc update host(self % fp_values_gpu)
+         call system_clock(t2)
 #ifdef _HAS_MPI_
          if ( MPI_Process % doMPIAction ) then
             call MPI_Allreduce(MPI_IN_PLACE, self % fp_values_gpu, nfp * nv, &
                                MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
          end if
 #endif
+         call system_clock(t3)
 
 #else
 !
@@ -1571,14 +1575,14 @@ end subroutine getNoOfMonitors
       end do
 #endif
       call system_clock(t3)
+#endif
 
       if ( MPI_Process % isRoot ) then
          write(STD_OUT,'(/,30X,A)') "--- File-probe timing (rank 0) ---"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  ComputeFileProbes  : ", real(t2-t1,8)/real(rate,8), " s"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  MPI_Gatherv+unpack : ", real(t3-t2,8)/real(rate,8), " s"
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  MPI/gather+unpack  : ", real(t3-t2,8)/real(rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  Total              : ", real(t3-t0,8)/real(rate,8), " s"
       end if
-#endif
 
    end subroutine Monitor_UpdateFileProbes
 
@@ -2061,6 +2065,7 @@ end subroutine getNoOfMonitors
          !$acc enter data copyin(Monitors % fp_varCodes)
          !$acc enter data create(Monitors % fp_values_gpu)
       end block
+      call system_clock(tinit_t4)   ! GPU: end of Lagrange/SoA setup
 #else
       block
          integer :: ii, Nmax_loc
@@ -2269,6 +2274,8 @@ end subroutine getNoOfMonitors
       end if
 #endif
 
+#endif
+
       call system_clock(tinit_t5)
 
       if ( MPI_Process % isRoot ) then
@@ -2281,14 +2288,13 @@ end subroutine getNoOfMonitors
             real(tinit_t2-tinit_t1,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  Allreduce ownership  : ", &
             real(tinit_t3-tinit_t2,8)/real(tinit_rate,8), " s"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  SoA build (pass 2)   : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  GPU/CPU setup        : ", &
             real(tinit_t4-tinit_t3,8)/real(tinit_rate,8), " s"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  Sort by eID          : ", &
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  Sort/finalize        : ", &
             real(tinit_t5-tinit_t4,8)/real(tinit_rate,8), " s"
          write(STD_OUT,'(30X,A,ES12.4,A)') "  TOTAL                : ", &
             real(tinit_t5-tinit_t0,8)/real(tinit_rate,8), " s"
       end if
-#endif
 
    end subroutine InitializeProbesFromFile
 
