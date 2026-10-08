@@ -169,16 +169,24 @@ def load_h5(h5_file: Path, nx: int, ny: int, nz: int,
     if "coordinates" not in shapes:
         sys.exit(f"[ERROR] /coordinates not found. Datasets: {list(shapes.keys())}")
 
-    n_steps_time = shapes.get("time", (0,))[0]
-    if n_steps_time == 0:
-        sys.exit("[ERROR] /time dataset is empty — no data saved yet.")
-    n_steps = n_steps_time
     print(f"  Shapes   : {shapes}")
 
-    # ── coordinates (RANS subset: columns 0..n_rans-1) ────────────────────────
-    # /coordinates shape: (3, nProbes_total)
+    # Fortran HDF5 stores dimensions in reversed order relative to C/h5ls.
+    # /coordinates is (nProbes, 3) and /<var> is (nProbes, n_steps) in h5ls.
+    coord_shape = shapes["coordinates"]        # (nProbes_total, 3)
+    n_probes_total = coord_shape[0]
+
+    time_shape = shapes.get("time", (0,))
+    n_steps = time_shape[0]
+    if n_steps == 0:
+        sys.exit("[ERROR] /time dataset is empty — no data saved yet.")
+
+    # ── coordinates (RANS subset: rows 0..n_rans-1) ───────────────────────────
+    # /coordinates shape in file: (nProbes_total, 3)  → read first n_rans rows
     coords = _h5dump_array(h5str, "coordinates",
-                           start=(0, 0), count=(3, n_rans), dtype="<f8")
+                           start=(0, 0), count=(n_rans, 3), dtype="<f8")
+    # coords: (n_rans, 3) — transpose to (3, n_rans) for x/y/z indexing
+    coords = coords.T
     x_all, y_all, z_all = coords[0], coords[1], coords[2]
 
     x_locs = np.unique(x_all)
@@ -210,17 +218,21 @@ def load_h5(h5_file: Path, nx: int, ny: int, nz: int,
     print(f"  Time     : {time[0]:.6g} → {time[-1]:.6g}")
     print(f"  Iteration: {iteration[0]} → {iteration[-1]}")
 
-    # ── flow variables — only RANS columns ────────────────────────────────────
-    # Each dataset: (n_steps, nProbes_total); select first n_rans columns.
+    # ── flow variables — only RANS rows ───────────────────────────────────────
+    # Each dataset in file: (nProbes_total, n_steps) — Fortran-transposed.
+    # We select the first n_rans rows and get shape (n_rans, n_steps),
+    # then transpose to (n_steps, n_rans) for the rest of the pipeline.
     G = np.empty((n_steps, nx, ny, nz, 4), dtype=np.float64)
     for vi, key in enumerate(["u", "v", "w", "p"]):
         dset_name = var_names[key]
         if dset_name not in shapes:
             sys.exit(f"[ERROR] Dataset '{dset_name}' not found. "
                      f"Available: {list(shapes.keys())}")
-        print(f"  Loading  : /{dset_name}  ({n_steps} × {n_rans}) …", flush=True)
+        print(f"  Loading  : /{dset_name}  ({n_rans} probes × {n_steps} steps) …", flush=True)
         raw = _h5dump_array(h5str, dset_name,
-                            start=(0, 0), count=(n_steps, n_rans), dtype="<f8")
+                            start=(0, 0), count=(n_rans, n_steps), dtype="<f8")
+        # raw: (n_rans, n_steps) → transpose to (n_steps, n_rans)
+        raw = raw.T
         for p_idx, (ix, iy, iz) in enumerate(probe_order):
             G[:, ix, iy, iz, vi] = raw[:, p_idx]
 
