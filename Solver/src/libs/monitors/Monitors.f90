@@ -1486,10 +1486,7 @@ end subroutine getNoOfMonitors
       integer        :: Nm
 #endif
 !     --- timing ---
-      integer(kind=8), save :: t0, t1, t2, t3, rate
-      real(kind=8),    save :: dt_zero = 0.d0, dt_compute = 0.d0, dt_reduce = 0.d0
-      integer,         save :: fp_timer_calls = 0
-      integer, parameter    :: FP_TIMER_PERIOD = 100
+      integer(kind=8) :: t0, t1, t2, t3, rate
 !     --- gatherv ---
       real(kind=RP), allocatable :: gather_tmp(:)
       integer :: k, jbuf_g
@@ -1575,21 +1572,11 @@ end subroutine getNoOfMonitors
 #endif
       call system_clock(t3)
 
-      dt_zero    = dt_zero    + real(t1-t0,8)/real(rate,8)
-      dt_compute = dt_compute + real(t2-t1,8)/real(rate,8)
-      dt_reduce  = dt_reduce  + real(t3-t2,8)/real(rate,8)
-      fp_timer_calls = fp_timer_calls + 1
-
-      if ( fp_timer_calls .eq. FP_TIMER_PERIOD .and. MPI_Process % isRoot ) then
-         write(STD_OUT,'(/,30X,A)') "--- File-probe timing (last 100 calls, rank 0) ---"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  ComputeFileProbes  : ", dt_compute *1.d3, " ms total"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  MPI_Gatherv+unpack : ", dt_reduce  *1.d3, " ms total"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  Per-call average   : ", &
-            (dt_zero+dt_compute+dt_reduce)*1.d3/real(FP_TIMER_PERIOD,8), " ms/call"
-         dt_zero    = 0.d0
-         dt_compute = 0.d0
-         dt_reduce  = 0.d0
-         fp_timer_calls = 0
+      if ( MPI_Process % isRoot ) then
+         write(STD_OUT,'(/,30X,A)') "--- File-probe timing (rank 0) ---"
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  ComputeFileProbes  : ", real(t2-t1,8)/real(rate,8), " s"
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  MPI_Gatherv+unpack : ", real(t3-t2,8)/real(rate,8), " s"
+         write(STD_OUT,'(30X,A,ES12.4,A)') "  Total              : ", real(t3-t0,8)/real(rate,8), " s"
       end if
 #endif
 
