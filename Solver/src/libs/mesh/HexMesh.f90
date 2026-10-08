@@ -4148,8 +4148,23 @@ slavecoord:             DO l = 1, 4
             end if
          end if
 !
-!        Fallback: linear scan (point near boundary or grid cell boundary)
-!        -----------------------------------------------------------------
+!        Fallback: linear scan only if point is inside this rank's bounding box.
+!        Points outside the bbox cannot belong to any local element; skipping
+!        the O(N_elem) scan is critical for performance when most probes lie in
+!        other MPI partitions (the common case with many ranks).
+!        -----------------------------------------------------------------------
+         block
+            real(kind=RP) :: margin
+            logical       :: in_bbox
+            margin = 2.0_RP * maxval(self % sgrid % dx)
+            in_bbox = ( x(1) >= self%sgrid%xmin(1) - margin .and. &
+                        x(1) <= self%sgrid%xmin(1) + self%sgrid%ncx*self%sgrid%dx(1) + margin .and. &
+                        x(2) >= self%sgrid%xmin(2) - margin .and. &
+                        x(2) <= self%sgrid%xmin(2) + self%sgrid%ncy*self%sgrid%dx(2) + margin .and. &
+                        x(3) >= self%sgrid%xmin(3) - margin .and. &
+                        x(3) <= self%sgrid%xmin(3) + self%sgrid%ncz*self%sgrid%dx(3) + margin )
+            if ( .not. in_bbox ) return
+         end block
          do eID = 1, self % no_of_elements
             success = self % elements(eID) % FindPointInLinElement(x, self % nodes)
             if ( success ) exit
