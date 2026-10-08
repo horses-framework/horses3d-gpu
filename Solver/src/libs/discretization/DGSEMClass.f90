@@ -102,6 +102,7 @@ Module DGSEMClass
       use PartitionedMeshClass
       use MeshPartitioning
       use SurfaceMesh, only: surfacesMesh
+      use RotationData, only: InitializeRotationFromControl, rotationParams, SetPeriodicAngle
 
       IMPLICIT NONE
 !
@@ -128,6 +129,7 @@ Module DGSEMClass
       INTEGER                     :: fUnit
       integer                     :: dir2D
       integer                     :: ierr
+      real(kind=RP)               :: periodicAngle_
       logical                     :: MeshInnerCurves                    ! The inner survaces of the mesh have curves?
       logical                     :: useRelaxPeriodic                   ! The periodic construction in direction z use a relative tolerance
       logical                     :: useWeightsPartition                ! Partitioning mesh using DOF of elements as weights
@@ -239,6 +241,25 @@ Module DGSEMClass
 
       useRelaxPeriodic = controlVariables % logicalValueForKey("periodic relative tolerance")
       useWeightsPartition = controlVariables % getValueOrDefault("partitioning with weights", .true.)
+
+      ! Initialize rotation parameters from control variables
+      call InitializeRotationFromControl(controlVariables)
+
+#if !defined(NAVIERSTOKES)
+      if (rotationParams % srfEnabled) then
+         if (MPI_Process % isRoot) then
+            write(STD_OUT,'(A)') "ERROR: SRF is only supported in Navier-Stokes solver"
+         end if
+         error stop
+      end if
+!
+      if (rotationParams % periodicEnabled) then
+         if (MPI_Process % isRoot) then
+            write(STD_OUT,'(A)') "ERROR: periodic revolution BCs are only supported in Navier-Stokes solver"
+         end if
+         error stop
+      end if
+#endif
 !
 !     **********************************************************
 !     *                  MPI PREPROCESSING                     *
@@ -283,6 +304,16 @@ Module DGSEMClass
                call self % mesh % Destruct()
 
             end if
+!
+!        Broadcast the periodic angle computed by root rank to all ranks
+!        ----------------------------------------------------------------
+#ifdef _HAS_MPI_
+         if ( MPI_Process % doMPIAction ) then
+            periodicAngle_ = rotationParams % periodicAngle
+            call mpi_bcast(periodicAngle_, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD, ierr)
+            call SetPeriodicAngle(periodicAngle_)
+         end if
+#endif
 
          end if
       end if

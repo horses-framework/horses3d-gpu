@@ -34,6 +34,7 @@
       public  GuermondPopovFlux_ENTROPY
       public  InviscidJacobian, ComputeEigenvaluesForState
       public  getStressTensor, ViscousJacobian, getFrictionVelocity, getFrictionVelocityWithSign
+      public  EulerFlux_Rotref, Source_Rotref
 !
 !     ========
       CONTAINS 
@@ -960,6 +961,69 @@
 
       End Subroutine getFrictionVelocityWithSign      
 !
+!//////////////////////////////////////////////////////////////////////////////
+!
+!           ROTATING REFERENCE FRAME
+!           ------------------------
+!
+!//////////////////////////////////////////////////////////////////////////////
+!
+      pure subroutine EulerFlux_Rotref(Q, x, omega, x0, F)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)  :: Q(NCONS), x(NDIM), omega(NDIM), x0(NDIM)
+         real(kind=RP), intent(out) :: F(NCONS, NDIM)
+         real(kind=RP) :: u, v, w, p, u_r, v_r, w_r, omega_x_r(NDIM), x_rel(NDIM)
+
+         u = Q(IRHOU) / Q(IRHO)
+         v = Q(IRHOV) / Q(IRHO)
+         w = Q(IRHOW) / Q(IRHO)
+
+         x_rel = x - x0
+
+         omega_x_r(IX) = omega(IY)*x_rel(IZ) - omega(IZ)*x_rel(IY)
+         omega_x_r(IY) = omega(IZ)*x_rel(IX) - omega(IX)*x_rel(IZ)
+         omega_x_r(IZ) = omega(IX)*x_rel(IY) - omega(IY)*x_rel(IX)
+
+         u_r = u - omega_x_r(IX)
+         v_r = v - omega_x_r(IY)
+         w_r = w - omega_x_r(IZ)
+
+         p = thermodynamics % gammaMinus1 * (Q(IRHOE) - 0.5_RP*(Q(IRHOU)*u + Q(IRHOV)*v + Q(IRHOW)*w))
+
+         F(IRHO, IX) = Q(IRHO)*u_r
+         F(IRHOU,IX) = Q(IRHOU)*u_r + p
+         F(IRHOV,IX) = Q(IRHOV)*u_r
+         F(IRHOW,IX) = Q(IRHOW)*u_r
+         F(IRHOE,IX) = Q(IRHOE)*u_r + p*u
+
+         F(IRHO, IY) = Q(IRHO)*v_r
+         F(IRHOU,IY) = Q(IRHOU)*v_r
+         F(IRHOV,IY) = Q(IRHOV)*v_r + p
+         F(IRHOW,IY) = Q(IRHOW)*v_r
+         F(IRHOE,IY) = Q(IRHOE)*v_r + p*v
+
+         F(IRHO, IZ) = Q(IRHO)*w_r
+         F(IRHOU,IZ) = Q(IRHOU)*w_r
+         F(IRHOV,IZ) = Q(IRHOV)*w_r
+         F(IRHOW,IZ) = Q(IRHOW)*w_r + p
+         F(IRHOE,IZ) = Q(IRHOE)*w_r + p*w
+      end subroutine EulerFlux_Rotref
+
+      pure function Source_Rotref(Q, omega) result(S)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in) :: Q(NCONS)
+         real(kind=RP), intent(in) :: omega(NDIM)
+         real(kind=RP) :: S(NCONS)
+
+         S(IRHO)  = 0.0_RP
+         S(IRHOU) = -(omega(IY)*Q(IRHOW) - omega(IZ)*Q(IRHOV))
+         S(IRHOV) = -(-omega(IX)*Q(IRHOW) + omega(IZ)*Q(IRHOU))
+         S(IRHOW) = -(omega(IX)*Q(IRHOV) - omega(IY)*Q(IRHOU))
+         S(IRHOE) = 0.0_RP
+      end function Source_Rotref
+
 ! /////////////////////////////////////////////////////////////////////
 !
 !----------------------------------------------------------------------

@@ -13,6 +13,7 @@ module NoSlipWallBCClass
    use VariableConversion, only: GetGradientValues_f
    use HexMeshClass
    use ZoneClass
+   use RotationData, only: rotationParams
    implicit none
 !
 !  *****************************
@@ -51,6 +52,7 @@ module NoSlipWallBCClass
 #endif
 #ifdef FLOW
       real(kind=RP)     :: vWall(NDIM)
+      real(kind=RP)     :: wallOmega     ! Scalar rotation rate (rad/s) about rotationParams % axis/center (SRF only)
 #endif
 #ifdef CAHNHILLIARD
       real(kind=RP)     :: thetaw
@@ -206,10 +208,16 @@ module NoSlipWallBCClass
 #ifdef FLOW
          if ( bcdict % ContainsKey("wall velocity") ) then
             ConstructNoSlipWallBC % vWall = getRealArrayFromString( bcdict % StringValueForKey("wall velocity",&
-                                                                                           LINE_LENGTH))    
-            
+                                                                                      LINE_LENGTH))    
          else
             ConstructNoSlipWallBC % vWall = 0.0_RP
+         end if
+!
+         if ( bcdict % ContainsKey("wall rotation rate") ) then
+            ConstructNoSlipWallBC % wallOmega = bcdict % doublePrecisionValueForKey("wall rotation rate") &
+                                                 * Lref / refValues % V
+         else
+            ConstructNoSlipWallBC % wallOmega = 0.0_RP
          end if
 #endif
 #ifdef CAHNHILLIARD
@@ -320,34 +328,87 @@ module NoSlipWallBCClass
    !        ---------------
    !
             real(kind=RP) :: qNorm, pressure_aux
+            real(kind=RP) :: u_wall(NDIM)
+            real(kind=RP) :: x_rel(NDIM)
             real(kind=RP) :: Q(NCONS)
+            real(kind=RP) :: effectiveOmega(NDIM)
+            real(kind=RP) :: e_int, invRho
             integer       :: i,j,zonefID,fID
-   
-   
-            !$acc parallel loop gang present(mesh, zone, self % vWall, self % Twall, self % wallType) async(1) 
-            do zonefID = 1, zone % no_of_faces
-               fID = zone % faces(zonefID)
-               !$acc loop vector private(Q)            
-               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
-                  
-                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
-   
+
+            if ( rotationParams % srfEnabled ) then
+               !$acc parallel loop gang present(mesh, zone, self % Twall, self % wallType, self % wallOmega) private(fID) async(1)
+               do zonefID = 1, zone % no_of_faces
+                  fID = zone % faces(zonefID)
+                  !$acc loop vector private(Q, u_wall, x_rel, effectiveOmega, e_int, invRho)
+                  do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+
+                     effectiveOmega = self % wallOmega * rotationParams % axis
+
+                     Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+
 #if defined (SPALARTALMARAS)
-                  Q(IRHOTHETA)   = -Q(IRHOTHETA)
+                     Q(IRHOTHETA)   = -Q(IRHOTHETA)
 #endif
-                  Q(IRHOU:IRHOW) = 2.0_RP * Q(IRHO)*self % vWall  - Q(IRHOU:IRHOW) 
-         !        This boundary condition should be
-         !        ---------------------------------
-                  !Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * sum(Q(IRHOU:IRHOW)*nHat)*nHat
-         
-                  !Isothermal BC
-                  Q(IRHOE) = Q(IRHOE) + self % wallType * (Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2 * thermodynamics % gammaMinus1) - Q(IRHOE))
-   
-                  mesh % faces(fID) % storage(2) % Q(:,i,j) = Q
-   
-               enddo ; enddo
-            enddo
-            !$acc end parallel loop
+                     x_rel = mesh % faces(fID) % geom % x(:,i,j) - rotationParams % center
+                     u_wall(1) = effectiveOmega(2)*x_rel(3) - effectiveOmega(3)*x_rel(2)
+                     u_wall(2) = effectiveOmega(3)*x_rel(1) - effectiveOmega(1)*x_rel(3)
+                     u_wall(3) = effectiveOmega(1)*x_rel(2) - effectiveOmega(2)*x_rel(1)
+
+                     ! internal energy BEFORE overwriting the momentum
+                     invRho = 1.0_RP / Q(IRHO)
+                     e_int  = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
+                     Q(IRHOU:IRHOW) = 2.0_RP * Q(IRHO)*u_wall  - Q(IRHOU:IRHOW)
+         !           This boundary condition should be
+         !           ---------------------------------
+                     !Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * sum(Q(IRHOU:IRHOW)*nHat)*nHat
+
+                     ! rebuild total energy from the PRESERVED internal energy + the new kinetic energy
+                     Q(IRHOE) = Q(IRHO)*e_int + 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))
+
+                     !Isothermal BC
+                     Q(IRHOE) = Q(IRHOE) + self % wallType * (Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2 * thermodynamics % gammaMinus1) - Q(IRHOE))
+
+                     mesh % faces(fID) % storage(2) % Q(:,i,j) = Q
+
+                  enddo ; enddo
+               enddo
+               !$acc end parallel loop
+            else
+               !$acc parallel loop gang present(mesh, zone, self % vWall, self % Twall, self % wallType) private(fID) async(1)
+               do zonefID = 1, zone % no_of_faces
+                  fID = zone % faces(zonefID)
+                  !$acc loop vector private(Q, u_wall, e_int, invRho)
+                  do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+
+                     Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+
+#if defined (SPALARTALMARAS)
+                     Q(IRHOTHETA)   = -Q(IRHOTHETA)
+#endif
+                     u_wall = self % vWall
+
+                     ! internal energy BEFORE overwriting the momentum
+                     invRho = 1.0_RP / Q(IRHO)
+                     e_int  = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
+                     Q(IRHOU:IRHOW) = 2.0_RP * Q(IRHO)*u_wall  - Q(IRHOU:IRHOW)
+         !           This boundary condition should be
+         !           ---------------------------------
+                     !Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * sum(Q(IRHOU:IRHOW)*nHat)*nHat
+
+                     ! rebuild total energy from the PRESERVED internal energy + the new kinetic energy
+                     Q(IRHOE) = Q(IRHO)*e_int + 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))
+
+                     !Isothermal BC
+                     Q(IRHOE) = Q(IRHOE) + self % wallType * (Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2 * thermodynamics % gammaMinus1) - Q(IRHOE))
+
+                     mesh % faces(fID) % storage(2) % Q(:,i,j) = Q
+
+                  enddo ; enddo
+               enddo
+               !$acc end parallel loop
+            end if
    
       end subroutine NoSlipWallBC_FlowState
 
@@ -370,40 +431,84 @@ module NoSlipWallBCClass
          real(kind=RP)  :: u_int(NGRAD), u_star(NGRAD)
          real(kind=RP)  :: e_int, U1
          real(kind=RP)  :: invRho
+         real(kind=RP)  :: u_wall(NDIM), x_rel(NDIM)
+         real(kind=RP)  :: effectiveOmega(NDIM)
          integer        :: i,j,zonefID,fID
-   
-   
-         !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
-         do zonefID = 1, zone % no_of_faces
-            fID = zone % faces(zonefID)
-            !$acc loop vector collapse(2) private(Q, Q_aux, u_star, u_int, e_int, invRho)            
-            do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
-               
-               Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
 
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
+         if ( rotationParams % srfEnabled ) then
+            !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
+            do zonefID = 1, zone % no_of_faces
+               fID = zone % faces(zonefID)
+               !$acc loop vector collapse(2) private(Q, Q_aux, u_star, u_int, e_int, invRho, u_wall, x_rel, effectiveOmega)
+               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
 
-               invRho = 1.0_RP / Q(IRHO)
-               e_int = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
-      
-               Q_aux(IRHO) = Q(IRHO)
-               Q_aux(IRHOU:IRHOW) = Q(IRHO) * self % vWall
-               Q_aux(IRHOE) = Q(IRHO)*((1.0_RP-self % wallType)*e_int + self % wallType*self % eWall + 0.5_RP*sum(self % vWall*self % vWall))
+                  effectiveOmega = self % wallOmega * rotationParams % axis
+
+                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+
+                  call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
+
+                  invRho = 1.0_RP / Q(IRHO)
+                  e_int = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
+                  x_rel = mesh % faces(fID) % geom % x(:,i,j) - rotationParams % center
+                  u_wall(1) = effectiveOmega(2)*x_rel(3) - effectiveOmega(3)*x_rel(2)
+                  u_wall(2) = effectiveOmega(3)*x_rel(1) - effectiveOmega(1)*x_rel(3)
+                  u_wall(3) = effectiveOmega(1)*x_rel(2) - effectiveOmega(2)*x_rel(1)
+         
+                  Q_aux(IRHO) = Q(IRHO)
+                  Q_aux(IRHOU:IRHOW) = Q(IRHO) * u_wall
+                  Q_aux(IRHOE) = Q(IRHO)*((1.0_RP-self % wallType)*e_int + self % wallType*self % eWall + 0.5_RP*sum(u_wall*u_wall))
 #if defined (SPALARTALMARAS)
-               Q_aux(IRHOTHETA) = 0.0_RP
+                  Q_aux(IRHOTHETA) = 0.0_RP
 #endif
 
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
+                  call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
 
-               u_star(IRHO) = u_int(IRHO)
-               
-               mesh % faces(fID) % storage(1) % unStar(:,1,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(1,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
-               mesh % faces(fID) % storage(1) % unStar(:,2,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(2,i,j) * mesh % faces(fID) % geom % jacobian(i,j)    
-               mesh % faces(fID) % storage(1) % unStar(:,3,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(3,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
+                  u_star(IRHO) = u_int(IRHO)
+                  
+                  mesh % faces(fID) % storage(1) % unStar(:,1,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(1,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
+                  mesh % faces(fID) % storage(1) % unStar(:,2,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(2,i,j) * mesh % faces(fID) % geom % jacobian(i,j)    
+                  mesh % faces(fID) % storage(1) % unStar(:,3,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(3,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
 
-            enddo ; enddo
-         enddo
-         !$acc end parallel loop
+               enddo ; enddo
+            enddo
+            !$acc end parallel loop
+         else
+            !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
+            do zonefID = 1, zone % no_of_faces
+               fID = zone % faces(zonefID)
+               !$acc loop vector collapse(2) private(Q, Q_aux, u_star, u_int, e_int, invRho, u_wall)
+               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+                  
+                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+
+                  call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
+
+                  invRho = 1.0_RP / Q(IRHO)
+                  e_int = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
+                  u_wall = self % vWall
+         
+                  Q_aux(IRHO) = Q(IRHO)
+                  Q_aux(IRHOU:IRHOW) = Q(IRHO) * u_wall
+                  Q_aux(IRHOE) = Q(IRHO)*((1.0_RP-self % wallType)*e_int + self % wallType*self % eWall + 0.5_RP*sum(u_wall*u_wall))
+#if defined (SPALARTALMARAS)
+                  Q_aux(IRHOTHETA) = 0.0_RP
+#endif
+
+                  call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
+
+                  u_star(IRHO) = u_int(IRHO)
+                  
+                  mesh % faces(fID) % storage(1) % unStar(:,1,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(1,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
+                  mesh % faces(fID) % storage(1) % unStar(:,2,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(2,i,j) * mesh % faces(fID) % geom % jacobian(i,j)    
+                  mesh % faces(fID) % storage(1) % unStar(:,3,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(3,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
+
+               enddo ; enddo
+            enddo
+            !$acc end parallel loop
+         end if
       end subroutine NoSlipWallBC_FlowGradVars
 
       subroutine NoSlipWallBC_FlowNeumann(self, mesh, zone)
@@ -423,32 +528,70 @@ module NoSlipWallBCClass
 !
          integer        :: i,j,zonefID,fID
          real(kind=RP)  :: viscWork, heatFlux, invRho, u, v, w
+         real(kind=RP)  :: u_wall(NDIM), x_rel(NDIM)
+         real(kind=RP)  :: effectiveOmega(NDIM)
          real(kind=RP)  :: flux(NCONS),Q(NCONS)
 
-         !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
-         do zonefID = 1, zone % no_of_faces
-            fID = zone % faces(zonefID)
-            !$acc loop vector collapse(2) private(Q, flux, viscWork, heatFlux, invRho, u, v, w)     
-            do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+         if ( rotationParams % srfEnabled ) then
+            !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
+            do zonefID = 1, zone % no_of_faces
+               fID = zone % faces(zonefID)
+               !$acc loop vector collapse(2) private(Q, flux, viscWork, heatFlux, invRho, u, v, w, u_wall, x_rel, effectiveOmega)
+               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
 
-               Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
-               flux = mesh % faces(fID) % storage(2) % FStar(:,i,j)
-               
-               invRho = 1.0_RP / Q(IRHO)
-               u      = invRho * Q(IRHOU)
-               v      = invRho * Q(IRHOV)
-               w      = invRho * Q(IRHOW)
-               viscWork = u*flux(IRHOU) + v*flux(IRHOV) + w*flux(IRHOW)
-               heatFlux = flux(IRHOE) - viscWork
+                  effectiveOmega = self % wallOmega * rotationParams % axis
 
-               flux(IRHO)  = 0.0_RP
-               flux(IRHOE) = sum(self % vWall*flux(IRHOU:IRHOW)) + self % wallType * heatFlux  ! 0 (Adiabatic)/ heatFlux (Isothermal)
-               
-               mesh % faces(fID) % storage(2) % FStar(:,i,j) = flux(:)
+                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+                  flux = mesh % faces(fID) % storage(2) % FStar(:,i,j)
 
-            enddo ; enddo
-         enddo
-         !$acc end parallel loop 
+                  invRho = 1.0_RP / Q(IRHO)
+                  u      = invRho * Q(IRHOU)
+                  v      = invRho * Q(IRHOV)
+                  w      = invRho * Q(IRHOW)
+                  viscWork = u*flux(IRHOU) + v*flux(IRHOV) + w*flux(IRHOW)
+                  heatFlux = flux(IRHOE) - viscWork
+
+                  x_rel = mesh % faces(fID) % geom % x(:,i,j) - rotationParams % center
+                  u_wall(1) = effectiveOmega(2)*x_rel(3) - effectiveOmega(3)*x_rel(2)
+                  u_wall(2) = effectiveOmega(3)*x_rel(1) - effectiveOmega(1)*x_rel(3)
+                  u_wall(3) = effectiveOmega(1)*x_rel(2) - effectiveOmega(2)*x_rel(1)
+
+                  flux(IRHO)  = 0.0_RP
+                  flux(IRHOE) = sum(u_wall*flux(IRHOU:IRHOW)) + self % wallType * heatFlux  ! 0 (Adiabatic)/ heatFlux (Isothermal)
+                  
+                  mesh % faces(fID) % storage(2) % FStar(:,i,j) = flux(:)
+
+               enddo ; enddo
+            enddo
+            !$acc end parallel loop
+         else
+            !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
+            do zonefID = 1, zone % no_of_faces
+               fID = zone % faces(zonefID)
+               !$acc loop vector collapse(2) private(Q, flux, viscWork, heatFlux, invRho, u, v, w, u_wall)
+               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+
+                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+                  flux = mesh % faces(fID) % storage(2) % FStar(:,i,j)
+                  
+                  invRho = 1.0_RP / Q(IRHO)
+                  u      = invRho * Q(IRHOU)
+                  v      = invRho * Q(IRHOV)
+                  w      = invRho * Q(IRHOW)
+                  viscWork = u*flux(IRHOU) + v*flux(IRHOV) + w*flux(IRHOW)
+                  heatFlux = flux(IRHOE) - viscWork
+
+                  u_wall = self % vWall
+
+                  flux(IRHO)  = 0.0_RP
+                  flux(IRHOE) = sum(u_wall*flux(IRHOU:IRHOW)) + self % wallType * heatFlux  ! 0 (Adiabatic)/ heatFlux (Isothermal)
+                  
+                  mesh % faces(fID) % storage(2) % FStar(:,i,j) = flux(:)
+
+               enddo ; enddo
+            enddo
+            !$acc end parallel loop
+         end if
 
       end subroutine NoSlipWallBC_FlowNeumann
 #endif

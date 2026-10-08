@@ -74,6 +74,11 @@ jobs:
           mpifort --showme
           gcc --version
 
+      - name: Install gmsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gmsh
+
       # # Install parallel HDF5 (OpenMPI version)
       # - name: Install HDF5 (parallel, OpenMPI)
       #   if: (matrix.compiler == 'gfortran')
@@ -1377,3 +1382,82 @@ jobs:
           flags: parallel_ns
           slug: horses-framework/horses3d-gpu
           use_oidc: true
+#
+# 51) Single rotating reference cylinder
+# --------------------------------------------
+      - name: Setup SRFCyl
+        working-directory: ./Solver/test/NavierStokes/SRFCylinder
+        run: |
+          (cd MESH && gmsh -3 hollow_cyl.geo -o hollow_cyl.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}})
+        if: '!cancelled()'
+
+      - name: Run SRFCyl
+        working-directory: ./Solver/test/NavierStokes/SRFCylinder
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns SRFcyl.control
+        if: '!cancelled()'
+
+#
+# 52) Single rotating reference blade
+# --------------------------------------------
+      - name: Setup SRFBlade
+        working-directory: ./Solver/test/NavierStokes/SRFBlade
+        run: |
+          (cd MESH && gmsh -3 hollow_blade.geo -o hollow_blade.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}})
+        if: '!cancelled()'
+
+      - name: Run SRFBlade
+        working-directory: ./Solver/test/NavierStokes/SRFBlade
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns SRFblade.control
+        if: '!cancelled()'
+
+#
+# 53) Pure Periodic
+# ----------------
+      - name: Setup PurePeriodic
+        working-directory: ./Solver/test/NavierStokes/PeriodicOnly
+        run: |
+          (cd MESH && gmsh -3 periodic.geo -o periodic.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}})
+        if: '!cancelled()'
+
+      - name: Run PurePeriodic
+        working-directory: ./Solver/test/NavierStokes/PeriodicOnly
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns periodic.control
+        if: '!cancelled()'
+
+#
+# 54) SRF Periodic
+# ----------------
+      - name: Setup SRFPeriodic
+        working-directory: ./Solver/test/NavierStokes/SRFPeriodic
+        run: |
+          (cd MESH && gmsh -3 periodic.geo -o periodic.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}})
+        if: '!cancelled()'
+
+      - name: Run SRFPeriodic
+        working-directory: ./Solver/test/NavierStokes/SRFPeriodic
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns periodicSRF.control
+        if: '!cancelled()'
+
+#
+# 55) SRF Isentropic vortex (entropy conservation)
+# ------------------------------------------------
+      - name: Setup IsentropicVortexSRF
+        working-directory: ./Solver/test/Euler/IsentropicVortexSRF
+        run: |
+          (cd MESH && gmsh -3 isentropicvortex2D.geo -o isentropicvortex2D.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}})
+        if: '!cancelled()'
+
+      - name: Run IsentropicVortexSRF
+        working-directory: ./Solver/test/Euler/IsentropicVortexSRF
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns IsentropicVortex.control
+        if: '!cancelled()'

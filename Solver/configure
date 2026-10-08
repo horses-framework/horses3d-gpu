@@ -40,6 +40,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./Euler/JFNK \
             ./Euler/TaylorGreenKEPEC \
             ./Euler/Cylinder_ErrorEstimation_pAdaptationRL \
+            ./Euler/IsentropicVortexSRF \
             ./NavierStokes/UniformFlow \
             ./NavierStokes/Convergence \
             ./NavierStokes/Convergence_energy \
@@ -94,6 +95,10 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/Cylinder_AdaptiveTimeStep_pAdaptationRL \
             ./NavierStokes/ABLBoundaryMapping \
             ./NavierStokes/ActuatorLineController \
+            ./NavierStokes/PeriodicOnly \
+            ./NavierStokes/SRFCylinder \
+            ./NavierStokes/SRFBlade \
+            ./NavierStokes/SRFPeriodic \
             ./NavierStokes/Channel \
             ./NavierStokes/Channel64 \
             ./IncompressibleNS/Convergence \

@@ -433,6 +433,8 @@
 !     Set the global (proteted) thermodynamics, dimensionless, and refValues
 !     **********************************************************************
 !
+      refValues_ % omega = 0.0_RP  ! SRF rotation rate isn't known yet here; set later by SpatialDiscretization if srf enabled
+
       call setThermodynamics( thermodynamics_ )
       call setDimensionless( dimensionless_ )
       call setRefValues( refValues_ )

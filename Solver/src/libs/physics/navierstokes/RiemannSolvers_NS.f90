@@ -58,6 +58,7 @@ module RiemannSolvers_NS
    use PhysicsStorage_NS
    use VariableConversion_NS
    use FluidData_NS
+   use RotationData
 
    implicit none
 
@@ -66,6 +67,7 @@ module RiemannSolvers_NS
    public SetRiemannSolver, DescribeRiemannSolver
    public AveragedStates, TwoPointFlux, RiemannSolver_dFdQ, TwoPointFlux_Selector
    public RiemannSolver_Selector
+   public RiemannSolverRotref_Selector, TwoPointFluxRotref_Selector
 
    abstract interface
       !subroutine RiemannSolverFCN(Nx, Ny, QLeft, QRight, nHat, t1, t2, flux)
@@ -95,6 +97,19 @@ module RiemannSolvers_NS
          real(kind=RP), intent(in)       :: JaR(1:NDIM)
          real(kind=RP), intent(out)      :: fSharp(NCONS)
       end subroutine TwoPointFluxFCN
+      subroutine TwoPointFluxRotrefFCN(QLeft, QRight, xL, xR, JaL, JaR, omega, x0, fSharp)
+         use SMConstants
+         use PhysicsStorage_NS
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS)
+         real(kind=RP), intent(in)       :: xL(1:NDIM)
+         real(kind=RP), intent(in)       :: xR(1:NDIM)
+         real(kind=RP), intent(in)       :: JaL(1:NDIM)
+         real(kind=RP), intent(in)       :: JaR(1:NDIM)
+         real(kind=RP), intent(in)       :: omega(1:NDIM)
+         real(kind=RP), intent(in)       :: x0(1:NDIM)
+         real(kind=RP), intent(out)      :: fSharp(NCONS)
+      end subroutine TwoPointFluxRotrefFCN
       subroutine RiemannSolver_dFdQFCN(ql, qr, nHat, dfdq_num, side)
          use SMConstants
          use PhysicsStorage_NS
@@ -482,6 +497,92 @@ module RiemannSolvers_NS
          end select
          
       end subroutine TwoPointFlux_Selector
+
+      subroutine RiemannSolverRotref_Selector(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         !$acc routine vector
+         use RiemannSolvers_NSKeywordsModule
+         implicit none
+         integer, intent(in)        :: Nx, Ny
+         real(kind=RP), intent(in)  :: QLeft(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: QRight(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: nHat(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: t1(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: t2(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: x(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: omega(1:NDIM)
+         real(kind=RP), intent(in)  :: x0(1:NDIM)
+         real(kind=RP), intent(out) :: flux(1:NCONS, 0:Nx, 0:Ny)
+
+         select case (whichRiemannSolver)
+         case (RIEMANN_CENTRAL)
+            call CentralRiemannSolver_Rotref(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         case (RIEMANN_LXF)
+            call LxFRiemannSolver_Rotref(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         case (RIEMANN_ROE)
+            call RoeRiemannSolver_Rotref(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         case default
+            print*, "Riemann Solver not implemented for rotating reference frame."
+            errorMessage(STD_OUT)
+            error stop
+         end select
+
+      end subroutine RiemannSolverRotref_Selector
+
+      subroutine TwoPointFluxRotref_Selector(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         !$acc routine seq
+         use RiemannSolvers_NSKeywordsModule
+         implicit none
+         real(kind=RP), intent(in)  :: QL(1:NCONS)
+         real(kind=RP), intent(in)  :: QR(1:NCONS)
+         real(kind=RP), intent(in)  :: xL(1:NDIM)
+         real(kind=RP), intent(in)  :: xR(1:NDIM)
+         real(kind=RP), intent(in)  :: JaL(1:NDIM)
+         real(kind=RP), intent(in)  :: JaR(1:NDIM)
+         real(kind=RP), intent(in)  :: omega(1:NDIM)
+         real(kind=RP), intent(in)  :: x0(1:NDIM)
+         real(kind=RP), intent(out) :: fSharp(NCONS)
+
+         select case (whichAverage)
+         case (STANDARD_AVG)
+            call StandardDG_TwoPointFlux_Rotref(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         case (KENNEDYGRUBER_AVG)
+            call KennedyGruber_TwoPointFlux_Rotref(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         case (CHANDRASEKAR_AVG)
+            call Chandrasekar_TwoPointFlux_Rotref(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         case default
+            print*, "Two-point flux not implemented for rotating reference frame."
+            errorMessage(STD_OUT)
+            error stop
+         end select
+
+      end subroutine TwoPointFluxRotref_Selector
+
+      subroutine AveragedStateRotref_Selector(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         !$acc routine seq
+         use RiemannSolvers_NSKeywordsModule
+         implicit none
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS)
+         real(kind=RP), intent(in)       :: pL, pR
+         real(kind=RP), intent(in)       :: invRhoL, invRhoR
+         real(kind=RP), intent(in)       :: omega_x_r(1:NDIM)
+         real(kind=RP), intent(in)       :: x0(1:NDIM)
+         real(kind=RP), intent(out)      :: flux(1:NCONS)
+
+         select case (whichAverage)
+         case (STANDARD_AVG)
+            call StandardAverage_Rotref(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         case (KENNEDYGRUBER_AVG)
+            call KennedyGruberAverage_Rotref(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         case (CHANDRASEKAR_AVG)
+            call ChandrasekarAverage_Rotref(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         case default
+            print*, "Averaging function not implemented for rotating reference frame."
+            errorMessage(STD_OUT)
+            error stop
+         end select
+
+      end subroutine AveragedStateRotref_Selector
 
 !
 !///////////////////////////////////////////////////////////////////////////////////////////
@@ -2862,5 +2963,644 @@ module RiemannSolvers_NS
 
       end subroutine Chandrasekar_TwoPointFlux
 
+      subroutine CentralRiemannSolver_Rotref(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         !$acc routine vector
+         use SMConstants
+         use PhysicsStorage_NS
+         implicit none
+         integer, intent(in)             :: Nx, Ny
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: nHat(1:NDIM, 0:Nx, 0:Ny), t1(NDIM, 0:Nx, 0:Ny), t2(NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: x(1:NDIM, 0:Nx, 0:Ny), omega(1:NDIM), x0(1:NDIM)
+         real(kind=RP), intent(out)      :: flux(1:NCONS, 0:Nx, 0:Ny)
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP) :: rhoL, rhouL, rhovL, rhowL, rhoeL, pL, rhoV2L
+         real(kind=RP) :: rhoR, rhouR, rhovR, rhowR, rhoeR, pR, rhoV2R
+         real(kind=RP) :: invRhoL, invRhoR
+         real(kind=RP) :: QLRot(5), QRRot(5)
+         real(kind=RP) :: omega_x_r(NDIM), omega_x_r_rot(NDIM), x_rel(NDIM)
+         integer :: i,j
+!
+!        Rotate the variables to the face local frame using normal and tangent vectors
+!        -----------------------------------------------------------------------------
+         !$acc loop vector collapse(2) private(QLRot, QRRot, omega_x_r, omega_x_r_rot, x_rel)
+         do j = 0, Ny ; do i = 0, Nx
+
+            rhoL = QLeft(1,i,j)
+            rhoR = QRight(1,i,j)
+            invRhoL = 1.0_RP / rhoL
+            invRhoR = 1.0_RP / rhoR
+
+            rhouL = QLeft(2,i,j) * nHat(1,i,j) + QLeft(3,i,j) * nHat(2,i,j) + QLeft(4,i,j) * nHat(3,i,j)
+            rhovL = QLeft(2,i,j) * t1(1,i,j)   + QLeft(3,i,j) * t1(2,i,j)   + QLeft(4,i,j) * t1(3,i,j)
+            rhowL = QLeft(2,i,j) * t2(1,i,j)   + QLeft(3,i,j) * t2(2,i,j)   + QLeft(4,i,j) * t2(3,i,j)
+
+            rhouR = QRight(2,i,j) * nHat(1,i,j) + QRight(3,i,j) * nHat(2,i,j) + QRight(4,i,j) * nHat(3,i,j)
+            rhovR = QRight(2,i,j) * t1(1,i,j)   + QRight(3,i,j) * t1(2,i,j)   + QRight(4,i,j) * t1(3,i,j)
+            rhowR = QRight(2,i,j) * t2(1,i,j)   + QRight(3,i,j) * t2(2,i,j)   + QRight(4,i,j) * t2(3,i,j)
+
+            rhoeL = QLeft(5,i,j)
+            rhoeR = QRight(5,i,j)
+
+            rhoV2L = (POW2(rhouL) + POW2(rhovL) + POW2(rhowL)) * invRhoL
+            rhoV2R = (POW2(rhouR) + POW2(rhovR) + POW2(rhowR)) * invRhoR
+
+            pL = thermodynamics % GammaMinus1 * (rhoeL - 0.5_RP * rhoV2L)
+            pR = thermodynamics % GammaMinus1 * (rhoeR - 0.5_RP * rhoV2R)
+!
+!           Project omega x r into the face-aligned coordinate system
+!           ---------------------------------------------------------
+            x_rel = x(:,i,j) - x0
+            omega_x_r(IX) = omega(IY)*x_rel(IZ) - omega(IZ)*x_rel(IY)
+            omega_x_r(IY) = omega(IZ)*x_rel(IX) - omega(IX)*x_rel(IZ)
+            omega_x_r(IZ) = omega(IX)*x_rel(IY) - omega(IY)*x_rel(IX)
+
+            omega_x_r_rot(IX) = omega_x_r(IX)*nHat(IX,i,j) + omega_x_r(IY)*nHat(IY,i,j) + omega_x_r(IZ)*nHat(IZ,i,j)
+            omega_x_r_rot(IY) = omega_x_r(IX)*t1(IX,i,j)   + omega_x_r(IY)*t1(IY,i,j)   + omega_x_r(IZ)*t1(IZ,i,j)
+            omega_x_r_rot(IZ) = omega_x_r(IX)*t2(IX,i,j)   + omega_x_r(IY)*t2(IY,i,j)   + omega_x_r(IZ)*t2(IZ,i,j)
+!
+!           Perform the average using the averaging function
+!           ------------------------------------------------
+            QLRot = (/ rhoL, rhouL, rhovL, rhowL, rhoeL /)
+            QRRot = (/ rhoR, rhouR, rhovR, rhowR, rhoeR /)
+            call AveragedStateRotref_Selector(QLRot, QRRot, pL, pR, invRhoL, invRhoR, omega_x_r_rot, x0, flux(:,i,j))
+!
+!           ************************************************
+!           Return momentum equations to the cartesian frame
+!           ************************************************
+!
+            rhouL = flux(2,i,j)   ! reuse as temporaries for the rotated momentum flux
+            rhovL = flux(3,i,j)
+            rhowL = flux(4,i,j)
+
+            flux(2,i,j) = nHat(1,i,j)*rhouL + t1(1,i,j)*rhovL + t2(1,i,j)*rhowL
+            flux(3,i,j) = nHat(2,i,j)*rhouL + t1(2,i,j)*rhovL + t2(2,i,j)*rhowL
+            flux(4,i,j) = nHat(3,i,j)*rhouL + t1(3,i,j)*rhovL + t2(3,i,j)*rhowL
+
+         end do  ;  end do
+
+      end subroutine CentralRiemannSolver_Rotref
+
+      subroutine LxFRiemannSolver_Rotref(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         !$acc routine vector
+         use Physics_NS, only: EulerFlux_Rotref
+         implicit none
+         integer, intent(in)        :: Nx, Ny
+         real(kind=RP), intent(in)  :: QLeft(1:NCONS, 0:Nx, 0:Ny), QRight(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: nHat(1:NDIM, 0:Nx, 0:Ny), t1(1:NDIM, 0:Nx, 0:Ny), t2(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)  :: x(1:NDIM, 0:Nx, 0:Ny), omega(1:NDIM), x0(1:NDIM)
+         real(kind=RP), intent(out) :: flux(1:NCONS, 0:Nx, 0:Ny)
+
+         real(kind=RP) :: FL(NCONS,NDIM), FR(NCONS,NDIM)
+         real(kind=RP) :: uL, uR, aL, aR, pL, pR, lambda
+         real(kind=RP) :: omega_x_r(NDIM), u_abs_L(NDIM), u_abs_R(NDIM), x_rel(NDIM)
+         integer :: i, j
+
+         !$acc loop vector collapse(2) private(FL, FR, omega_x_r, u_abs_L, u_abs_R, x_rel)
+         do j = 0, Ny
+         do i = 0, Nx
+
+         x_rel = x(:,i,j) - x0
+         omega_x_r(IX) = omega(IY)*x_rel(IZ) - omega(IZ)*x_rel(IY)
+         omega_x_r(IY) = omega(IZ)*x_rel(IX) - omega(IX)*x_rel(IZ)
+         omega_x_r(IZ) = omega(IX)*x_rel(IY) - omega(IY)*x_rel(IX)
+
+         call EulerFlux_Rotref(QLeft(:,i,j), x(:,i,j), omega, x0, FL)
+         call EulerFlux_Rotref(QRight(:,i,j), x(:,i,j), omega, x0, FR)
+
+         u_abs_L = [QLeft(IRHOU,i,j), QLeft(IRHOV,i,j), QLeft(IRHOW,i,j)] / QLeft(IRHO,i,j)
+         u_abs_R = [QRight(IRHOU,i,j), QRight(IRHOV,i,j), QRight(IRHOW,i,j)] / QRight(IRHO,i,j)
+
+         uL = dot_product(u_abs_L - omega_x_r, nHat(:,i,j))
+         uR = dot_product(u_abs_R - omega_x_r, nHat(:,i,j))
+
+         pL = thermodynamics % gammaMinus1 * (QLeft(IRHOE,i,j) - 0.5_RP*QLeft(IRHO,i,j)*dot_product(u_abs_L, u_abs_L))
+         pR = thermodynamics % gammaMinus1 * (QRight(IRHOE,i,j) - 0.5_RP*QRight(IRHO,i,j)*dot_product(u_abs_R, u_abs_R))
+
+         aL = sqrt(thermodynamics % gamma*pL/QLeft(IRHO,i,j))
+         aR = sqrt(thermodynamics % gamma*pR/QRight(IRHO,i,j))
+
+         lambda = max(abs(uL) + aL, abs(uR) + aR)
+
+         flux(:,i,j) = 0.5_RP*(FL(:,IX)*nHat(IX,i,j) + FL(:,IY)*nHat(IY,i,j) + FL(:,IZ)*nHat(IZ,i,j) + &
+                               FR(:,IX)*nHat(IX,i,j) + FR(:,IY)*nHat(IY,i,j) + FR(:,IZ)*nHat(IZ,i,j) - &
+                               lambda*(QRight(:,i,j) - QLeft(:,i,j)))
+
+         enddo
+         enddo
+      end subroutine LxFRiemannSolver_Rotref
+
+      subroutine RoeRiemannSolver_Rotref(Nx, Ny, QLeft, QRight, nHat, t1, t2, x, omega, x0, flux)
+         !$acc routine vector
+         implicit none
+         integer, intent(in)             :: Nx, Ny
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: nHat(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: t1(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: t2(1:NDIM, 0:Nx, 0:Ny)
+         real(kind=RP), intent(in)       :: x(1:NDIM, 0:Nx, 0:Ny), omega(1:NDIM), x0(1:NDIM)
+         real(kind=RP), intent(out)      :: flux(1:NCONS, 0:Nx, 0:Ny)
+
+         REAL(KIND=RP) :: rho , rhou , rhov , rhow  , rhoe
+         REAL(KIND=RP) :: rhon, rhoun, rhovn, rhown , rhoen
+         REAL(KIND=RP) :: ul  , vl   , wl   , pleft , ql  , hl  , betal, qul
+         REAL(KIND=RP) :: ur  , vr   , wr   , pright, qr  , hr  , betar, qur
+         REAL(KIND=RP) :: rtd , utd_abs, vtd_abs, wtd_abs, utd_rel, vtd_rel, wtd_rel
+         REAL(KIND=RP) :: htd , atd2, atd, qtd
+         REAL(KIND=RP) :: dw1 , sp1  , sp1m , hd1m  , eta1, udw1, rql
+         REAL(KIND=RP) :: dw4 , sp4  , sp4p , hd4   , eta4, udw4, rqr
+         REAL(KIND=RP) :: ds = 1.0_RP
+         REAL(KIND=RP) :: omega_x_r(NDIM), x_rel(NDIM)
+         integer :: i, j
+
+         !$acc loop vector collapse(2) private(omega_x_r, x_rel)
+         do j = 0, Ny
+         do i = 0, Nx
+
+         x_rel = x(:,i,j) - x0
+         omega_x_r(IX) = omega(IY)*x_rel(IZ) - omega(IZ)*x_rel(IY)
+         omega_x_r(IY) = omega(IZ)*x_rel(IX) - omega(IX)*x_rel(IZ)
+         omega_x_r(IZ) = omega(IX)*x_rel(IY) - omega(IY)*x_rel(IX)
+
+         rho  = QLeft(1,i,j)
+         rhou = QLeft(2,i,j)
+         rhov = QLeft(3,i,j)
+         rhow = QLeft(4,i,j)
+         rhoe = QLeft(5,i,j)
+
+         rhon  = QRight(1,i,j)
+         rhoun = QRight(2,i,j)
+         rhovn = QRight(3,i,j)
+         rhown = QRight(4,i,j)
+         rhoen = QRight(5,i,j)
+
+         ul = rhou/rho
+         vl = rhov/rho
+         wl = rhow/rho
+         pleft = (thermodynamics % gamma-1._RP)*(rhoe - 0.5_RP/rho*(rhou**2 + rhov**2 + rhow**2))
+
+         ur = rhoun/rhon
+         vr = rhovn/rhon
+         wr = rhown/rhon
+         pright = (thermodynamics % gamma-1._RP)*(rhoen - 0.5_RP/rhon*(rhoun**2 + rhovn**2 + rhown**2))
+
+         ql = nHat(1,i,j)*(ul - omega_x_r(IX)) + nHat(2,i,j)*(vl - omega_x_r(IY)) + nHat(3,i,j)*(wl - omega_x_r(IZ))
+         qr = nHat(1,i,j)*(ur - omega_x_r(IX)) + nHat(2,i,j)*(vr - omega_x_r(IY)) + nHat(3,i,j)*(wr - omega_x_r(IZ))
+         qul = nHat(1,i,j)*ul + nHat(2,i,j)*vl + nHat(3,i,j)*wl
+         qur = nHat(1,i,j)*ur + nHat(2,i,j)*vr + nHat(3,i,j)*wr
+         hl = 0.5_RP*(ul*ul + vl*vl + wl*wl) + thermodynamics % gamma/(thermodynamics % gamma-1._RP)*pleft/rho
+         hr = 0.5_RP*(ur*ur + vr*vr + wr*wr) + thermodynamics % gamma/(thermodynamics % gamma-1._RP)*pright/rhon
+
+         rtd = sqrt(rho*rhon)
+         betal = rho/(rho + rtd)
+         betar = 1._RP - betal
+
+         ! Averaged absolute velocities
+         utd_abs = betal*ul + betar*ur
+         vtd_abs = betal*vl + betar*vr
+         wtd_abs = betal*wl + betar*wr
+
+         ! Averaged relative velocities
+         utd_rel = utd_abs - omega_x_r(IX)
+         vtd_rel = vtd_abs - omega_x_r(IY)
+         wtd_rel = wtd_abs - omega_x_r(IZ)
+
+         htd = betal*hl + betar*hr
+         atd2 = (thermodynamics % gamma-1._RP)*(htd - 0.5_RP*(utd_abs*utd_abs + vtd_abs*vtd_abs + wtd_abs*wtd_abs))
+         atd = sqrt(atd2)
+         qtd = utd_rel*nHat(1,i,j) + vtd_rel*nHat(2,i,j) + wtd_rel*nHat(3,i,j)
+
+         IF(qtd >= 0.0_RP) THEN
+            dw1 = 0.5_RP*((pright - pleft)/atd2 - (qr - ql)*rtd/atd)
+            sp1 = qtd - atd
+            sp1m = min(sp1,0.0_RP)
+            hd1m = ((thermodynamics % gamma+1._RP)/4._RP*atd/rtd)*dw1
+            eta1 = max(-abs(sp1) - hd1m,0.0_RP)
+            udw1 = dw1*(sp1m - 0.5_RP*eta1)
+            rql = rho*ql
+            flux(1,i,j) = ds*(rql + udw1)
+            flux(2,i,j) = ds*(rql*ul + pleft*nHat(1,i,j) + udw1*(utd_abs - atd*nHat(1,i,j)))
+            flux(3,i,j) = ds*(rql*vl + pleft*nHat(2,i,j) + udw1*(vtd_abs - atd*nHat(2,i,j)))
+            flux(4,i,j) = ds*(rql*wl + pleft*nHat(3,i,j) + udw1*(wtd_abs - atd*nHat(3,i,j)))
+            flux(5,i,j) = ds*(rhoe*ql + pleft*qul + udw1*(htd - qtd*atd))
+         ELSE
+            dw4 = 0.5_RP*((pright - pleft)/atd2 + (qr - ql)*rtd/atd)
+            sp4 = qtd + atd
+            sp4p = max(sp4,0.0_RP)
+            hd4 = ((thermodynamics % gamma+1._RP)/4._RP*atd/rtd)*dw4
+            eta4 = max(-abs(sp4) + hd4,0.0_RP)
+            udw4 = dw4*(sp4p + 0.5_RP*eta4)
+            rqr = rhon*qr
+            flux(1,i,j) = ds*(rqr - udw4)
+            flux(2,i,j) = ds*(rqr*ur + pright*nHat(1,i,j) - udw4*(utd_abs + atd*nHat(1,i,j)))
+            flux(3,i,j) = ds*(rqr*vr + pright*nHat(2,i,j) - udw4*(vtd_abs + atd*nHat(2,i,j)))
+            flux(4,i,j) = ds*(rqr*wr + pright*nHat(3,i,j) - udw4*(wtd_abs + atd*nHat(3,i,j)))
+            flux(5,i,j) = ds*(rhoen*qr + pright*qur - udw4*(htd + qtd*atd))
+         ENDIF
+
+         enddo
+         enddo
+
+      end subroutine RoeRiemannSolver_Rotref
+
+      subroutine StandardAverage_Rotref(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS)
+         real(kind=RP), intent(in)       :: pL, pR
+         real(kind=RP), intent(in)       :: invRhoL, invRhoR
+         real(kind=RP), intent(in)       :: omega_x_r(1:NDIM)
+         real(kind=RP), intent(in)       :: x0(1:NDIM)
+         real(kind=RP), intent(out)      :: flux(1:NCONS)
+         real(kind=RP)     :: uL, vL, wL, uL_r
+         real(kind=RP)     :: uR, vR, wR, uR_r
+
+         uL = invRhoL * QLeft(IRHOU)      ; uR = invRhoR * QRight(IRHOU)
+         vL = invRhoL * QLeft(IRHOV)      ; vR = invRhoR * QRight(IRHOV)
+         wL = invRhoL * QLeft(IRHOW)      ; wR = invRhoR * QRight(IRHOW)
+
+         uL_r = uL - omega_x_r(IX)
+         uR_r = uR - omega_x_r(IX)
+
+         flux(IRHO)  = 0.5_RP * ( QLeft(IRHO) * uL_r + QRight(IRHO) * uR_r )
+         flux(IRHOU) = 0.5_RP * ( QLeft(IRHO) * uL_r * uL + QRight(IRHO) * uR_r * uR + pL + pR )
+         flux(IRHOV) = 0.5_RP * ( QLeft(IRHO) * uL_r * vL + QRight(IRHO) * uR_r * vR )
+         flux(IRHOW) = 0.5_RP * ( QLeft(IRHO) * uL_r * wL + QRight(IRHO) * uR_r * wR )
+         flux(IRHOE) = 0.5_RP * ( QLeft(IRHOE) * uL_r + pL * uL + QRight(IRHOE) * uR_r + pR * uR )
+
+      end subroutine StandardAverage_Rotref
+
+      subroutine KennedyGruberAverage_Rotref(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS)
+         real(kind=RP), intent(in)       :: pL, pR
+         real(kind=RP), intent(in)       :: invRhoL, invRhoR
+         real(kind=RP), intent(in)       :: omega_x_r(1:NDIM)
+         real(kind=RP), intent(in)       :: x0(1:NDIM)
+         real(kind=RP), intent(out)      :: flux(1:NCONS)
+         real(kind=RP)     :: uL, vL, wL
+         real(kind=RP)     :: uR, vR, wR
+         real(kind=RP)     :: rho, u, v, w, e, p, u_r
+
+         uL = invRhoL * QLeft(IRHOU)      ; uR = invRhoR * QRight(IRHOU)
+         vL = invRhoL * QLeft(IRHOV)      ; vR = invRhoR * QRight(IRHOV)
+         wL = invRhoL * QLeft(IRHOW)      ; wR = invRhoR * QRight(IRHOW)
+
+         rho = 0.5_RP * (QLeft(IRHO) + QRight(IRHO))
+         u   = 0.5_RP * (uL + uR)
+         v   = 0.5_RP * (vL + vR)
+         w   = 0.5_RP * (wL + wR)
+         p   = 0.5_RP * (pL + pR)
+         e   = 0.5_RP * (QLeft(IRHOE)*invRhoL + QRight(IRHOE)*invRhoR)
+         u_r = u - omega_x_r(IX)
+
+         flux(IRHO)  = rho * u_r
+         flux(IRHOU) = rho * u_r * u + p
+         flux(IRHOV) = rho * u_r * v
+         flux(IRHOW) = rho * u_r * w
+         flux(IRHOE) = rho * u_r * e + p * u
+
+      end subroutine KennedyGruberAverage_Rotref
+
+      subroutine ChandrasekarAverage_Rotref(QLeft, QRight, pL, pR, invRhoL, invRhoR, omega_x_r, x0, flux)
+         !$acc routine seq
+         use SMConstants
+         use Utilities, only: logarithmicMean
+         implicit none
+         real(kind=RP), intent(in)       :: QLeft(1:NCONS)
+         real(kind=RP), intent(in)       :: QRight(1:NCONS)
+         real(kind=RP), intent(in)       :: pL, pR
+         real(kind=RP), intent(in)       :: invRhoL, invRhoR
+         real(kind=RP), intent(in)       :: omega_x_r(1:NDIM)
+         real(kind=RP), intent(in)       :: x0(1:NDIM)
+         real(kind=RP), intent(out)      :: flux(1:NCONS)
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP)     :: rhoL, uL, vL, wL, betaL
+         real(kind=RP)     :: rhoR, uR, vR, wR, betaR
+         real(kind=RP)     :: rho, u, v, w, h, p, betaLog
+         real(kind=RP)     :: uL_r, uR_r, u_r
+
+         rhoL = QLeft(IRHO)               ; rhoR = QRight(IRHO)
+         uL = invRhoL * QLeft(IRHOU)      ; uR = invRhoR * QRight(IRHOU)
+         vL = invRhoL * QLeft(IRHOV)      ; vR = invRhoR * QRight(IRHOV)
+         wL = invRhoL * QLeft(IRHOW)      ; wR = invRhoR * QRight(IRHOW)
+!
+!        Compute relative velocities at left and right states
+!        ----------------------------------------------------
+         uL_r = uL - omega_x_r(IX)
+         uR_r = uR - omega_x_r(IX)
+!
+!        Compute Chandrasekar's variables
+!        --------------------------------
+         betaL = 0.5_RP * rhoL / pL    ; betaR = 0.5_RP * rhoR / pR
+         call logarithmicMean(betaL, betaR, betaLog)
+
+         call logarithmicMean(rhoL,rhoR,rho)
+         u   = AVERAGE(uL, uR)
+         v   = AVERAGE(vL, vR)
+         w   = AVERAGE(wL, wR)
+         p   = 0.5_RP * (rhoL + rhoR) / (betaL + betaR)
+         h   =   0.5_RP/(betaLog*(thermodynamics % GammaMinus1)) &
+               - 0.5_RP*AVERAGE(POW2(uL)+POW2(vL)+POW2(wL), POW2(uR)+POW2(vR)+POW2(wR)) &
+               + p/rho + POW2(u) + POW2(v) + POW2(w)
+
+         u_r = AVERAGE(uL_r, uR_r)
+!
+!        Compute the flux
+!        ----------------
+         flux(IRHO)  = rho * u_r
+         flux(IRHOU) = rho * u_r * u + p
+         flux(IRHOV) = rho * u_r * v
+         flux(IRHOW) = rho * u_r * w
+         flux(IRHOE) = rho * u_r * h + p * omega_x_r(IX)
+
+      end subroutine ChandrasekarAverage_Rotref
+
+      subroutine StandardDG_TwoPointFlux_Rotref(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)  :: QL(NCONS), QR(NCONS)
+         real(kind=RP), intent(in)  :: xL(NDIM), xR(NDIM)
+         real(kind=RP), intent(in)  :: JaL(NDIM), JaR(NDIM)
+         real(kind=RP), intent(in)  :: omega(NDIM), x0(NDIM)
+         real(kind=RP), intent(out) :: fSharp(NCONS)
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP)     :: invRhoL, uL, vL, wL, pL
+         real(kind=RP)     :: invRhoR, uR, vR, wR, pR
+         real(kind=RP)     :: uL_r, vL_r, wL_r, omega_x_Lr(NDIM)
+         real(kind=RP)     :: uR_r, vR_r, wR_r, omega_x_Rr(NDIM)
+         real(kind=RP)     :: xL_rel(NDIM), xR_rel(NDIM)
+         real(kind=RP)     :: Ja(1:NDIM)
+         real(kind=RP)     :: f(NCONS), g(NCONS), h(NCONS)
+
+         invRhoL = 1.0_RP / QL(IRHO)   ; invRhoR = 1.0_RP / QR(IRHO)
+         uL = invRhoL * QL(IRHOU)      ; uR = invRhoR * QR(IRHOU)
+         vL = invRhoL * QL(IRHOV)      ; vR = invRhoR * QR(IRHOV)
+         wL = invRhoL * QL(IRHOW)      ; wR = invRhoR * QR(IRHOW)
+
+         pL = thermodynamics % GammaMinus1 * ( QL(IRHOE) - 0.5_RP * (QL(IRHOU) * uL + QL(IRHOV) * vL + QL(IRHOW) * wL ))
+         pR = thermodynamics % GammaMinus1 * ( QR(IRHOE) - 0.5_RP * (QR(IRHOU) * uR + QR(IRHOV) * vR + QR(IRHOW) * wR ))
+!
+!        Average metrics: (Note: Here all average (1/2)s are accounted later)
+!        ---------------
+         Ja = (JaL + JaR)
+
+         xL_rel = xL - x0
+         xR_rel = xR - x0
+         omega_x_Lr(IX) = omega(IY)*xL_rel(IZ) - omega(IZ)*xL_rel(IY)
+         omega_x_Lr(IY) = omega(IZ)*xL_rel(IX) - omega(IX)*xL_rel(IZ)
+         omega_x_Lr(IZ) = omega(IX)*xL_rel(IY) - omega(IY)*xL_rel(IX)
+
+         omega_x_Rr(IX) = omega(IY)*xR_rel(IZ) - omega(IZ)*xR_rel(IY)
+         omega_x_Rr(IY) = omega(IZ)*xR_rel(IX) - omega(IX)*xR_rel(IZ)
+         omega_x_Rr(IZ) = omega(IX)*xR_rel(IY) - omega(IY)*xR_rel(IX)
+
+         uL_r = uL - omega_x_Lr(IX)
+         vL_r = vL - omega_x_Lr(IY)
+         wL_r = wL - omega_x_Lr(IZ)
+         uR_r = uR - omega_x_Rr(IX)
+         vR_r = vR - omega_x_Rr(IY)
+         wR_r = wR - omega_x_Rr(IZ)
+!
+!        Compute the flux
+!        ----------------
+         f(IRHO)  = ( QL(IRHO)  * uL_r                + QR(IRHO) * uR_r )
+         f(IRHOU) = ( QL(IRHO)  * uL_r * uL + pL      + QR(IRHO) * uR_r * uR + pR )
+         f(IRHOV) = ( QL(IRHO)  * uL_r * vL           + QR(IRHO) * uR_r * vR )
+         f(IRHOW) = ( QL(IRHO)  * uL_r * wL           + QR(IRHO) * uR_r * wR )
+         f(IRHOE) = ( QL(IRHOE) * uL_r      + pL* uL  + QR(IRHOE)* uR_r      + pR*uR )
+
+         g(IRHO)  = ( QL(IRHO)  * vL_r                + QR(IRHO) * vR_r )
+         g(IRHOU) = ( QL(IRHO)  * vL_r * uL           + QR(IRHO) * vR_r * uR )
+         g(IRHOV) = ( QL(IRHO)  * vL_r * vL + pL      + QR(IRHO) * vR_r * vR + pR )
+         g(IRHOW) = ( QL(IRHO)  * vL_r * wL           + QR(IRHO) * vR_r * wR )
+         g(IRHOE) = ( QL(IRHOE) * vL_r      + pL* vL  + QR(IRHOE)* vR_r      + pR*vR )
+
+         h(IRHO)  = ( QL(IRHO)  * wL_r                + QR(IRHO) * wR_r )
+         h(IRHOU) = ( QL(IRHO)  * wL_r * uL           + QR(IRHO) * wR_r * uR )
+         h(IRHOV) = ( QL(IRHO)  * wL_r * vL           + QR(IRHO) * wR_r * vR )
+         h(IRHOW) = ( QL(IRHO)  * wL_r * wL + pL      + QR(IRHO) * wR_r * wR + pR )
+         h(IRHOE) = ( QL(IRHOE) * wL_r      + pL* wL  + QR(IRHOE)* wR_r      + pR*wR )
+!        Compute the sharp flux (And account for the (1/2)^2)
+!        ----------------------
+         fSharp = 0.25_RP * ( f*Ja(IX) + g*Ja(IY) + h*Ja(IZ) )
+      end subroutine StandardDG_TwoPointFlux_Rotref
+
+      subroutine KennedyGruber_TwoPointFlux_Rotref(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         !$acc routine seq
+         implicit none
+         real(kind=RP), intent(in)  :: QL(NCONS), QR(NCONS)
+         real(kind=RP), intent(in)  :: xL(NDIM), xR(NDIM)
+         real(kind=RP), intent(in)  :: JaL(NDIM), JaR(NDIM)
+         real(kind=RP), intent(in)  :: omega(NDIM), x0(NDIM)
+         real(kind=RP), intent(out) :: fSharp(NCONS)
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP)     :: invRhoL, uL, vL, wL, pL
+         real(kind=RP)     :: invRhoR, uR, vR, wR, pR
+         real(kind=RP)     :: rho, u, v, w, e, p
+         real(kind=RP)     :: uL_r, vL_r, wL_r, omega_x_Lr(NDIM)
+         real(kind=RP)     :: uR_r, vR_r, wR_r, omega_x_Rr(NDIM)
+         real(kind=RP)     :: u_r, v_r, w_r
+         real(kind=RP)     :: xL_rel(NDIM), xR_rel(NDIM)
+         real(kind=RP)     :: Ja(1:NDIM)
+         real(kind=RP)     :: f(NCONS), g(NCONS), h(NCONS)
+
+         invRhoL = 1.0_RP / QL(IRHO)   ; invRhoR = 1.0_RP / QR(IRHO)
+         uL = invRhoL * QL(IRHOU)      ; uR = invRhoR * QR(IRHOU)
+         vL = invRhoL * QL(IRHOV)      ; vR = invRhoR * QR(IRHOV)
+         wL = invRhoL * QL(IRHOW)      ; wR = invRhoR * QR(IRHOW)
+
+         pL = thermodynamics % GammaMinus1 * ( QL(IRHOE) - 0.5_RP * (QL(IRHOU) * uL + QL(IRHOV) * vL + QL(IRHOW) * wL ))
+         pR = thermodynamics % GammaMinus1 * ( QR(IRHOE) - 0.5_RP * (QR(IRHOU) * uR + QR(IRHOV) * vR + QR(IRHOW) * wR ))
+
+         rho = 0.5_RP * (QL(IRHO) + QR(IRHO))
+         u   = 0.5_RP * (uL + uR)
+         v   = 0.5_RP * (vL + vR)
+         w   = 0.5_RP * (wL + wR)
+         p   = 0.5_RP * (pL + pR)
+         e   = 0.5_RP * (QL(IRHOE)*invRhoL + QR(IRHOE)*invRhoR)
+!
+!        Average metrics
+!        ---------------
+         Ja = 0.5_RP*(JaL + JaR)
+!
+!        Compute omega x r
+!        -----------------
+         xL_rel = xL - x0
+         xR_rel = xR - x0
+         omega_x_Lr(IX) = omega(IY)*xL_rel(IZ) - omega(IZ)*xL_rel(IY)
+         omega_x_Lr(IY) = omega(IZ)*xL_rel(IX) - omega(IX)*xL_rel(IZ)
+         omega_x_Lr(IZ) = omega(IX)*xL_rel(IY) - omega(IY)*xL_rel(IX)
+
+         omega_x_Rr(IX) = omega(IY)*xR_rel(IZ) - omega(IZ)*xR_rel(IY)
+         omega_x_Rr(IY) = omega(IZ)*xR_rel(IX) - omega(IX)*xR_rel(IZ)
+         omega_x_Rr(IZ) = omega(IX)*xR_rel(IY) - omega(IY)*xR_rel(IX)
+
+         uL_r = uL - omega_x_Lr(IX)
+         vL_r = vL - omega_x_Lr(IY)
+         wL_r = wL - omega_x_Lr(IZ)
+
+         uR_r = uR - omega_x_Rr(IX)
+         vR_r = vR - omega_x_Rr(IY)
+         wR_r = wR - omega_x_Rr(IZ)
+
+         u_r = 0.5_RP * (uL_r + uR_r)
+         v_r = 0.5_RP * (vL_r + vR_r)
+         w_r = 0.5_RP * (wL_r + wR_r)
+!
+!        Compute the flux
+!        ----------------
+         f(IRHO)  = rho * u_r
+         f(IRHOU) = rho * u_r * u + p
+         f(IRHOV) = rho * u_r * v
+         f(IRHOW) = rho * u_r * w
+         f(IRHOE) = rho * u_r * e + p * u
+
+         g(IRHO)  = rho * v_r
+         g(IRHOU) = rho * v_r * u
+         g(IRHOV) = rho * v_r * v + p
+         g(IRHOW) = rho * v_r * w
+         g(IRHOE) = rho * v_r * e + p * v
+
+         h(IRHO)  = rho * w_r
+         h(IRHOU) = rho * w_r * u
+         h(IRHOV) = rho * w_r * v
+         h(IRHOW) = rho * w_r * w + p
+         h(IRHOE) = rho * w_r * e + p * w
+
+         fSharp = f*Ja(IX) + g*Ja(IY) + h*Ja(IZ)
+      end subroutine KennedyGruber_TwoPointFlux_Rotref
+
+      subroutine Chandrasekar_TwoPointFlux_Rotref(QL, QR, xL, xR, JaL, JaR, omega, x0, fSharp)
+         !$acc routine seq
+         use SMConstants
+         use PhysicsStorage_NS
+         use Utilities, only: logarithmicMean
+         implicit none
+         real(kind=RP), intent(in)  :: QL(NCONS), QR(NCONS)
+         real(kind=RP), intent(in)  :: xL(NDIM), xR(NDIM)
+         real(kind=RP), intent(in)  :: JaL(NDIM), JaR(NDIM)
+         real(kind=RP), intent(in)  :: omega(NDIM), x0(NDIM)
+         real(kind=RP), intent(out) :: fSharp(NCONS)
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP)     :: invRhoL, rhoL, uL, vL, wL, pL, betaL
+         real(kind=RP)     :: invRhoR, rhoR, uR, vR, wR, pR, betaR
+         real(kind=RP)     :: rho, u, v, w, h, p, betaLog
+         real(kind=RP)     :: uL_r, vL_r, wL_r, omega_x_Lr(NDIM)
+         real(kind=RP)     :: uR_r, vR_r, wR_r, omega_x_Rr(NDIM)
+         real(kind=RP)     :: u_r, v_r, w_r
+         real(kind=RP)     :: omega_x_r_avg(NDIM)
+         real(kind=RP)     :: xL_rel(NDIM), xR_rel(NDIM)
+         real(kind=RP)     :: Ja(1:NDIM)
+         real(kind=RP)     :: ff(NCONS), gg(NCONS), hh(NCONS)
+
+         invRhoL = 1.0_RP / QL(IRHO)   ; invRhoR = 1.0_RP / QR(IRHO)
+         rhoL = QL(IRHO)               ; rhoR = QR(IRHO)
+         uL = invRhoL * QL(IRHOU)      ; uR = invRhoR * QR(IRHOU)
+         vL = invRhoL * QL(IRHOV)      ; vR = invRhoR * QR(IRHOV)
+         wL = invRhoL * QL(IRHOW)      ; wR = invRhoR * QR(IRHOW)
+
+         pL = thermodynamics % GammaMinus1 * ( QL(IRHOE) - 0.5_RP * (   QL(IRHOU) * uL &
+                                                                      + QL(IRHOV) * vL &
+                                                                      + QL(IRHOW) * wL ))
+
+         pR = thermodynamics % GammaMinus1 * ( QR(IRHOE) - 0.5_RP * (   QR(IRHOU) * uR &
+                                                                      + QR(IRHOV) * vR &
+                                                                      + QR(IRHOW) * wR ))
+!
+!        Compute Chandrasekar's variables
+!        --------------------------------
+         betaL = 0.5_RP * rhoL / pL    ; betaR = 0.5_RP * rhoR / pR
+         call logarithmicMean(betaL, betaR, betaLog)
+
+         call logarithmicMean(rhoL,rhoR,rho)
+         u   = AVERAGE(uL, uR)
+         v   = AVERAGE(vL, vR)
+         w   = AVERAGE(wL, wR)
+         p   = 0.5_RP * (rhoL + rhoR) / (betaL + betaR)
+         h   =   0.5_RP/(betaLog*(thermodynamics % GammaMinus1)) &
+               - 0.5_RP*AVERAGE(POW2(uL)+POW2(vL)+POW2(wL), POW2(uR)+POW2(vR)+POW2(wR)) &
+               + p/rho + POW2(u) + POW2(v) + POW2(w)
+!
+!        Average metrics
+!        ---------------
+         Ja = 0.5_RP * (JaL + JaR)
+!
+!        Compute omega x r
+!        -----------------
+         xL_rel = xL - x0
+         xR_rel = xR - x0
+         omega_x_Lr(IX) = omega(IY)*xL_rel(IZ) - omega(IZ)*xL_rel(IY)
+         omega_x_Lr(IY) = omega(IZ)*xL_rel(IX) - omega(IX)*xL_rel(IZ)
+         omega_x_Lr(IZ) = omega(IX)*xL_rel(IY) - omega(IY)*xL_rel(IX)
+
+         omega_x_Rr(IX) = omega(IY)*xR_rel(IZ) - omega(IZ)*xR_rel(IY)
+         omega_x_Rr(IY) = omega(IZ)*xR_rel(IX) - omega(IX)*xR_rel(IZ)
+         omega_x_Rr(IZ) = omega(IX)*xR_rel(IY) - omega(IY)*xR_rel(IX)
+
+         uL_r = uL - omega_x_Lr(IX)
+         vL_r = vL - omega_x_Lr(IY)
+         wL_r = wL - omega_x_Lr(IZ)
+
+         uR_r = uR - omega_x_Rr(IX)
+         vR_r = vR - omega_x_Rr(IY)
+         wR_r = wR - omega_x_Rr(IZ)
+
+         u_r = AVERAGE(uL_r, uR_r)
+         v_r = AVERAGE(vL_r, vR_r)
+         w_r = AVERAGE(wL_r, wR_r)
+
+         omega_x_r_avg = 0.5_RP * (omega_x_Lr + omega_x_Rr)
+!
+!        Compute the flux
+!        ----------------
+         ff(IRHO)  = rho * u_r
+         ff(IRHOU) = rho * u_r * u + p
+         ff(IRHOV) = rho * u_r * v
+         ff(IRHOW) = rho * u_r * w
+         ff(IRHOE) = rho * u_r * h + p * omega_x_r_avg(IX)
+
+         gg(IRHO)  = rho * v_r
+         gg(IRHOU) = rho * v_r * u
+         gg(IRHOV) = rho * v_r * v + p
+         gg(IRHOW) = rho * v_r * w
+         gg(IRHOE) = rho * v_r * h + p * omega_x_r_avg(IY)
+
+         hh(IRHO)  = rho * w_r
+         hh(IRHOU) = rho * w_r * u
+         hh(IRHOV) = rho * w_r * v
+         hh(IRHOW) = rho * w_r * w + p
+         hh(IRHOE) = rho * w_r * h + p * omega_x_r_avg(IZ)
+!
+!        Compute the sharp flux
+!        ----------------------
+         fSharp = ff*Ja(IX) + gg*Ja(IY) + hh*Ja(IZ)
+
+      end subroutine Chandrasekar_TwoPointFlux_Rotref
 
 end module RiemannSolvers_NS

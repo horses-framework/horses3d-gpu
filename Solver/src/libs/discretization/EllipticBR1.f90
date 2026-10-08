@@ -171,12 +171,21 @@ module EllipticBR1
 !        *******************************************
 !
 !$omp do schedule(runtime) private(fID)
-         !$acc parallel loop gang present(mesh, self) async(1)
-         do iFace = 1, size(mesh % faces_interior)
-            fID = mesh % faces_interior(iFace)
-            call BR1_ComputeElementInterfaceAverage(self, mesh % faces(fID), nEqn, nGradEqn)
-         end do
-         !$acc end parallel loop
+         if (rotationParams % periodicEnabled) then
+            !$acc parallel loop gang present(mesh, self) async(1)
+            do iFace = 1, size(mesh % faces_interior)
+               fID = mesh % faces_interior(iFace)
+               call BR1_ComputeElementInterfaceAverage_rotary(self, mesh % faces(fID), nEqn, nGradEqn)
+            end do
+            !$acc end parallel loop
+         else
+            !$acc parallel loop gang present(mesh, self) async(1)
+            do iFace = 1, size(mesh % faces_interior)
+               fID = mesh % faces_interior(iFace)
+               call BR1_ComputeElementInterfaceAverage(self, mesh % faces(fID), nEqn, nGradEqn)
+            end do
+            !$acc end parallel loop
+         end if
 !$omp end do nowait
 
          nZones = size(mesh % zones)
@@ -208,12 +217,21 @@ module EllipticBR1
 !$omp end single
 
 !$omp do schedule(runtime) private(fID)
-         !$acc parallel loop gang present(mesh, self) async(1) 
-         do iFace = 1, size(mesh % faces_mpi)
-            fID = mesh % faces_mpi(iFace)
-            call BR1_ComputeMPIFaceAverage(self, mesh % faces(fID), nEqn, nGradEqn)
-         end do
-         !$acc end parallel loop
+         if (rotationParams % periodicEnabled) then
+            !$acc parallel loop gang present(mesh, self) async(1) 
+            do iFace = 1, size(mesh % faces_mpi)
+               fID = mesh % faces_mpi(iFace)
+               call BR1_ComputeMPIFaceAverage_rotary(self, mesh % faces(fID), nEqn, nGradEqn)
+            end do
+            !$acc end parallel loop
+         else
+            !$acc parallel loop gang present(mesh, self) async(1) 
+            do iFace = 1, size(mesh % faces_mpi)
+               fID = mesh % faces_mpi(iFace)
+               call BR1_ComputeMPIFaceAverage(self, mesh % faces(fID), nEqn, nGradEqn)
+            end do
+            !$acc end parallel loop
+         end if
 !$omp end do 
 !
 
@@ -275,6 +293,96 @@ module EllipticBR1
 
       end subroutine BR1_GradientFaceLoop
 !
+      subroutine BR1_ComputeElementInterfaceAverage_rotary(self, f, nEqn, nGradEqn)
+         !$acc routine vector
+         use Physics  
+         use ElementClass
+         use FaceClass
+         use RotationData, only: RotateVectorAroundAxis, RotateMomentumGradients, rotationParams
+         implicit none  
+!
+!        ---------
+!        Arguments
+!        ---------
+!
+         type(BassiRebay1_t),   intent(in)  :: self
+         type(Face)                       :: f
+         integer,    intent(in)           :: nEqn, nGradEqn
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP) :: UL(NCONS), UR(NCONS)
+         real(kind=RP) :: uStar, jacobian
+         real(kind=RP) :: uStar_n_R(nGradEqn,NDIM,0:f % Nf(1), 0:f % Nf(2))
+
+         integer       :: i,j,eq
+
+         !$acc loop vector collapse(2) private(UL, UR, ustar, jacobian)
+         do j = 0, f % Nf(2)  ; do i = 0, f % Nf(1)
+#ifdef MULTIPHASE
+            select case (self % eqName)
+               case (ELLIPTIC_MU)
+                  call mGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL(1:nGradEqn), f % storage(1) % rho(i,j))
+                  call mGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR(1:nGradEqn), f % storage(2) % rho(i,j))
+               !
+               !              The multiphase solver needs the Chemical potential as first entropy variable
+               !              ----------------------------------------------------------------------------
+                  UL(IGMU) = f % storage(1) % mu(1,i,j)
+                  UR(IGMU) = f % storage(2) % mu(1,i,j)
+
+               case(ELLIPTIC_CH)
+                  call chGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(1:nEqn,i,j), UL(1:nGradEqn))
+                  call chGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(1:nEqn,i,j), UR(1:nGradEqn))
+            end select
+#elif INCNS
+            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
+            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)            
+#else
+            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+#endif
+
+            if (f % isRotaryPeriodic) then
+               UR(2:4) = RotateVectorAroundAxis(UR(2:4), &
+                              -rotationParams % periodicAngle, &
+                               rotationParams % axis)
+            end if
+
+            jacobian = f % geom % jacobian(i,j)
+
+            !$acc loop seq
+            do eq =1, nEqn
+               uStar = 0.5_RP * (UR(eq) - UL(eq)) * jacobian
+
+               f % storage(1) % unStar(eq,IX,i,j) = uStar * f % geom % normal(IX,i,j)
+               f % storage(1) % unStar(eq,IY,i,j) = uStar * f % geom % normal(IY,i,j)
+               f % storage(1) % unStar(eq,IZ,i,j) = uStar * f % geom % normal(IZ,i,j)
+            enddo
+         end do               ; end do
+
+         if (f % isRotaryPeriodic) then
+            !$acc loop vector collapse(2)
+            do j = 0, f % Nf(2)  ; do i = 0, f % Nf(1)
+               call RotateMomentumGradients( U_x_in   = f % storage(1) % unStar(:,IX,i,j), &
+                                             U_y_in   = f % storage(1) % unStar(:,IY,i,j), &
+                                             U_z_in   = f % storage(1) % unStar(:,IZ,i,j), &
+                                             U_x_out  = uStar_n_R(:,IX,i,j), &
+                                             U_y_out  = uStar_n_R(:,IY,i,j), &
+                                             U_z_out  = uStar_n_R(:,IZ,i,j), &
+                                             rotAngle = rotationParams % periodicAngle)
+            end do               ; end do
+
+            call Face_ProjectGradientFluxToElements(f, nGradEqn, f % storage(1) % unStar, 1,1)
+            call Face_ProjectGradientFluxToElements(f, nGradEqn, uStar_n_R, 2,1)
+         else
+            call Face_ProjectGradientFluxToElements(f, nGradEqn, f % storage(1) % unStar, 1,1)
+            call Face_ProjectGradientFluxToElements(f, nGradEqn, f % storage(1) % unStar, 2,1)
+         end if
+
+      end subroutine BR1_ComputeElementInterfaceAverage_rotary   
+
       subroutine BR1_ComputeElementInterfaceAverage(self, f, nEqn, nGradEqn)
          !$acc routine vector
          use Physics  
@@ -340,6 +448,99 @@ module EllipticBR1
          call Face_ProjectGradientFluxToElements(f, nGradEqn, f % storage(1) % unStar, 2,1)
 
       end subroutine BR1_ComputeElementInterfaceAverage   
+
+      subroutine BR1_ComputeMPIFaceAverage_rotary(self, f, nEqn, nGradEqn)
+         !$acc routine vector
+         use Physics  
+         use ElementClass
+         use FaceClass
+         use RotationData, only: RotateVectorAroundAxis, RotateMomentumGradients, rotationParams
+         implicit none  
+!
+!        ---------
+!        Arguments
+!        ---------
+!
+         type(BassiRebay1_t),   intent(in)  :: self
+         type(Face)                       :: f
+         integer, intent(in)              :: nEqn, nGradEqn
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         real(kind=RP) :: uStar
+         integer       :: i,j,eq, Sidearray, maxId, thisSide
+         real(kind=RP) :: UL(NCONS), UR(NCONS)
+
+         maxId=MAXVAL(f % elementIDs)
+         do i=1,SIZE(f % elementIDs)
+             if(f % elementIDs(i)==maxId)THEN
+               thisSide=i
+                 exit
+             endif
+         end do
+
+         !$acc loop vector collapse(2) private(UL,UR)
+         do j = 0, f % Nf(2)  ; do i = 0, f % Nf(1)
+#ifdef MULTIPHASE
+            select case (self % eqName)
+               case (ELLIPTIC_MU)
+                  call mGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL, f % storage(1) % rho(i,j))
+                  call mGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR, f % storage(2) % rho(i,j))
+               !
+               !              The multiphase solver needs the Chemical potential as first entropy variable
+               !              ----------------------------------------------------------------------------
+                  UL(IGMU) = f % storage(1) % mu(1,i,j)
+                  UR(IGMU) = f % storage(2) % mu(1,i,j)
+
+               case(ELLIPTIC_CH)
+                  call chGradientVariables(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+                  call chGradientVariables(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            end select
+#elif INCNS
+            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
+            call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)    
+#else
+            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+#endif
+
+            if (f % isRotaryPeriodic) then
+               if (thisSide == 1) then
+                  UR(2:4) = RotateVectorAroundAxis(UR(2:4), -rotationParams % periodicAngle, &
+                                                   rotationParams % axis)
+               else
+                  UL(2:4) = RotateVectorAroundAxis(UL(2:4), +rotationParams % periodicAngle, &
+                                                   rotationParams % axis)
+               end if
+            end if
+
+            !$acc loop seq
+            do eq =1, nEqn
+               ! uStar = 0.5_RP * (f % storage(2) % Q(eq,i,j) - f % storage(1) % Q(eq,i,j)) * f % geom % jacobian(i,j)
+               
+               uStar = 0.5_RP * (UR(eq) - UL(eq)) * f % geom % jacobian(i,j)
+               
+               f % storage(1) % unStar(eq,IX,i,j) = uStar * f % geom % normal(IX,i,j)
+               f % storage(1) % unStar(eq,IY,i,j) = uStar * f % geom % normal(IY,i,j)
+               f % storage(1) % unStar(eq,IZ,i,j) = uStar * f % geom % normal(IZ,i,j)
+            enddo
+         end do               ; end do
+
+         !Code to replace maxloc that is not supported
+         ! maxId=MAXVAL(f % elementIDs)
+         ! do i=1,SIZE(f % elementIDs)
+         !     if(f % elementIDs(i)==maxId)THEN
+         !       Sidearray=i
+         !         exit
+         !     endif
+         ! end do
+         Sidearray = thisSide
+         !Sidearray = MAXLOC(f % elementIDs,1)
+         call Face_ProjectGradientFluxToElements(f, nGradEqn, f % storage(1) % unStar, Sidearray,1)
+         
+      end subroutine BR1_ComputeMPIFaceAverage_rotary   
 
       subroutine BR1_ComputeMPIFaceAverage(self, f, nEqn, nGradEqn)
          !$acc routine vector

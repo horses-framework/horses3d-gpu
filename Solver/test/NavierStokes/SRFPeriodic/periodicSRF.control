@@ -1,0 +1,95 @@
+Flow equations        = "NS"
+mesh file name        = "MESH/periodic.msh"
+Polynomial order = 2
+!Polynomial order i = 3
+!Polynomial order j = 3
+!Polynomial order k = 1
+Number of time steps  = 100
+Output Interval       = 10
+Number of plot points = 5
+Convergence tolerance = 1.d-10
+cfl                   = 0.15
+dcfl                  = 0.15
+mach number           = 0.3
+Reynolds number       = 10.0
+
+peclet number = 0.005
+AOA theta             = 0.0
+AOA phi               = 90.0
+solution file name    = "RESULTS/periodicSRF.hsol"
+save gradients with solution = .true.
+restart               = .false.
+restart file name     = "RESULTS/SRF_0000020000.hsol"
+riemann solver        = roe
+!Inviscid Discretization = Split-form
+!averaging = Kennedy-Gruber
+Discretization nodes = Gauss-Lobatto
+
+simulation type       = time-accurate
+autosave mode         = "iteration"
+autosave interval     = 100
+
+!! Single rotation reference (SRF) specific
+srf enabled = .true.
+rotation rate = 1.0            ! rads/s
+rotation axis = [1.0,0.0,0.0]
+rotation center = [0.0,0.0,0.0]
+periodic enabled = .true.
+
+#define boundary inflow
+  type = NoSlipWall
+  wall rotation rate = 1.0
+#end
+
+#define boundary outflow
+  type = NoSlipWall
+  wall rotation rate = 1.0
+#end
+
+#define boundary top
+  type = NoSlipWall
+  wall rotation rate = 1.0
+#end
+
+#define boundary bottom
+  type = NoSlipWall
+  wall rotation rate = 1.0
+#end
+
+#define boundary sidea
+  type = Periodic
+  coupled boundary = sideb
+#end
+
+#define boundary sideb
+  type = Periodic
+  coupled boundary = sidea
+#end
+
+#define surface monitor 1
+   Name = cyl-drag
+   Marker = inflow
+   Variable = drag
+   Direction = [0.0,0.0,1.0]
+   Reference surface = 1.0	
+#end
+
+#define surface monitor 2
+   Name = cyl-lift
+   Marker = inflow
+   Variable = lift
+   Direction = [1.0,0.0,0.0]
+   Reference surface = 1.0
+#end
+
+#define probe 1
+   Name = probe_u
+   Position = [0.0,10.9999,0.0]
+   Variable = u
+#end
+
+#define probe 2
+   Name = probe_p
+   Position = [0.0,10.9999,0.0]
+   Variable = pressure
+#end

@@ -16,6 +16,7 @@ module SpatialDiscretization
       use DGSEMClass
       use ParticlesClass
       use FluidData
+      use RotationData
       use VariableConversion, only: NSGradientVariables_STATE, GetNSViscosity, NSGradientVariables_ENTROPY, &
                                     GetGradientValues_f, NSGradientVariables_ENERGY, get_laminar_mu_kappa, &
                                     set_getVelocityGradients
@@ -62,6 +63,10 @@ module SpatialDiscretization
          character(len=*), parameter      :: gradient_variables_key = "gradient variables"
          character(len=LINE_LENGTH)       :: gradient_variables
          real(RP)                         :: hnmin, hnmax
+         real(kind=RP)                    :: omega_magnitude
+         real(kind=RP)                    :: omega_nondim(NDIM)
+         type(RefValues_t)                :: refValues_updated
+         integer                          :: nRotFaces, nRotFacesLocal, nRotMPIFaces, nRotMPIFacesLocal, fi, ierr
 
          if (.not. sem % mesh % child) then ! If this is a child mesh, all these constructs were already initialized for the parent mesh
 
@@ -75,6 +80,58 @@ module SpatialDiscretization
                write(STD_OUT,'(30X,A,A30,1pG10.3)') "->", "Minimum h/N: ", hnmin
                write(STD_OUT,'(30X,A,A30,1pG10.3)') "->", "Maximum h/N: ", hnmax
                write(STD_OUT,'(/)')
+            end if
+
+            if (rotationParams % srfEnabled) then
+               omega_magnitude = controlVariables % doublePrecisionValueForKey("rotation rate")
+               omega_nondim = omega_magnitude * rotationParams % axis * Lref / refValues % V
+               call SetSRF(omega_nondim)
+
+               ! Update refValues with omega
+               refValues_updated = refValues
+               refValues_updated % omega = omega_nondim
+               call SetRefValues(refValues_updated)
+               if (MPI_Process % isRoot) then
+                  call Section_Header("Rotating Reference Frame")
+                  write(STD_OUT,'(30X,A,A30,ES10.3)') "->","Rotation rate (rad/s): ", omega_magnitude
+                  write(STD_OUT,'(30X,A,A30,3ES10.3)') "->","Rotation axis: ", rotationParams % axis
+                  write(STD_OUT,'(30X,A,A30,3ES10.3)') "->","Omega (non-dim): ", rotationParams % omega
+                  write(STD_OUT,'(30X,A,A30,3ES10.3)') "->","Rotation center: ", rotationParams % center
+                  write(STD_OUT,'(/)')
+               end if
+            end if
+
+            if (rotationParams % periodicEnabled) then
+               nRotFacesLocal = 0
+               nRotMPIFacesLocal = 0
+               do fi = 1, size(sem % mesh % faces)
+                  if (sem % mesh % faces(fi) % isRotaryPeriodic) then
+                     nRotFacesLocal = nRotFacesLocal + 1
+                     if (sem % mesh % faces(fi) % faceType == HMESH_MPI) nRotMPIFacesLocal = nRotMPIFacesLocal + 1
+                  end if
+               end do
+#ifdef _HAS_MPI_
+               if (MPI_Process % doMPIAction) then
+                  call mpi_allreduce(nRotFacesLocal, nRotFaces, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+                  call mpi_allreduce(nRotMPIFacesLocal, nRotMPIFaces, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+               else
+                  nRotFaces = nRotFacesLocal
+                  nRotMPIFaces = nRotMPIFacesLocal
+               end if
+#else
+               nRotFaces = nRotFacesLocal
+               nRotMPIFaces = nRotMPIFacesLocal
+#endif
+               ! MPI faces are present on both neighbor ranks, so remove half of them.
+               nRotFaces = nRotFaces - nRotMPIFaces / 2
+               if (MPI_Process % isRoot) then
+                  call Section_Header("Periodic Revolution BCs")
+                  write(STD_OUT,'(30X,A,A30,F8.3)')   "->","Sector angle (deg): ", rotationParams % periodicAngle * 180.0_RP / PI
+                  write(STD_OUT,'(30X,A,A30,I0)') "->","Rotary periodic faces: ", nRotFaces
+                  write(STD_OUT,'(30X,A,A30,3ES10.3)') "->","Rotation axis: ", rotationParams % axis
+                  write(STD_OUT,'(30X,A,A30,3ES10.3)') "->","Rotation center: ", rotationParams % center
+                  write(STD_OUT,'(/)')
+               end if
             end if
    !
    !        Initialize inviscid discretization
@@ -482,12 +539,25 @@ module SpatialDiscretization
 !$omp end do
       
 !$omp do schedule(runtime) private(fID)
+         if (rotationParams % periodicEnabled) then
 !$acc parallel loop gang present(mesh) async(1)
-         do iFace = 1, size(mesh % faces_interior)
-            fID = mesh % faces_interior(iFace)
-            call computeElementInterfaceFlux(mesh % faces(fID))
-         end do
+            do iFace = 1, size(mesh % faces_interior)
+               fID = mesh % faces_interior(iFace)
+               if (mesh % faces(fID) % isRotaryPeriodic) then
+                  call computeElementInterfaceFlux_rotary(mesh % faces(fID))
+               else
+                  call computeElementInterfaceFlux(mesh % faces(fID))
+               end if
+            end do
 !$acc end parallel loop
+         else
+!$acc parallel loop gang present(mesh) async(1)
+            do iFace = 1, size(mesh % faces_interior)
+               fID = mesh % faces_interior(iFace)
+               call computeElementInterfaceFlux(mesh % faces(fID))
+            end do
+!$acc end parallel loop
+         end if
 !$omp end do nowait
 
          call computeBoundaryFlux(mesh, t)
@@ -537,12 +607,25 @@ module SpatialDiscretization
 !           **************************************
 !
 !$omp do schedule(runtime) private(fID)
+            if (rotationParams % periodicEnabled) then
 !$acc parallel loop gang num_gangs(size(mesh % faces_mpi)) present(mesh) private(fID) async(1)
-            do iFace = 1, size(mesh % faces_mpi)
-               fID = mesh % faces_mpi(iFace)
-               call computeMPIFaceFlux(mesh % faces(fID))
-            end do
+               do iFace = 1, size(mesh % faces_mpi)
+                  fID = mesh % faces_mpi(iFace)
+                  if (mesh % faces(fID) % isRotaryPeriodic) then
+                     call computeMPIFaceFlux_rotary(mesh % faces(fID))
+                  else
+                     call computeMPIFaceFlux(mesh % faces(fID))
+                  end if
+               end do
 !$acc end parallel loop
+            else
+!$acc parallel loop gang num_gangs(size(mesh % faces_mpi)) present(mesh) private(fID) async(1)
+               do iFace = 1, size(mesh % faces_mpi)
+                  fID = mesh % faces_mpi(iFace)
+                  call computeMPIFaceFlux(mesh % faces(fID))
+               end do
+!$acc end parallel loop
+            end if
 !$omp end do
 !
 !           ***********************************************************
@@ -595,6 +678,19 @@ module SpatialDiscretization
 !!$omp end do
             ! for the sponge, loops are in the internal subroutine as values are precalculated
 !            call sponge % addSource(mesh)
+            if (rotationParams % srfEnabled) then
+!$omp do schedule(runtime) private(i,j,k)
+               !$acc parallel loop gang present(mesh) async(1)
+               do eID = 1, mesh % no_of_elements
+                  !$acc loop vector collapse(3)
+                  do k = 0, mesh % elements(eID) % Nxyz(3)   ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
+                     mesh % elements(eID) % storage % S_NS(:,i,j,k) = Source_Rotref(mesh % elements(eID) % storage % Q(:,i,j,k), rotationParams % omega)
+                  end do                  ; end do                ; end do
+               end do
+               !$acc end parallel loop
+!$omp end do
+            end if
+
             call ForcesFarm(farm, mesh, t)
             call channelSource(mesh)
 !
@@ -805,10 +901,21 @@ module SpatialDiscretization
 !        ******************************************
 !
 !$omp do schedule(runtime) private(fID)
-      do iFace = 1, size(mesh % HO_FacesInterior)
-         fID = mesh % HO_FacesInterior(iFace)
-         call computeElementInterfaceFlux(mesh % faces(fID))
-      end do
+      if (rotationParams % periodicEnabled) then
+         do iFace = 1, size(mesh % HO_FacesInterior)
+            fID = mesh % HO_FacesInterior(iFace)
+            if (mesh % faces(fID) % isRotaryPeriodic) then
+               call computeElementInterfaceFlux_rotary(mesh % faces(fID))
+            else
+               call computeElementInterfaceFlux(mesh % faces(fID))
+            end if
+         end do
+      else
+         do iFace = 1, size(mesh % HO_FacesInterior)
+            fID = mesh % HO_FacesInterior(iFace)
+            call computeElementInterfaceFlux(mesh % faces(fID))
+         end do
+      end if
 !$omp end do nowait
 
          call computeBoundaryFlux(mesh, t)
@@ -862,10 +969,21 @@ module SpatialDiscretization
 !           **************************************
 !
 !$omp do schedule(runtime) private(fID)
-            do iFace = 1, size(mesh % faces_mpi)
-               fID = mesh % faces_mpi(iFace)
-               call computeMPIFaceFlux(mesh % faces(fID))
-            end do
+            if (rotationParams % periodicEnabled) then
+               do iFace = 1, size(mesh % faces_mpi)
+                  fID = mesh % faces_mpi(iFace)
+                  if (mesh % faces(fID) % isRotaryPeriodic) then
+                     call computeMPIFaceFlux_rotary(mesh % faces(fID))
+                  else
+                     call computeMPIFaceFlux(mesh % faces(fID))
+                  end if
+               end do
+            else
+               do iFace = 1, size(mesh % faces_mpi)
+                  fID = mesh % faces_mpi(iFace)
+                  call computeMPIFaceFlux(mesh % faces(fID))
+               end do
+            end if
 !$omp end do
 !
 !           ***********************************************************
@@ -912,6 +1030,11 @@ module SpatialDiscretization
                   call UserDefinedSourceTermNS(e % geom % x(:,i,j,k), e % storage % Q(:,i,j,k), t, e % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues)
                   call randomTrip % getTripSource( e % geom % x(:,i,j,k), e % storage % S_NS(:,i,j,k) )
                end do                  ; end do                ; end do
+               if (rotationParams % srfEnabled) then
+                  do k = 0, e % Nxyz(3)   ; do j = 0, e % Nxyz(2) ; do i = 0, e % Nxyz(1)
+                        e % storage % S_NS(:,i,j,k) = Source_Rotref(e % storage % Q(:,i,j,k), rotationParams % omega)
+                  end do                  ; end do                ; end do
+               end if
                end associate
             end do
 !$omp end do
@@ -1142,6 +1265,11 @@ module SpatialDiscretization
                   call UserDefinedSourceTermNS(e % geom % x(:,i,j,k), e % storage % Q(:,i,j,k), t, e % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues)
                   call randomTrip % getTripSource( e % geom % x(:,i,j,k), e % storage % S_NS(:,i,j,k) )
                end do                  ; end do                ; end do
+               if (rotationParams % srfEnabled) then
+                  do k = 0, e % Nxyz(3)   ; do j = 0, e % Nxyz(2) ; do i = 0, e % Nxyz(1)
+                        e % storage % S_NS(:,i,j,k) = Source_Rotref(e % storage % Q(:,i,j,k), rotationParams % omega)
+                  end do                  ; end do                ; end do
+               end if
                end associate
             end do
 !$omp end do
@@ -1222,6 +1350,8 @@ module SpatialDiscretization
          real(kind=RP) :: viscousContravariantFlux ( 1:NCONS, 0:e%Nxyz(1) , 0:e%Nxyz(2) , 0:e%Nxyz(3), 1:NDIM )
          real(kind=RP) :: AviscContravariantFlux   ( 1:NCONS, 0:e%Nxyz(1) , 0:e%Nxyz(2) , 0:e%Nxyz(3), 1:NDIM )
          real(kind=RP) :: contravariantFlux        ( 1:NCONS, 0:e%Nxyz(1) , 0:e%Nxyz(2) , 0:e%Nxyz(3), 1:NDIM )
+         real(kind=RP) :: cartesianFlux(1:NCONS, 1:NDIM)
+         integer       :: i, j, k
 
 !
 !        *************************************
@@ -1230,7 +1360,22 @@ module SpatialDiscretization
 !
 !        Compute inviscid contravariant flux
 !        -----------------------------------
-         call HyperbolicDiscretization % ComputeInnerFluxes ( e , EulerFlux, inviscidContravariantFlux )
+         if (rotationParams % srfEnabled) then
+            do k = 0, e%Nxyz(3); do j = 0, e%Nxyz(2); do i = 0, e%Nxyz(1)
+               call EulerFlux_Rotref(e % storage % Q(:,i,j,k), e % geom % x(:,i,j,k), rotationParams % omega, rotationParams % center, cartesianFlux)
+               inviscidContravariantFlux(:,i,j,k,IX) = cartesianFlux(:,IX) * e % geom % jGradXi(IX,i,j,k) + &
+                                                        cartesianFlux(:,IY) * e % geom % jGradXi(IY,i,j,k) + &
+                                                        cartesianFlux(:,IZ) * e % geom % jGradXi(IZ,i,j,k)
+               inviscidContravariantFlux(:,i,j,k,IY) = cartesianFlux(:,IX) * e % geom % jGradEta(IX,i,j,k) + &
+                                                        cartesianFlux(:,IY) * e % geom % jGradEta(IY,i,j,k) + &
+                                                        cartesianFlux(:,IZ) * e % geom % jGradEta(IZ,i,j,k)
+               inviscidContravariantFlux(:,i,j,k,IZ) = cartesianFlux(:,IX) * e % geom % jGradZeta(IX,i,j,k) + &
+                                                        cartesianFlux(:,IY) * e % geom % jGradZeta(IY,i,j,k) + &
+                                                        cartesianFlux(:,IZ) * e % geom % jGradZeta(IZ,i,j,k)
+            end do; end do; end do
+         else
+            call HyperbolicDiscretization % ComputeInnerFluxes ( e , EulerFlux, inviscidContravariantFlux )
+         end if
 !
 !        Compute viscous contravariant flux
 !        ----------------------------------
@@ -1309,52 +1454,100 @@ module SpatialDiscretization
 !
 !        Compute inviscid - viscous contravariant flux
 !        ---------------------------------------------
-         !$omp do schedule(runtime)
-         !$acc parallel loop gang vector_length(128) num_gangs(9700) present(mesh) async(1)
-         do eID = 1 , size(mesh % elements)
 
-            !$acc loop vector collapse(3) private(inviscidFlux, viscousFlux)
-            do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
-                  
-               call EulerFlux(mesh % elements(eID) % storage % Q(:,i,j,k), inviscidFlux, mesh % elements(eID) % storage % rho(i,j,k))
+         if (rotationParams % srfEnabled) then
+            !$omp do schedule(runtime)
+            !$acc parallel loop gang vector_length(128) num_gangs(9700) present(mesh) async(1)
+            do eID = 1 , size(mesh % elements)
+               !$acc loop vector collapse(3) private(inviscidFlux, viscousFlux)
+               do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
 
-               mu    = mesh % elements(eID) % storage % mu_ns(1,i,j,k)
-               beta  = 0.0_RP
-               kappa = mesh % elements(eID) % storage % mu_ns(2,i,j,k)
+                  call EulerFlux_Rotref(mesh % elements(eID) % storage % Q(:,i,j,k), &
+                                           mesh % elements(eID) % geom % x(:,i,j,k), &
+                                           rotationParams % omega, rotationParams % center, inviscidFlux)
 
-               call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
-                                       mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, kappa, viscousFlux)
-               
-               do eq =1, NCONS
+                  mu    = mesh % elements(eID) % storage % mu_ns(1,i,j,k)
+                  beta  = 0.0_RP
+                  kappa = mesh % elements(eID) % storage % mu_ns(2,i,j,k)
 
-               inviscidFlux(eq,:) = inviscidFlux(eq,:) - viscousFlux(eq,:)
-                  
-               mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IX)  = &
-                                                           inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradXi(IX,i,j,k)  &
-                                                         + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradXi(IY,i,j,k)  &
-                                                         + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradXi(IZ,i,j,k)
+                  call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , &
+                                             mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, kappa, viscousFlux)
 
-               mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IY)  = &
-                                                           inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradEta(IX,i,j,k)  &
-                                                         + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradEta(IY,i,j,k)  &
-                                                         + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradEta(IZ,i,j,k)
-                  
-               mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IZ)  = &
-                                                           inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradZeta(IX,i,j,k)  &
-                                                         + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradZeta(IY,i,j,k)  &
-                                                         + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradZeta(IZ,i,j,k)
+                  do eq =1, NCONS
 
-               ! initialize to 0 to accumulate
-               mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
-               end do
-            end do               ; end do                ; end do
+                     inviscidFlux(eq,:) = inviscidFlux(eq,:) - viscousFlux(eq,:)
+
+                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IX)  = &
+                                                                inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradXi(IX,i,j,k)  &
+                                                              + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradXi(IY,i,j,k)  &
+                                                              + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradXi(IZ,i,j,k)
+
+                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IY)  = &
+                                                                inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradEta(IX,i,j,k)  &
+                                                              + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradEta(IY,i,j,k)  &
+                                                              + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradEta(IZ,i,j,k)
+
+                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IZ)  = &
+                                                                inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradZeta(IX,i,j,k)  &
+                                                              + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradZeta(IY,i,j,k)  &
+                                                              + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradZeta(IZ,i,j,k)
+
+                     ! initialize to 0 to accumulate
+                     mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
+                  end do
+               end do               ; end do                ; end do
+
+            call ScalarWeakIntegrals_StdVolumeGreen( mesh % elements(eID) % Nxyz, NCONS, mesh % elements(eID) % storage % contravariantFlux, &
+                                         mesh % elements(eID) % storage % QDot)
+            enddo
+            !$acc end parallel loop 
+            !$omp end do
+         else
+            !$omp do schedule(runtime)
+            !$acc parallel loop gang vector_length(128) num_gangs(9700) present(mesh) async(1)
+            do eID = 1 , size(mesh % elements)
+               !$acc loop vector collapse(3) private(inviscidFlux, viscousFlux)
+               do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
+
+                  call EulerFlux(mesh % elements(eID) % storage % Q(:,i,j,k), inviscidFlux, mesh % elements(eID) % storage % rho(i,j,k))
+
+                  mu    = mesh % elements(eID) % storage % mu_ns(1,i,j,k)
+                  beta  = 0.0_RP
+                  kappa = mesh % elements(eID) % storage % mu_ns(2,i,j,k)
+
+                  call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , &
+                                          mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, kappa, viscousFlux)
+
+                  do eq =1, NCONS
+
+                     inviscidFlux(eq,:) = inviscidFlux(eq,:) - viscousFlux(eq,:)
+
+                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IX)  = &
+                                                                inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradXi(IX,i,j,k)  &
+                                                              + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradXi(IY,i,j,k)  &
+                                                              + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradXi(IZ,i,j,k)
+
+                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IY)  = &
+                                                                inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradEta(IX,i,j,k)  &
+                                                              + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradEta(IY,i,j,k)  &
+                                                              + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradEta(IZ,i,j,k)
+
+                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IZ)  = &
+                                                                inviscidFlux(eq,IX) * mesh % elements(eID) % geom % jGradZeta(IX,i,j,k)  &
+                                                              + inviscidFlux(eq,IY) * mesh % elements(eID) % geom % jGradZeta(IY,i,j,k)  &
+                                                              + inviscidFlux(eq,IZ) * mesh % elements(eID) % geom % jGradZeta(IZ,i,j,k)
+
+                     ! initialize to 0 to accumulate
+                     mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
+                  end do
+               end do               ; end do                ; end do
 
             call ScalarWeakIntegrals_StdVolumeGreen( mesh % elements(eID) % Nxyz, NCONS, mesh % elements(eID) % storage % contravariantFlux, &
                                                      mesh % elements(eID) % storage % QDot)
-      
-         end do
-         !$acc end parallel loop 
-         !$omp end do
+            end do
+            !$acc end parallel loop 
+            !$omp end do
+         end if
 
       end subroutine TimeDerivative_VolumetricContribution
 
@@ -1378,70 +1571,138 @@ module SpatialDiscretization
          integer       :: i, j, k,l,eq, eID
          real(kind=RP) :: Flux(1:NCONS, 1:NDIM)
 
-         !$acc parallel present(mesh) vector_length(128) num_gangs(9750) async(1)
-         !$acc loop gang
-         do eID = 1 , size(mesh % elements)
-         
-            !$acc loop vector collapse(3) private(Flux)
-            do k = 0, mesh % elements(eID) % Nxyz(3)  
-               do j = 0, mesh % elements(eID) % Nxyz(2)  
-                  do i = 0, mesh % elements(eID) % Nxyz(1)
+         if (rotationParams % srfEnabled) then
+            !$acc parallel present(mesh) vector_length(128) num_gangs(9750) async(1)
+            !$acc loop gang
+            do eID = 1 , size(mesh % elements)
+            
+               !$acc loop vector collapse(3) private(Flux)
+               do k = 0, mesh % elements(eID) % Nxyz(3)  
+                  do j = 0, mesh % elements(eID) % Nxyz(2)  
+                     do i = 0, mesh % elements(eID) % Nxyz(1)
 
-                  call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
-                                          mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), &
-                                          mesh % elements(eID) % storage % mu_ns(1,i,j,k), 0.0_RP, &
-                                          mesh % elements(eID) % storage % mu_ns(2,i,j,k), Flux)
-                  !$acc loop seq
-                  do eq = 1, NCONS
-              
-                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IX)  = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradXi(IX,i,j,k)  &
-                                                                                        - Flux(eq,IY) * mesh % elements(eID) % geom % jGradXi(IY,i,j,k)  &
-                                                                                        - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradXi(IZ,i,j,k)
-
-                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IY) = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradEta(IX,i,j,k)  &
-                                                                                       - Flux(eq,IY) * mesh % elements(eID) % geom % jGradEta(IY,i,j,k)  &
-                                                                                       - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradEta(IZ,i,j,k)
-                  
-                     mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IZ) = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradZeta(IX,i,j,k)  &
-                                                                                       - Flux(eq,IY) * mesh % elements(eID) % geom % jGradZeta(IY,i,j,k)  &
-                                                                                       - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradZeta(IZ,i,j,k)
-                     ! initialize to 0 to accumulate
-                     mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
-                  end do
-            end do               ; end do                ; end do
-
-         call ScalarWeakIntegrals_StdVolumeGreen( mesh % elements(eID) % Nxyz, NCONS, mesh % elements(eID) % storage % contravariantFlux, &
-                                                  mesh % elements(eID) % storage % QDot)
-!
-!        *************************************
-!        Compute interior contravariant fluxes
-!        *************************************
-!
-!        Compute inviscid contravariant flux
-!        -----------------------------------
-            !$acc loop vector collapse(3) private(Flux)
-            do k = 0, mesh % elements(eID) % Nxyz(3)  
-               do j = 0, mesh % elements(eID) % Nxyz(2)  
-                  do i = 0, mesh % elements(eID) % Nxyz(1)
+                     call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
+                                             mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), &
+                                             mesh % elements(eID) % storage % mu_ns(1,i,j,k), 0.0_RP, &
+                                             mesh % elements(eID) % storage % mu_ns(2,i,j,k), Flux)
                      !$acc loop seq
-                     do l = 0, mesh % elements(eID) % Nxyz(1)
-                        call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,l,j,k), mesh % elements(eID) % geom % jGradXi(:,i,j,k),  mesh % elements(eID) % geom % jGradXi(:,l,j,k), Flux(:,IX))
-                        call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,l,k), mesh % elements(eID) % geom % jGradEta(:,i,j,k), mesh % elements(eID) % geom % jGradEta(:,i,l,k), Flux(:,IY))
-                        call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,l), mesh % elements(eID) % geom % jGradZeta(:,i,j,k), mesh % elements(eID) % geom % jGradZeta(:,i,j,l), Flux(:,IZ))
-                        
+                     do eq = 1, NCONS
+                 
+                        mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IX)  = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradXi(IX,i,j,k)  &
+                                                                                           - Flux(eq,IY) * mesh % elements(eID) % geom % jGradXi(IY,i,j,k)  &
+                                                                                           - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradXi(IZ,i,j,k)
+
+                        mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IY) = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradEta(IX,i,j,k)  &
+                                                                                          - Flux(eq,IY) * mesh % elements(eID) % geom % jGradEta(IY,i,j,k)  &
+                                                                                          - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradEta(IZ,i,j,k)
+                     
+                        mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IZ) = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradZeta(IX,i,j,k)  &
+                                                                                          - Flux(eq,IY) * mesh % elements(eID) % geom % jGradZeta(IY,i,j,k)  &
+                                                                                          - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradZeta(IZ,i,j,k)
+                        ! initialize to 0 to accumulate
+                        mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
+                     end do
+               end do               ; end do                ; end do
+
+            call ScalarWeakIntegrals_StdVolumeGreen( mesh % elements(eID) % Nxyz, NCONS, mesh % elements(eID) % storage % contravariantFlux, &
+                                                     mesh % elements(eID) % storage % QDot)
+!
+!           *************************************
+!           Compute interior contravariant fluxes
+!           *************************************
+!
+!           Compute inviscid contravariant flux
+!           -----------------------------------
+               !$acc loop vector collapse(3) private(Flux)
+               do k = 0, mesh % elements(eID) % Nxyz(3)
+                  do j = 0, mesh % elements(eID) % Nxyz(2)
+                     do i = 0, mesh % elements(eID) % Nxyz(1)
                         !$acc loop seq
-                        do eq = 1, NCONS
-                           mesh % elements(eID) % storage % QDot(eq,i,j,k) = mesh % elements(eID) % storage % QDot(eq,i,j,k) &
-                                                                           - NodalStorage(mesh % elements(eID) % Nxyz(1)) % sharpD(i,l) *  Flux(eq,IX) &
-                                                                           - NodalStorage(mesh % elements(eID) % Nxyz(2)) % sharpD(j,l) *  Flux(eq,IY) &
-                                                                           - NodalStorage(mesh % elements(eID) % Nxyz(3)) % sharpD(k,l) *  Flux(eq,IZ)
-                        end do
-                     end do 
+                        do l = 0, mesh % elements(eID) % Nxyz(1)
+                           call TwoPointFluxRotref_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,l,j,k), &
+                                                    mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % geom % x(:,l,j,k), &
+                                                    mesh % elements(eID) % geom % jGradXi(:,i,j,k), mesh % elements(eID) % geom % jGradXi(:,l,j,k), &
+                                                    rotationParams % omega, rotationParams % center, Flux(:,IX))
+                           call TwoPointFluxRotref_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,l,k), &
+                                                    mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % geom % x(:,i,l,k), &
+                                                    mesh % elements(eID) % geom % jGradEta(:,i,j,k), mesh % elements(eID) % geom % jGradEta(:,i,l,k), &
+                                                    rotationParams % omega, rotationParams % center, Flux(:,IY))
+                           call TwoPointFluxRotref_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,l), &
+                                                    mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % geom % x(:,i,j,l), &
+                                                    mesh % elements(eID) % geom % jGradZeta(:,i,j,k), mesh % elements(eID) % geom % jGradZeta(:,i,j,l), &
+                                                    rotationParams % omega, rotationParams % center, Flux(:,IZ))
 
-            end do               ; end do                ; end do
+                           !$acc loop seq
+                           do eq = 1, NCONS
+                              mesh % elements(eID) % storage % QDot(eq,i,j,k) = mesh % elements(eID) % storage % QDot(eq,i,j,k) &
+                                                                              - NodalStorage(mesh % elements(eID) % Nxyz(1)) % sharpD(i,l) *  Flux(eq,IX) &
+                                                                              - NodalStorage(mesh % elements(eID) % Nxyz(2)) % sharpD(j,l) *  Flux(eq,IY) &
+                                                                              - NodalStorage(mesh % elements(eID) % Nxyz(3)) % sharpD(k,l) *  Flux(eq,IZ)
+                  end do; end do ;end do; end do; end do
+            enddo
+            !$acc end parallel loop
+         else
+            !$acc parallel present(mesh) vector_length(128) num_gangs(9750) async(1)
+            !$acc loop gang
+            do eID = 1 , size(mesh % elements)
+            
+               !$acc loop vector collapse(3) private(Flux)
+               do k = 0, mesh % elements(eID) % Nxyz(3)  
+                  do j = 0, mesh % elements(eID) % Nxyz(2)  
+                     do i = 0, mesh % elements(eID) % Nxyz(1)
 
-         enddo
-         !$acc end parallel loop
+                     call ViscousFlux_STATE( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % U_x(:,i,j,k), & 
+                                             mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), &
+                                             mesh % elements(eID) % storage % mu_ns(1,i,j,k), 0.0_RP, &
+                                             mesh % elements(eID) % storage % mu_ns(2,i,j,k), Flux)
+                     !$acc loop seq
+                     do eq = 1, NCONS
+                 
+                        mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IX)  = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradXi(IX,i,j,k)  &
+                                                                                           - Flux(eq,IY) * mesh % elements(eID) % geom % jGradXi(IY,i,j,k)  &
+                                                                                           - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradXi(IZ,i,j,k)
+
+                        mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IY) = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradEta(IX,i,j,k)  &
+                                                                                          - Flux(eq,IY) * mesh % elements(eID) % geom % jGradEta(IY,i,j,k)  &
+                                                                                          - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradEta(IZ,i,j,k)
+                     
+                        mesh % elements(eID) % storage % contravariantFlux(eq,i,j,k,IZ) = - Flux(eq,IX) * mesh % elements(eID) % geom % jGradZeta(IX,i,j,k)  &
+                                                                                          - Flux(eq,IY) * mesh % elements(eID) % geom % jGradZeta(IY,i,j,k)  &
+                                                                                          - Flux(eq,IZ) * mesh % elements(eID) % geom % jGradZeta(IZ,i,j,k)
+                        ! initialize to 0 to accumulate
+                        mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
+                     end do
+               end do               ; end do                ; end do
+
+            call ScalarWeakIntegrals_StdVolumeGreen( mesh % elements(eID) % Nxyz, NCONS, mesh % elements(eID) % storage % contravariantFlux, &
+                                                     mesh % elements(eID) % storage % QDot)
+!
+!           *************************************
+!           Compute interior contravariant fluxes
+!           *************************************
+!
+!           Compute inviscid contravariant flux
+!           -----------------------------------
+               !$acc loop vector collapse(3) private(Flux)
+               do k = 0, mesh % elements(eID) % Nxyz(3)
+                  do j = 0, mesh % elements(eID) % Nxyz(2)
+                     do i = 0, mesh % elements(eID) % Nxyz(1)
+                        !$acc loop seq
+                        do l = 0, mesh % elements(eID) % Nxyz(1)
+                           call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,l,j,k), mesh % elements(eID) % geom % jGradXi(:,i,j,k),  mesh % elements(eID) % geom % jGradXi(:,l,j,k), Flux(:,IX))
+                           call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,l,k), mesh % elements(eID) % geom % jGradEta(:,i,j,k), mesh % elements(eID) % geom % jGradEta(:,i,l,k), Flux(:,IY))
+                           call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,l), mesh % elements(eID) % geom % jGradZeta(:,i,j,k), mesh % elements(eID) % geom % jGradZeta(:,i,j,l), Flux(:,IZ))
+
+                           !$acc loop seq
+                           do eq = 1, NCONS
+                              mesh % elements(eID) % storage % QDot(eq,i,j,k) = mesh % elements(eID) % storage % QDot(eq,i,j,k) &
+                                                                              - NodalStorage(mesh % elements(eID) % Nxyz(1)) % sharpD(i,l) *  Flux(eq,IX) &
+                                                                              - NodalStorage(mesh % elements(eID) % Nxyz(2)) % sharpD(j,l) *  Flux(eq,IY) &
+                                                                              - NodalStorage(mesh % elements(eID) % Nxyz(3)) % sharpD(k,l) *  Flux(eq,IZ)
+                  end do; end do ;end do; end do; end do
+            enddo
+            !$acc end parallel loop
+         end if
 
       end subroutine TimeDerivative_VolumetricContribution_Split
 !
@@ -1515,14 +1776,28 @@ module SpatialDiscretization
 
          call BR1_RiemannSolver_acc(fc, NCONS, NGRAD, fc % storage(2) % FStar)
 
-         call RiemannSolver_Selector(fc % Nf(1), &
-                                     fc % Nf(2), &
-                                     fc % storage(1) % Q, &
-                                     fc % storage(2) % Q, &
-                                     fc % geom % normal, &
-                                     fc % geom % t1, &
-                                     fc % geom % t2, &
-                                     fc % storage(1) % FStar )
+         if (rotationParams % srfEnabled) then
+            call RiemannSolverRotref_Selector(Nx = fc % Nf(1), &
+                                              Ny = fc % Nf(2), &
+                                              QLeft = fc % storage(1) % Q, &
+                                              QRight = fc % storage(2) % Q, &
+                                              nHat = fc % geom % normal, &
+                                              t1 = fc % geom % t1, &
+                                              t2 = fc % geom % t2, &
+                                              x = fc % geom % x, &
+                                              omega = rotationParams % omega, &
+                                              x0 = rotationParams % center, &
+                                              flux = fc % storage(1) % FStar)
+         else
+            call RiemannSolver_Selector(fc % Nf(1), &
+                                        fc % Nf(2), &
+                                        fc % storage(1) % Q, &
+                                        fc % storage(2) % Q, &
+                                        fc % geom % normal, &
+                                        fc % geom % t1, &
+                                        fc % geom % t2, &
+                                        fc % storage(1) % FStar)
+         end if
 
 !        ------------------------
 !        Multiply by the Jacobian
@@ -1540,7 +1815,84 @@ module SpatialDiscretization
         call Face_ProjectFluxToElements(fc, NCONS, fc % storage(1) % FStar, 2)
 
       end subroutine computeElementInterfaceFlux
-   
+
+      subroutine computeElementInterfaceFlux_rotary(fc)
+         !$acc routine vector
+         use FaceClass
+         use RiemannSolvers_NS
+         use EllipticBR1
+         implicit none
+         type(Face), intent(inout) :: fc
+
+         integer       :: i, j, eq
+         real(kind=RP) :: QR_array(1:NCONS, 0:fc % Nf(1), 0:fc % Nf(2))
+         real(kind=RP) :: rotated_flux(1:NCONS,0:fc % Nf(1),0:fc % Nf(2))
+         real(kind=RP) :: unStar2_backup(1:NCONS,1:NDIM,0:fc % Nf(1),0:fc % Nf(2))
+
+         unStar2_backup = fc % storage(2) % unStar
+         !$acc loop vector collapse(2)
+         do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+            call RotateMomentumGradients(U_x_in = fc % storage(2) % unStar(:,IX,i,j), &
+                                         U_y_in = fc % storage(2) % unStar(:,IY,i,j), &
+                                         U_z_in = fc % storage(2) % unStar(:,IZ,i,j), &
+                                         U_x_out = fc % storage(2) % unStar(:,IX,i,j), &
+                                         U_y_out = fc % storage(2) % unStar(:,IY,i,j), &
+                                         U_z_out = fc % storage(2) % unStar(:,IZ,i,j), &
+                                         rotAngle = -rotationParams % periodicAngle)
+         end do ; end do
+
+         call BR1_RiemannSolver_acc(fc, NCONS, NGRAD, fc % storage(2) % FStar)
+         fc % storage(2) % unStar = unStar2_backup
+
+         !$acc loop vector collapse(2)
+         do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+            call RotateStateMomentum(fc % storage(2) % Q(:,i,j), &
+                                     QR_array(:,i,j), &
+                                     -rotationParams % periodicAngle)
+         end do ; end do
+
+         if (rotationParams % srfEnabled) then
+            call RiemannSolverRotref_Selector(Nx = fc % Nf(1), &
+                                              Ny = fc % Nf(2), &
+                                              QLeft = fc % storage(1) % Q, &
+                                              QRight = QR_array, &
+                                              nHat = fc % geom % normal, &
+                                              t1 = fc % geom % t1, &
+                                              t2 = fc % geom % t2, &
+                                              x = fc % geom % x, &
+                                              omega = rotationParams % omega, &
+                                              x0 = rotationParams % center, &
+                                              flux = fc % storage(1) % FStar)
+         else
+            call RiemannSolver_Selector(fc % Nf(1), &
+                                        fc % Nf(2), &
+                                        fc % storage(1) % Q, &
+                                        QR_array, &
+                                        fc % geom % normal, &
+                                        fc % geom % t1, &
+                                        fc % geom % t2, &
+                                        fc % storage(1) % FStar)
+         end if
+
+         !$acc loop vector collapse(3)
+         do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1) ; do eq = 1, NCONS
+               fc % storage(1) % FStar(eq,i,j) = (fc % storage(1) % FStar(eq,i,j) - fc % storage(2) % FStar(eq,i,j)) * fc % geom % jacobian(i,j)
+         end do ; end do ;  end do
+
+         rotated_flux = fc % storage(1) % FStar
+         !$acc loop vector collapse(2)
+         do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+            rotated_flux(IRHOU:IRHOW,i,j) = RotateVectorAroundAxis( &
+                 rotated_flux(IRHOU:IRHOW,i,j), &
+                 rotationParams % periodicAngle, &
+                 rotationParams % axis)
+         end do ; end do
+
+         call Face_ProjectFluxToElements(fc, NCONS, fc % storage(1) % FStar, 1)
+         call Face_ProjectFluxToElements(fc, NCONS, rotated_flux           , 2)
+
+      end subroutine computeElementInterfaceFlux_rotary
+      
       subroutine computeMPIFaceFlux(fc)
          !$acc routine vector
          use FaceClass
@@ -1585,14 +1937,28 @@ module SpatialDiscretization
 
          call BR1_RiemannSolver_acc(fc, NCONS, NGRAD, fc % storage(2) % FStar)
 
-         call RiemannSolver_Selector(fc % Nf(1), &
-                                     fc % Nf(2), &
-                                     fc % storage(1) % Q, &
-                                     fc % storage(2) % Q, &
-                                     fc % geom % normal, &
-                                     fc % geom % t1, &
-                                     fc % geom % t2, &
-                                     fc % storage(1) % FStar )
+         if (rotationParams % srfEnabled) then
+            call RiemannSolverRotref_Selector(Nx = fc % Nf(1), &
+                                              Ny = fc % Nf(2), &
+                                              QLeft = fc % storage(1) % Q, &
+                                              QRight = fc % storage(2) % Q, &
+                                              nHat = fc % geom % normal, &
+                                              t1 = fc % geom % t1, &
+                                              t2 = fc % geom % t2, &
+                                              x = fc % geom % x, &
+                                              omega = rotationParams % omega, &
+                                              x0 = rotationParams % center, &
+                                              flux = fc % storage(1) % FStar)
+         else
+            call RiemannSolver_Selector(fc % Nf(1), &
+                                        fc % Nf(2), &
+                                        fc % storage(1) % Q, &
+                                        fc % storage(2) % Q, &
+                                        fc % geom % normal, &
+                                        fc % geom % t1, &
+                                        fc % geom % t2, &
+                                        fc % storage(1) % FStar )
+         end if
 
 !        ------------------------
 !        Multiply by the Jacobian
@@ -1620,7 +1986,130 @@ module SpatialDiscretization
          end do
          call Face_ProjectFluxToElements(fc, NCONS, fc % storage(1) % FStar, Sidearray)
 
-      end subroutine ComputeMPIFaceFlux
+      end subroutine computeMPIFaceFlux
+
+      subroutine computeMPIFaceFlux_rotary(fc)
+         !$acc routine vector
+         use FaceClass
+         use RiemannSolvers_NS
+         use EllipticBR1
+         implicit none
+         type(Face), intent(inout) :: fc
+
+         integer       :: i, j, eq, thisSide, maxId
+         real(kind=RP) :: QL_array(1:NCONS, 0:fc % Nf(1), 0:fc % Nf(2))
+         real(kind=RP) :: QR_array(1:NCONS, 0:fc % Nf(1), 0:fc % Nf(2))
+         real(kind=RP) :: unStar_backup(1:NCONS,1:NDIM,0:fc % Nf(1),0:fc % Nf(2))
+
+         call ViscousFlux_selector(NCONS, NGRAD, fc % Nf(1), &
+                                   fc % Nf(2), 0, &
+                                   fc % storage(1) % Q , &
+                                   fc % storage(1) % U_x, &
+                                   fc % storage(1) % U_y, &
+                                   fc % storage(1) % U_z, &
+                                   fc % storage(1) % mu_NS, &
+                                   fc % storage(1) % unStar)
+
+         call ViscousFlux_selector(NCONS, NGRAD, fc % Nf(1), &
+                                   fc % Nf(2), 0, &
+                                   fc % storage(2) % Q , &
+                                   fc % storage(2) % U_x, &
+                                   fc % storage(2) % U_y, &
+                                   fc % storage(2) % U_z, &
+                                   fc % storage(2) % mu_NS, &
+                                   fc % storage(2) % unStar)
+
+         maxId = MAXVAL(fc % elementIDs)
+         thisSide = 1
+         do i = 1, SIZE(fc % elementIDs)
+            if (fc % elementIDs(i) == maxId) then
+               thisSide = i
+               exit
+            end if
+         end do
+
+         if (thisSide == 1) then
+            unStar_backup = fc % storage(2) % unStar
+            !$acc loop vector collapse(2)
+            do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+               call RotateMomentumGradients(U_x_in = fc % storage(2) % unStar(:,IX,i,j), &
+                                            U_y_in = fc % storage(2) % unStar(:,IY,i,j), &
+                                            U_z_in = fc % storage(2) % unStar(:,IZ,i,j), &
+                                            U_x_out = fc % storage(2) % unStar(:,IX,i,j), &
+                                            U_y_out = fc % storage(2) % unStar(:,IY,i,j), &
+                                            U_z_out = fc % storage(2) % unStar(:,IZ,i,j), &
+                                            rotAngle = -rotationParams % periodicAngle)
+            end do ; end do
+         else
+            unStar_backup = fc % storage(1) % unStar
+            !$acc loop vector collapse(2)
+            do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+               call RotateMomentumGradients(U_x_in = fc % storage(1) % unStar(:,IX,i,j), &
+                                            U_y_in = fc % storage(1) % unStar(:,IY,i,j), &
+                                            U_z_in = fc % storage(1) % unStar(:,IZ,i,j), &
+                                            U_x_out = fc % storage(1) % unStar(:,IX,i,j), &
+                                            U_y_out = fc % storage(1) % unStar(:,IY,i,j), &
+                                            U_z_out = fc % storage(1) % unStar(:,IZ,i,j), &
+                                            rotAngle = +rotationParams % periodicAngle)
+            end do ; end do
+         end if
+
+         call BR1_RiemannSolver_acc(fc, NCONS, NGRAD, fc % storage(2) % FStar)
+
+         if (thisSide == 1) then
+            fc % storage(2) % unStar = unStar_backup
+            !$acc loop vector collapse(2)
+            do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+               QL_array(:,i,j) = fc % storage(1) % Q(:,i,j)
+               call RotateStateMomentum(fc % storage(2) % Q(:,i,j), &
+                                        QR_array(:,i,j), &
+                                        -rotationParams % periodicAngle)
+            end do ; end do
+         else
+            fc % storage(1) % unStar = unStar_backup
+            !$acc loop vector collapse(2)
+            do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+               call RotateStateMomentum(fc % storage(1) % Q(:,i,j), &
+                                        QL_array(:,i,j), &
+                                        +rotationParams % periodicAngle)
+               QR_array(:,i,j) = fc % storage(2) % Q(:,i,j)
+            end do ; end do
+         end if
+
+         if (rotationParams % srfEnabled) then
+            call RiemannSolverRotref_Selector(Nx = fc % Nf(1), &
+                                              Ny = fc % Nf(2), &
+                                              QLeft = QL_array, &
+                                              QRight = QR_array, &
+                                              nHat = fc % geom % normal, &
+                                              t1 = fc % geom % t1, &
+                                              t2 = fc % geom % t2, &
+                                              x = fc % geom % x, &
+                                              omega = rotationParams % omega, &
+                                              x0 = rotationParams % center, &
+                                              flux = fc % storage(1) % FStar)
+         else
+            call RiemannSolver_Selector(fc % Nf(1), &
+                                        fc % Nf(2), &
+                                        QL_array, &
+                                        QR_array, &
+                                        fc % geom % normal, &
+                                        fc % geom % t1, &
+                                        fc % geom % t2, &
+                                        fc % storage(1) % FStar)
+         end if
+
+         !$acc loop vector collapse(2)
+         do j = 0, fc % Nf(2) ; do i = 0, fc % Nf(1)
+            !$acc loop seq
+            do eq = 1, NCONS
+               fc % storage(1) % FStar(eq,i,j) = (fc % storage(1) % FStar(eq,i,j) - fc % storage(2) % FStar(eq,i,j)) * fc % geom % jacobian(i,j)
+            enddo
+         end do ; end do
+
+         call Face_ProjectFluxToElements(fc, NCONS, fc % storage(1) % FStar, thisSide)
+
+      end subroutine computeMPIFaceFlux_rotary
 
       SUBROUTINE computeBoundaryFlux(mesh, time)
       USE ElementClass
@@ -1720,38 +2209,76 @@ module SpatialDiscretization
 
          CALL BCs(zoneID) % bc % FlowNeumann(mesh, mesh % zones(zoneID))                             
          
-         !$acc parallel loop gang present(mesh) async(1)
-         do zonefID = 1, mesh % zones(zoneID) % no_of_faces
-            fID =  mesh % zones(zoneID) % faces(zonefID)
+         if (rotationParams % srfEnabled) then
+            !$acc parallel loop gang present(mesh) async(1)
+            do zonefID = 1, mesh % zones(zoneID) % no_of_faces
+               fID =  mesh % zones(zoneID) % faces(zonefID)
 
-            call RiemannSolver_Selector(Nx = mesh % faces(fID) % Nf(1), &
-                                        Ny = mesh % faces(fID) % Nf(2), &
-                                        QLeft  = mesh % faces(fID) % storage(1) % Q, &
-                                        QRight = mesh % faces(fID) % storage(2) % Q, &
-                                        nHat   = mesh % faces(fID) % geom % normal, &
-                                        t1     = mesh % faces(fID) % geom % t1, &
-                                        t2     = mesh % faces(fID) % geom % t2, &
-                                        flux   = mesh % faces(fID) % storage(1) % FStar )
-!           ------------------------
-!           Multiply by the Jacobian
-!           ------------------------
-            !$acc loop vector collapse(2)
-            do j = 0, mesh % faces(fID) % Nf(2) ; do i = 0, mesh % faces(fID) % Nf(1)
-               !$acc loop seq
-               do eq = 1, NCONS
-                  mesh % faces(fID) % storage(1) % FStar(eq,i,j) = (mesh % faces(fID) % storage(1) % FStar(eq,i,j)  - &
-                                                                    mesh % faces(fID) % storage(2) % FStar(eq,i,j)) * &
-                                                                    mesh % faces(fID) % geom % jacobian(i,j)
-               enddo
-            end do ;  end do
+               call RiemannSolverRotref_Selector(Nx = mesh % faces(fID) % Nf(1), &
+                                                 Ny = mesh % faces(fID) % Nf(2), &
+                                                 QLeft  = mesh % faces(fID) % storage(1) % Q, &
+                                                 QRight = mesh % faces(fID) % storage(2) % Q, &
+                                                 nHat   = mesh % faces(fID) % geom % normal, &
+                                                 t1     = mesh % faces(fID) % geom % t1, &
+                                                 t2     = mesh % faces(fID) % geom % t2, &
+                                                 x      = mesh % faces(fID) % geom % x, &
+                                                 omega  = rotationParams % omega, &
+                                                 x0     = rotationParams % center, &
+                                                 flux   = mesh % faces(fID) % storage(1) % FStar )
+!              ------------------------
+!              Multiply by the Jacobian
+!              ------------------------
+               !$acc loop vector collapse(2)
+               do j = 0, mesh % faces(fID) % Nf(2) ; do i = 0, mesh % faces(fID) % Nf(1)
+                  !$acc loop seq
+                  do eq = 1, NCONS
+                     mesh % faces(fID) % storage(1) % FStar(eq,i,j) = (mesh % faces(fID) % storage(1) % FStar(eq,i,j)  - &
+                                                                       mesh % faces(fID) % storage(2) % FStar(eq,i,j)) * &
+                                                                       mesh % faces(fID) % geom % jacobian(i,j)
+                  enddo
+               end do ;  end do
 !
-!           ---------------------------
-!           Return the flux to elements
-!           ---------------------------
+!              ---------------------------
+!              Return the flux to elements
+!              ---------------------------
 !
-            call Face_ProjectFluxToElements(mesh % faces(fID), NCONS, mesh % faces(fID) % storage(1) % FStar, 1)
-         enddo
-         !$acc end parallel loop 
+               call Face_ProjectFluxToElements(mesh % faces(fID), NCONS, mesh % faces(fID) % storage(1) % FStar, 1)
+            enddo
+            !$acc end parallel loop
+         else
+            !$acc parallel loop gang present(mesh) async(1)
+            do zonefID = 1, mesh % zones(zoneID) % no_of_faces
+               fID =  mesh % zones(zoneID) % faces(zonefID)
+
+               call RiemannSolver_Selector(Nx = mesh % faces(fID) % Nf(1), &
+                                           Ny = mesh % faces(fID) % Nf(2), &
+                                           QLeft  = mesh % faces(fID) % storage(1) % Q, &
+                                           QRight = mesh % faces(fID) % storage(2) % Q, &
+                                           nHat   = mesh % faces(fID) % geom % normal, &
+                                           t1     = mesh % faces(fID) % geom % t1, &
+                                           t2     = mesh % faces(fID) % geom % t2, &
+                                           flux   = mesh % faces(fID) % storage(1) % FStar )
+!              ------------------------
+!              Multiply by the Jacobian
+!              ------------------------
+               !$acc loop vector collapse(2)
+               do j = 0, mesh % faces(fID) % Nf(2) ; do i = 0, mesh % faces(fID) % Nf(1)
+                  !$acc loop seq
+                  do eq = 1, NCONS
+                     mesh % faces(fID) % storage(1) % FStar(eq,i,j) = (mesh % faces(fID) % storage(1) % FStar(eq,i,j)  - &
+                                                                       mesh % faces(fID) % storage(2) % FStar(eq,i,j)) * &
+                                                                       mesh % faces(fID) % geom % jacobian(i,j)
+                  enddo
+               end do ;  end do
+!
+!              ---------------------------
+!              Return the flux to elements
+!              ---------------------------
+!
+               call Face_ProjectFluxToElements(mesh % faces(fID), NCONS, mesh % faces(fID) % storage(1) % FStar, 1)
+            enddo
+            !$acc end parallel loop
+         end if
       enddo
       
       !$acc wait

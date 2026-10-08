@@ -8,37 +8,37 @@ ARFLAGS?=cr
 RANLIB?=ranlib
 MOD_FLAG?=-J
 
-LIBOBJS_NS = 	./build_ns/FluidData.o \
+LIBOBJS_NS = ./build_ns/FluidData.o \
 		./build_ns/PhysicsStorage.o \
 		./build_ns/VariableConversion.o \
 		./build_ns/Physics.o \
 		./build_ns/LESModels.o
 
-LIBOBJS_NSSA = 	./build_nssa/FluidData.o \
+LIBOBJS_NSSA = ./build_nssa/FluidData.o \
 		./build_nssa/PhysicsStorage.o \
 		./build_nssa/VariableConversion.o \
 		./build_nssa/Physics.o \
 
-LIBOBJS_iNS = 	./build_ins/FluidData.o \
+LIBOBJS_iNS = ./build_ins/FluidData.o \
 		./build_ins/PhysicsStorage.o \
 		./build_ins/VariableConversion.o \
 		./build_ins/Physics.o \
 		./build_ins/LESModels.o
 
-LIBOBJS_CH = 	./build_ch/FluidData.o \
+LIBOBJS_CH = ./build_ch/FluidData.o \
 		./build_ch/PhysicsStorage.o \
 		./build_ch/VariableConversion.o \
-		./build_ch/Physics.o 
+		./build_ch/Physics.o
 
-LIBOBJS_MU = 	./build_mu/FluidData.o \
+LIBOBJS_MU = ./build_mu/FluidData.o \
 		./build_mu/PhysicsStorage.o \
 		./build_mu/VariableConversion.o \
 		./build_mu/Physics.o
 
-LIBOBJS_CAA = 	./build_caa/FluidData.o \
+LIBOBJS_CAA = ./build_caa/FluidData.o \
 		./build_caa/PhysicsStorage.o \
 		./build_caa/VariableConversion.o \
-		./build_caa/Physics.o 
+		./build_caa/Physics.o
 
 LIB = physics
 

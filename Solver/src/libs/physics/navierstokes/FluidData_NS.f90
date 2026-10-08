@@ -46,6 +46,7 @@ module FluidData_NS
       real(kind=RP)        :: kappa
       real(kind=RP)        :: AoATheta
       real(kind=RP)        :: AoAPhi
+      real(kind=RP)        :: omega(NDIM)  ! Non-dimensional SRF rotation vector (always 0 unless srf enabled), for use in ProblemFile
    end type RefValues_t
 
    type Dimensionless_t
@@ -131,9 +132,11 @@ module FluidData_NS
          refValues % kappa    = refValues_ % kappa
          refValues % AoATheta = refValues_ % AoATheta
          refValues % AoAPhi   = refValues_ % AoAPhi
+         refValues % omega    = refValues_ % omega
 
          !$acc update device(refValues, refValues % T, refValues % p,  refValues % rho,  refValues % V)
          !$acc update device(refValues % mu,  refValues % kappa,  refValues % AoATheta,  refValues % AoAPhi)
+         !$acc update device(refValues % omega)
 
       end subroutine SetRefValues
 

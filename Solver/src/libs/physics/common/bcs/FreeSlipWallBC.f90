@@ -12,6 +12,7 @@ module FreeSlipWallBCClass
    use Utilities, only: toLower, almostEqual
    use HexMeshClass
    use ZoneClass
+   use RotationData, only: rotationParams
    implicit none
 !
 !  *****************************
@@ -50,6 +51,9 @@ module FreeSlipWallBCClass
 #endif
 #ifdef CAHNHILLIARD
       real(kind=RP)     :: thetaw
+#endif
+#ifdef FLOW
+      real(kind=RP)     :: wallOmega     ! Scalar rotation rate (rad/s) about rotationParams % axis/center (SRF only)
 #endif
       contains
          procedure         :: Destruct          => FreeSlipWallBC_Destruct
@@ -201,6 +205,14 @@ module FreeSlipWallBCClass
 #ifdef CAHNHILLIARD
          call GetValueWithDefault(bcdict, "contact angle", 90.0_RP, ConstructFreeSlipWallBC % thetaw)
 #endif
+#ifdef FLOW
+         if ( bcdict % ContainsKey("wall rotation rate") ) then
+            ConstructFreeSlipWallBC % wallOmega = bcdict % doublePrecisionValueForKey("wall rotation rate") &
+                                                   * Lref / refValues % V
+         else
+            ConstructFreeSlipWallBC % wallOmega = 0.0_RP
+         end if
+#endif
 
          close(fid)
          call bcdict % Destruct
@@ -310,33 +322,87 @@ module FreeSlipWallBCClass
 !        ---------------
 !
          real(kind=RP) :: qNorm, pressure_aux
+         real(kind=RP) :: qNormRel
+         real(kind=RP) :: u_wall(NDIM)
+         real(kind=RP) :: x_rel(NDIM)
+         real(kind=RP) :: effectiveOmega(NDIM)
          real(kind=RP) :: Q(NCONS)
+         real(kind=RP) :: e_int, invRho
          integer       :: i,j,zonefID,fID
-         
-         !$acc parallel loop gang present(mesh, self, zone) async(1)
-         do zonefID = 1, zone % no_of_faces
-            fID = zone % faces(zonefID)
-            !$acc loop vector collapse(2) private(Q)            
-            do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
-               
-               Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
 
-               qNorm = mesh % faces(fID) % geom % normal(IX,i,j) * Q(IRHOU) + &
-                       mesh % faces(fID) % geom % normal(IY,i,j) * Q(IRHOV) + &
-                       mesh % faces(fID) % geom % normal(IZ,i,j) * Q(IRHOW) 
-         
-               Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * qNorm * mesh % faces(fID) % geom % normal(:,i,j)
-               
-               mesh % faces(fID) % storage(2) % Q(IRHO:IRHOW,i,j) = Q(IRHO:IRHOW)
-         
-               !Isothermal BC
-               pressure_aux = Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2)
-               mesh % faces(fID) % storage(2) % Q(IRHOE,i,j) = Q(IRHOE) + self % wallType*(pressure_aux/thermodynamics % gammaMinus1 + & 
-                                                           0.5_RP*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))/Q(IRHO) - Q(IRHOE))
-               
-            enddo ; enddo
-         enddo
-         !$acc end parallel loop
+         if ( rotationParams % srfEnabled ) then
+            !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
+            do zonefID = 1, zone % no_of_faces
+               fID = zone % faces(zonefID)
+               !$acc loop vector collapse(2) private(Q, qNorm, qNormRel, u_wall, x_rel, effectiveOmega, pressure_aux, e_int, invRho)
+               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+
+                  effectiveOmega = self % wallOmega * rotationParams % axis
+
+                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+
+                  qNorm = mesh % faces(fID) % geom % normal(IX,i,j) * Q(IRHOU) + &
+                          mesh % faces(fID) % geom % normal(IY,i,j) * Q(IRHOV) + &
+                          mesh % faces(fID) % geom % normal(IZ,i,j) * Q(IRHOW)
+
+                  x_rel = mesh % faces(fID) % geom % x(:,i,j) - rotationParams % center
+                  u_wall(1) = effectiveOmega(2)*x_rel(3) - effectiveOmega(3)*x_rel(2)
+                  u_wall(2) = effectiveOmega(3)*x_rel(1) - effectiveOmega(1)*x_rel(3)
+                  u_wall(3) = effectiveOmega(1)*x_rel(2) - effectiveOmega(2)*x_rel(1)
+                  qNormRel = qNorm - Q(IRHO)*sum(u_wall*mesh % faces(fID) % geom % normal(:,i,j))
+
+                  ! internal energy BEFORE overwriting the momentum
+                  invRho = 1.0_RP / Q(IRHO)
+                  e_int  = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
+                  Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * qNormRel * mesh % faces(fID) % geom % normal(:,i,j)
+
+                  mesh % faces(fID) % storage(2) % Q(IRHO:IRHOW,i,j) = Q(IRHO:IRHOW)
+
+                  ! rebuild total energy from the PRESERVED internal energy + the new kinetic energy
+                  Q(IRHOE) = Q(IRHO)*e_int + 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))
+
+                  !Isothermal BC
+                  pressure_aux = Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2)
+                  mesh % faces(fID) % storage(2) % Q(IRHOE,i,j) = Q(IRHOE) + self % wallType*(pressure_aux/thermodynamics % gammaMinus1 + &
+                                                              0.5_RP*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))/Q(IRHO) - Q(IRHOE))
+
+               enddo ; enddo
+            enddo
+            !$acc end parallel loop
+         else
+            !$acc parallel loop gang present(mesh, self, zone) private(fID) async(1)
+            do zonefID = 1, zone % no_of_faces
+               fID = zone % faces(zonefID)
+               !$acc loop vector collapse(2) private(Q, qNorm, pressure_aux, e_int, invRho)
+               do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
+
+                  Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
+
+                  qNorm = mesh % faces(fID) % geom % normal(IX,i,j) * Q(IRHOU) + &
+                          mesh % faces(fID) % geom % normal(IY,i,j) * Q(IRHOV) + &
+                          mesh % faces(fID) % geom % normal(IZ,i,j) * Q(IRHOW)
+
+                  ! internal energy BEFORE overwriting the momentum
+                  invRho = 1.0_RP / Q(IRHO)
+                  e_int  = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
+                  Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * qNorm * mesh % faces(fID) % geom % normal(:,i,j)
+
+                  mesh % faces(fID) % storage(2) % Q(IRHO:IRHOW,i,j) = Q(IRHO:IRHOW)
+
+                  ! rebuild total energy from the PRESERVED internal energy + the new kinetic energy
+                  Q(IRHOE) = Q(IRHO)*e_int + 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))
+
+                  !Isothermal BC
+                  pressure_aux = Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2)
+                  mesh % faces(fID) % storage(2) % Q(IRHOE,i,j) = Q(IRHOE) + self % wallType*(pressure_aux/thermodynamics % gammaMinus1 + &
+                                                              0.5_RP*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))/Q(IRHO) - Q(IRHOE))
+
+               enddo ; enddo
+            enddo
+            !$acc end parallel loop
+         end if
 
       end subroutine FreeSlipWallBC_FlowState
 
@@ -357,7 +423,6 @@ module FreeSlipWallBCClass
 !        Local variables
 !        ---------------
 !
-         real(kind=RP)  :: rhou_n
          real(kind=RP)  :: Q_aux(NCONS),Q(NCONS)
          real(kind=RP)  :: u_int(NGRAD), u_star(NGRAD)
          integer        :: i,j,zonefID,fID

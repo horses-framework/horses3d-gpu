@@ -519,6 +519,11 @@ MODULE HexMeshClass
       INTEGER                    :: i,j,k,l
       integer                    :: zIDplus, zIDMinus, iFace, jFace
       character(len=LINE_LENGTH) :: associatedBname
+      real(kind=RP)              :: pAngle           ! Sector angle computed from matched node pair
+      logical                    :: periodicAngleSet ! Ensures the angle is computed only once
+      integer                    :: ierr
+!
+      periodicAngleSet = .false.
 !
 !     --------------------------------------------
 !     Loop to find faces with the label "periodic"
@@ -543,6 +548,7 @@ MODULE HexMeshClass
 !        Reset the coordinate (changes when changing zones)
 !        --------------------------------------------------
          coord = 0
+         if (rotationParams % periodicEnabled) coord = RotationAxisIndex()
 !
 !        Get the marker of the associated zone
 !        -------------------------------------
@@ -645,10 +651,18 @@ slavecoord:             DO l = 1, 4
                      DO l = 1, 4
                         IF (.NOT.slave_matched(l)) THEN
                            x2 = self%nodes(self%faces(j)%nodeIDs(l))%x
-                           IF (useRelaxTol) THEN
-                               CALL CompareTwoNodesRelax(x1, x2, master_matched(k), coord, min_edge_length)
+                           IF (rotationParams % periodicEnabled) THEN
+                               IF (useRelaxTol) THEN
+                                  CALL CompareTwoNodesRevolRelax(x1, x2, master_matched(k), coord, rotationParams % center, min_edge_length)
+                               ELSE
+                                  CALL CompareTwoNodesRevol(x1, x2, master_matched(k), coord, rotationParams % center)
+                               END IF
                            ELSE
-                               CALL CompareTwoNodes(x1, x2, master_matched(k), coord)
+                               IF (useRelaxTol) THEN
+                                  CALL CompareTwoNodesRelax(x1, x2, master_matched(k), coord, min_edge_length)
+                               ELSE
+                                  CALL CompareTwoNodes(x1, x2, master_matched(k), coord)
+                               END IF
                            END IF
                            IF (master_matched(k)) THEN
                               slave_matched(l) = .TRUE.
@@ -667,6 +681,41 @@ slavecoord:             DO l = 1, 4
                   self % faces(i) % elementIDs(2)  = self % faces(j) % elementIDs(1)
                   self % faces(i) % elementSide(2) = self % faces(j) % elementSide(1)
                   self % faces(i) % FaceType       = HMESH_INTERIOR
+                  if (rotationParams % periodicEnabled) then
+                     self % faces(i) % isRotaryPeriodic = .true.
+                     if (.not. periodicAngleSet) then
+!                       Compute the sector angle from the first matched node pair.
+                        x1 = self % nodes(self % faces(i) % nodeIDs(1)) % x
+                        do l = 1, 4
+                           x2 = self % nodes(self % faces(j) % nodeIDs(l)) % x
+                           if (useRelaxTol) then
+                              call CompareTwoNodesRevolRelax(x1, x2, success, coord, rotationParams % center, min_edge_length)
+                           else
+                              call CompareTwoNodesRevol(x1, x2, success, coord, rotationParams % center)
+                           end if
+                           if (success) exit
+                        end do
+!                       x1 = NOT deleted
+!                       x2 = WILL be deleted
+                        if (coord == 1) then ! Rotation around x-axis, use y-z plane
+                           pAngle = atan2(x2(3) - rotationParams % center(3), x2(2) - rotationParams % center(2)) &
+                                  - atan2(x1(3) - rotationParams % center(3), x1(2) - rotationParams % center(2))
+                        else if (coord == 2) then ! Rotation around y-axis, use z-x plane
+                           pAngle = atan2(x2(1) - rotationParams % center(1), x2(3) - rotationParams % center(3)) &
+                                  - atan2(x1(1) - rotationParams % center(1), x1(3) - rotationParams % center(3))
+                        else if (coord == 3) then  ! Rotation around z-axis, use x-y plane
+                           pAngle = atan2(x2(2) - rotationParams % center(2), x2(1) - rotationParams % center(1)) &
+                                  - atan2(x1(2) - rotationParams % center(2), x1(1) - rotationParams % center(1))
+                        else
+                           print *, "Error: invalid rotation axis index when computing periodic sector angle."
+                           error stop
+                        end if
+!                       Wrap into (-PI, PI]
+                        pAngle = pAngle - 2.0_RP * PI * anint(pAngle / (2.0_RP * PI))
+                        call SetPeriodicAngle(pAngle)
+                        periodicAngleSet = .true.
+                     end if
+                  end if
                   self % elements(self % faces(i) % elementIDs(1)) % boundaryName(self % faces(i) % elementSide(1)) = emptyBCName
                   self % elements(self % faces(i) % elementIDs(2)) % boundaryName(self % faces(i) % elementSide(2)) = emptyBCName
 !
@@ -676,10 +725,18 @@ slavecoord:             DO l = 1, 4
                      x1 = self % nodes ( self % faces(i) % nodeIDs(k)) % x
                      do l = 1, 4
                         x2 = self % nodes ( self % faces(j) % nodeIDs(l) ) % x
-                        IF (useRelaxTol) THEN
-                            CALL CompareTwoNodesRelax(x1, x2, success, coord, min_edge_length)
+                        IF (rotationParams % periodicEnabled) THEN
+                            IF (useRelaxTol) THEN
+                               CALL CompareTwoNodesRevolRelax(x1, x2, success, coord, rotationParams % center, min_edge_length)
+                            ELSE
+                               CALL CompareTwoNodesRevol(x1, x2, success, coord, rotationParams % center)
+                            END IF
                         ELSE
-                            CALL CompareTwoNodes(x1, x2, success, coord)
+                            IF (useRelaxTol) THEN
+                               CALL CompareTwoNodesRelax(x1, x2, success, coord, min_edge_length)
+                            ELSE
+                               CALL CompareTwoNodes(x1, x2, success, coord)
+                            END IF
                         END IF
                         if ( success ) then
                            slaveNodeIDs(l) = self % faces(i) % nodeIDs(k)
@@ -704,7 +761,20 @@ slavecoord:             DO l = 1, 4
             end do   ploop    ! periodic+ faces
          end do               ! periodic+ zones
 
+!        The sector angle is computed from a matched node pair only on the ROOT
+!        rank during the first call to ConstructPeriodicFaces (see the
+!        atan2 block above). 
+!        -------------------------------------------------------------------
+
          if ( MPI_Process % isRoot .and. useRelaxTol) print *, "Success: when matching all periodic boundary conditions with relaxed comparison"
+         if ( MPI_Process % isRoot .and. rotationParams % periodicEnabled) then
+            write(STD_OUT,'(A,3(ES10.3,A),I0)') "Success: revolution periodic matching with center [", &
+                                                 rotationParams % center(1), ", ", &
+                                                 rotationParams % center(2), ", ", &
+                                                 rotationParams % center(3), "] and axis ", coord
+            write(STD_OUT,'(A,F8.3,A)') "         Periodic sector angle: ", &
+                                         rotationParams % periodicAngle * 180.0_RP / PI, " degrees"
+         end if
 
       END SUBROUTINE ConstructPeriodicFaces
 !
@@ -839,6 +909,89 @@ slavecoord:             DO l = 1, 4
       ENDIF
 
       END SUBROUTINE CompareTwoNodesRelax
+!
+!////////////////////////////////////////////////////////////////////////
+!
+      SUBROUTINE CompareTwoNodesRevol(x1, x2, success, coord, x0)
+      IMPLICIT NONE
+!
+!-------------------------------------------------------------------
+! Similar to CompareTwoNodes, but compares with respect to revolution
+! radius around axis `coord` and center `x0`.
+!-------------------------------------------------------------------
+!
+      REAL(KIND=RP) :: x1(3)
+      REAL(KIND=RP) :: x2(3)
+      LOGICAL       :: success
+      INTEGER       :: coord
+      REAL(KIND=RP) :: x0(3)
+!
+      INTEGER       :: i
+      REAL(KIND=RP) :: r1
+      REAL(KIND=RP) :: r2
+
+      IF (coord == 0) THEN
+         success = .FALSE.
+      ELSE
+         r1 = 0.0_RP
+         r2 = 0.0_RP
+         DO i = 1,3
+            IF (i /= coord) THEN
+               r1 = r1 + POW2(x1(i) - x0(i))
+               r2 = r2 + POW2(x2(i) - x0(i))
+            ENDIF
+         ENDDO
+
+         IF ( AlmostEqual(r1, r2) .and. AlmostEqual(x1(coord), x2(coord)) ) THEN
+            success = .TRUE.
+         ELSE
+            success = .FALSE.
+         ENDIF
+      ENDIF
+
+      END SUBROUTINE CompareTwoNodesRevol
+!
+!////////////////////////////////////////////////////////////////////////
+!
+      SUBROUTINE CompareTwoNodesRevolRelax(x1, x2, success, coord, x0, min_edge_length)
+      IMPLICIT NONE
+!
+!-------------------------------------------------------------------
+! Similar to CompareTwoNodesRevol, but with relaxed tolerance.
+!-------------------------------------------------------------------
+!
+      REAL(KIND=RP) :: x1(3)
+      REAL(KIND=RP) :: x2(3)
+      LOGICAL       :: success
+      INTEGER       :: coord
+      REAL(KIND=RP) :: x0(3)
+      REAL(KIND=RP) :: min_edge_length
+!
+      INTEGER       :: i
+      REAL(KIND=RP) :: r1
+      REAL(KIND=RP) :: r2
+
+      IF (coord == 0) THEN
+         success = .FALSE.
+      ELSE
+         r1 = 0.0_RP
+         r2 = 0.0_RP
+         DO i = 1,3
+            IF (i /= coord) THEN
+               r1 = r1 + POW2(x1(i) - x0(i))
+               r2 = r2 + POW2(x2(i) - x0(i))
+            ENDIF
+         ENDDO
+
+         IF ( AlmostEqualRelax(r1, r2, min_edge_length) .and. &
+              AlmostEqualRelax(x1(coord), x2(coord), min_edge_length) ) THEN
+            success = .TRUE.
+         ELSE
+            success = .FALSE.
+         ENDIF
+      ENDIF
+
+      END SUBROUTINE CompareTwoNodesRevolRelax
 !
 !////////////////////////////////////////////////////////////////////////
 !
@@ -2463,6 +2616,11 @@ slavecoord:             DO l = 1, 4
             f % elementIDs(otherSide(eSide)) = HMESH_NONE   ! This makes sense since elementIDs are in local numbering...
             f % elementSide(eSide) = side
             f % elementSide(otherSide(eSide)) = partition % element_mpifaceSideOther(bFace)
+!
+!           Restore the rotary periodic flag that was packed in
+!           GetPartitionBoundaryFaces and communicated via MPI.
+!           -----------------------------------------------------------------
+            f % isRotaryPeriodic = partition % mpiface_isRotaryPeriodic(bFace)
 
             if (eSide == RIGHT) f % nodeIDs = f % nodeIDs (invRot (:,f % rotation) )
             end associate

@@ -1,0 +1,82 @@
+Flow equations        = "NS"
+mesh file name        = "MESH/hollow_blade.msh"
+Polynomial order = 3
+!Polynomial order i = 3
+!Polynomial order j = 3
+!Polynomial order k = 1
+Number of time steps  = 100 !400000
+Output Interval       = 10
+Number of plot points = 5
+Convergence tolerance = 1.d-10
+cfl                   = 0.15
+dcfl                  = 0.15
+mach number           = 0.3
+Reynolds number       = 10.0
+
+peclet number = 0.005
+AOA theta             = 0.0
+AOA phi               = 90.0
+solution file name    = "RESULTS/SRF.hsol"
+save gradients with solution = .true.
+restart               = .false.
+restart file name     = "RESULTS/SRF_0000100000.hsol"
+riemann solver        = roe
+Inviscid Discretization = Split-form
+averaging = Kennedy-Gruber
+Discretization nodes = Gauss-Lobatto
+
+simulation type       = time-accurate
+autosave mode         = "iteration"
+autosave interval     = 250 !5000
+srf enabled = .true.
+rotation rate = 1.0
+rotation axis = [0.0,0.0,1.0]
+
+#define boundary outer_wall
+  type = NoSlipWall
+  wall rotation rate = 1.0
+#end
+
+#define boundary inner_wall
+  type = NoSlipWall
+  wall rotation rate = 1.0
+#end
+
+#define boundary top
+  type = Periodic
+  coupled boundary = bottom
+#end
+
+#define boundary bottom
+  type = Periodic
+  coupled boundary = top
+#end
+
+
+#define surface monitor 1
+   Name = cyl-drag
+   Marker = inner_wall
+   Variable = drag
+   Direction = [0.0,0.0,1.0]
+   Reference surface = 1.0	
+#end
+
+#define surface monitor 2
+   Name = cyl-lift
+   Marker = inner_wall
+   Variable = lift
+   Direction = [1.0,0.0,0.0]
+   Reference surface = 1.0
+#end
+
+#define probe 1
+   Name = probe_u
+   Position = [0.0,3.9,0.1]
+   Variable = u
+#end
+
+#define probe 2
+   Name = probe_p
+   Position = [0.0,3.9,0.1]
+   Variable = pressure
+#end
