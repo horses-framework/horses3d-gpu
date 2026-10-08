@@ -56,14 +56,12 @@ def parse_probe_file(path):
 def main():
     results_dir = sys.argv[1] if len(sys.argv) > 1 else "RESULTS"
     probes_dir = os.path.join(results_dir, "probes")
-    # solution file name is CylinderProbeFileASCII.hsol, so probe files
-    # carry that stem: CylinderProbeFileASCII.hsol.<name>.probe
-    stem = "CylinderProbeFileASCII.hsol"
+    case = "CylinderProbeFileASCII"
 
     # File paths
-    inline_path = os.path.join(probes_dir, f"{stem}.wake_u.probe")
+    inline_path = os.path.join(probes_dir, f"{case}.wake_u.probe")
     # 1 classic probe + 4 file probes → file probes are probe_2 … probe_5
-    fp_paths = [os.path.join(probes_dir, f"{stem}.probe_{i}.probe") for i in range(2, 6)]
+    fp_paths = [os.path.join(probes_dir, f"{case}.probe_{i}.probe") for i in range(2, 6)]
 
     errors = []
 
