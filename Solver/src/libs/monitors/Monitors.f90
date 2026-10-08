@@ -1518,7 +1518,7 @@ end subroutine getNoOfMonitors
       if ( MPI_Process % doMPIAction .and. allocated(self % fp_gatherv_counts) ) then
 !        MPI_Gatherv: each rank sends its compact fp_owned_buf to root.
 !        Root unpacks using fp_gatherv_perm into fp_buf.
-         if ( MPI_Process % isRoot ) allocate( gather_tmp(nfp * nv) )
+         allocate( gather_tmp(merge(nfp * nv, 1, MPI_Process % isRoot)) )
          call MPI_Gatherv(self % fp_owned_buf, self % fp_nOwned * nv, MPI_DOUBLE_PRECISION, &
                           gather_tmp, self % fp_gatherv_counts, self % fp_gatherv_displs, &
                           MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
@@ -1527,8 +1527,8 @@ end subroutine getNoOfMonitors
                jbuf_g = (self % fp_gatherv_perm(k) - 1) * nv
                self % fp_buf(jbuf_g+1:jbuf_g+nv) = gather_tmp((k-1)*nv+1:k*nv)
             end do
-            deallocate(gather_tmp)
          end if
+         deallocate(gather_tmp)
       else
 !        Single-rank fallback: copy compact buffer directly into fp_buf.
          do k = 1, self % fp_nOwned
