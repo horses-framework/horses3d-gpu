@@ -875,11 +875,8 @@ module MonitorsClass
          call self % probes % destruct
          safedeallocate (self % probes)
 
-         if ( allocated(self % fp_fileUnit) ) then
-            do i = 1, size(self % fp_fileUnit)
-               if ( self % fp_fileUnit(i) .ge. 0 ) close( self % fp_fileUnit(i) )
-            end do
-         end if
+         ! fp_fileUnit is now used only as a header-written flag (0 = written, -1 = not yet);
+         ! files are opened/closed per-call in Monitor_WriteFileProbesASCII, so nothing to close here.
          safedeallocate( self % fp_x )
          safedeallocate( self % fp_fileUnit )
          safedeallocate( self % fp_active )
@@ -1400,13 +1397,13 @@ end subroutine getNoOfMonitors
 
    subroutine Monitor_WriteFileProbesASCII(self, iter, t, no_of_lines)
 !
-!     Appends one buffer of file-probe data to each probe's own ASCII
-!     file. Root-only, like the old Probe_t % WriteToFile: fp_buf/
-!     fp_values_gpu already hold the globally-reduced values on every
-!     rank (via Monitor_UpdateFileProbes's Allreduce), so root alone can
-!     write every probe regardless of which rank actually owns it. The
-!     file is opened once (header written) and kept open across calls
-!     via fp_fileUnit - no Probe_t needed to track this per probe.
+!     Appends one buffer of file-probe data to each probe's own ASCII file.
+!     Root-only. On the first call the file is created and the header is
+!     written; on every subsequent call the file is re-opened with
+!     position="append" so that data accumulates correctly across the whole
+!     simulation.  fp_fileUnit(i) is used purely as a "header written" flag
+!     (-1 = not yet, 0 = done); no persistent Fortran unit is kept open so
+!     there is no risk of unit aliasing or silent close under MPI.
 !     Probes that were never found anywhere (fp_active=.false.) get no
 !     file at all, matching the old behavior.
 !     -------------------------------------------------------------------
@@ -1434,11 +1431,12 @@ end subroutine getNoOfMonitors
       do i = 1, nfp
          if ( .not. self % fp_active(i) ) cycle
 
-         if ( self % fp_fileUnit(i) .lt. 0 ) then
-            write(pname,'(A,I0)') "probe_", offset + i
-            write(fname,'(A,A,A,A)') trim(self % probes_solution_file), "." , trim(pname) , ".probe"
-            open( newunit = fID , file = trim(fname) , status = "unknown" , action = "write" )
+         write(pname,'(A,I0)') "probe_", offset + i
+         write(fname,'(A,A,A,A)') trim(self % probes_solution_file), "." , trim(pname) , ".probe"
 
+         if ( self % fp_fileUnit(i) .lt. 0 ) then
+            ! First call: create file and write header
+            open( newunit = fID , file = trim(fname) , status = "replace" , action = "write" )
             write( fID , '(A20,A  )') "Monitor name:      ", trim(pname)
             write( fID , '(A25,ES24.10,2(4X,ES24.10))') "x, y, z coordinates: ", self % fp_x(1,i), self % fp_x(2,i), self % fp_x(3,i)
             write( fID , * )
@@ -1447,11 +1445,12 @@ end subroutine getNoOfMonitors
                write( fID , '(2X,A24)' , advance = "no") trim(self % probesVariables(v))
             end do
             write( fID , * )
-
-            self % fp_fileUnit(i) = fID
+            close( fID )
+            self % fp_fileUnit(i) = 0  ! mark header as written
          end if
 
-         fID = self % fp_fileUnit(i)
+         ! Append data rows
+         open( newunit = fID , file = trim(fname) , status = "old" , action = "write" , position = "append" )
          do l = 1, no_of_lines
             write( fID , '(I10,2X,ES24.16)' , advance = "no" ) iter(l) , t(l)
             do v = 1 , nv
@@ -1463,6 +1462,7 @@ end subroutine getNoOfMonitors
             end do
             write( fID , * )
          end do
+         close( fID )
       end do
 
    end subroutine Monitor_WriteFileProbesASCII
@@ -1577,12 +1577,7 @@ end subroutine getNoOfMonitors
       call system_clock(t3)
 #endif
 
-      if ( MPI_Process % isRoot ) then
-         write(STD_OUT,'(/,30X,A)') "--- File-probe timing (rank 0) ---"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  ComputeFileProbes  : ", real(t2-t1,8)/real(rate,8), " s"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  MPI/gather+unpack  : ", real(t3-t2,8)/real(rate,8), " s"
-         write(STD_OUT,'(30X,A,ES12.4,A)') "  Total              : ", real(t3-t0,8)/real(rate,8), " s"
-      end if
+!
 
    end subroutine Monitor_UpdateFileProbes
 
