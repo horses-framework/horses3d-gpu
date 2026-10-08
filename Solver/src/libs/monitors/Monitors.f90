@@ -1934,7 +1934,7 @@ end subroutine getNoOfMonitors
       prev_eID_local = -1
       do i = 1, nFound
          foundLocal(i) = mesh % FindPointWithCoords(allX(:,i), eID_local(i), &
-                                                      xi_local(:,i), eID_hint=prev_eID_local)
+                                                      xi_local(:,i))
          if ( foundLocal(i) ) prev_eID_local = eID_local(i)
          if ( MPI_Process % isRoot .and. mod(i, max(1,nFound/10)) .eq. 0 ) then
             write(STD_OUT,'(30X,A,I3,A)') "   ... ", (i*100)/nFound, "% done"

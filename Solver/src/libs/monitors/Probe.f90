@@ -274,7 +274,7 @@ module ProbeClass
                self % active = active_in
                self % rank   = rank_in
             else
-               self % active = mesh % FindPointWithCoords(self % x, self % eID, self % xi, eID_hint=eID_hint)
+               self % active = mesh % FindPointWithCoords(self % x, self % eID, self % xi)
 !
 !              Check whether the probe is located in other partition
 !              -----------------------------------------------------
