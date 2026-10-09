@@ -109,13 +109,20 @@ def main():
             )
 
     # --- 5. Physical sanity on other variables (rho > 0, pressure > 0) ---
-    # File-probe variable order: u v w rho pressure mach k velocity
-    # columns in data: 0=iter, 1=time, 2=u, 3=v, 4=w, 5=rho, 6=pressure, 7=mach, 8=k, 9=velocity
+    # File-probe variable order:
+    #   u v w rho pressure mach k velocity
+    #   u_x u_y u_z v_x v_y v_z w_x w_y w_z p_x p_y p_z rho_x rho_y rho_z
+    # columns in data: 0=iter, 1=time, 2=u, 3=v, 4=w, 5=rho, 6=pressure,
+    #                  7=mach, 8=k, 9=velocity, 10..24 = gradients
     rho_col = 5
     p_col = 6
+    n_grad_cols = 15   # u_x … rho_z
+    expected_cols = 2 + 8 + n_grad_cols   # iter+time + 8 vars + 15 gradients
     for i, d in enumerate(fp_data):
-        if d.shape[1] <= p_col:
-            errors.append(f"probe_{i+2} has fewer columns than expected")
+        if d.shape[1] < expected_cols:
+            errors.append(
+                f"probe_{i+2} has {d.shape[1]} columns, expected {expected_cols}"
+            )
             continue
         rho = d[:, rho_col]
         pres = d[:, p_col]
@@ -123,6 +130,10 @@ def main():
             errors.append(f"probe_{i+2}: rho <= 0 detected (min={rho.min():.4e})")
         if not np.all(pres > 0.0):
             errors.append(f"probe_{i+2}: pressure <= 0 detected (min={pres.min():.4e})")
+        # Gradient columns must be finite (no NaN/Inf)
+        grad_block = d[:, 10:10 + n_grad_cols]
+        if not np.all(np.isfinite(grad_block)):
+            errors.append(f"probe_{i+2}: gradient columns contain non-finite values")
 
     if errors:
         print("VALIDATION FAILED:", flush=True)
@@ -132,7 +143,7 @@ def main():
 
     print(
         f"OK: {n_steps} steps, 4 file probes match inline probe "
-        f"(max |du| < {tol:.0e}), rho>0, p>0",
+        f"(max |du| < {tol:.0e}), rho>0, p>0, gradients finite",
         flush=True,
     )
 

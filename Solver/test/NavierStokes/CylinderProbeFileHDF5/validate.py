@@ -130,7 +130,10 @@ def main():
 
     # --- 2. Dataset presence ---
     expected_dsets = {"coordinates", "time", "iteration",
-                      "u", "v", "w", "rho", "pressure", "mach", "k", "velocity"}
+                      "u", "v", "w", "rho", "pressure", "mach", "k", "velocity",
+                      "u_x", "u_y", "u_z", "v_x", "v_y", "v_z",
+                      "w_x", "w_y", "w_z", "p_x", "p_y", "p_z",
+                      "rho_x", "rho_y", "rho_z"}
     shapes = _h5ls_shapes(h5_path)
     missing = expected_dsets - set(shapes.keys())
     if missing:
@@ -176,6 +179,15 @@ def main():
         if check_positive and not np.all(arr > 0.0):
             errors.append(f"HDF5 '{var}' <= 0 detected (min={arr.min():.4e})")
 
+    # --- 6. Gradient datasets: finite values ---
+    grad_vars = ["u_x", "u_y", "u_z", "v_x", "v_y", "v_z",
+                 "w_x", "w_y", "w_z", "p_x", "p_y", "p_z",
+                 "rho_x", "rho_y", "rho_z"]
+    for var in grad_vars:
+        arr = _h5dump_array(h5_path, var, start=(0, 0), count=(n_probes, n_steps))
+        if not np.all(np.isfinite(arr)):
+            errors.append(f"HDF5 '{var}' contains non-finite values")
+
     if errors:
         print("VALIDATION FAILED:", flush=True)
         for e in errors:
@@ -185,7 +197,7 @@ def main():
     print(
         f"OK: {n_probes} file probes, {n_steps} steps; "
         f"HDF5 'u' matches inline probe (max |du| < {tol:.0e}); "
-        f"rho>0, p>0",
+        f"rho>0, p>0, gradients finite",
         flush=True,
     )
 

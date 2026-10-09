@@ -65,7 +65,7 @@ riemann solver        = roe
 ! value must match wake_u exactly.
 #define probe file
    file                 = "./probes_wake.dat"
-   variables            = u v w rho pressure mach k velocity
+   variables            = u v w rho pressure mach k velocity u_x u_y u_z v_x v_y v_z w_x w_y w_z p_x p_y p_z rho_x rho_y rho_z
    probe save timestep  = 0
    output format        = HDF5
 #end
