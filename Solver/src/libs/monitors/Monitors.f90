@@ -1522,6 +1522,20 @@ end subroutine getNoOfMonitors
 !
          call system_clock(t0, rate)
          call system_clock(t1)
+!
+!        Gradient variables (FPVAR >= FPVAR_U_X=11) read U_x/U_y/U_z from the
+!        device.  Those arrays are populated on the host by the viscous-flux
+!        step and must be pushed to the GPU before the kernel runs.
+!
+#ifdef NAVIERSTOKES
+         if ( any(self % fp_varCodes >= FPVAR_U_X) ) then
+            do i = 1, mesh % no_of_elements
+               !$acc update device(mesh % elements(i) % storage % U_x) if_present
+               !$acc update device(mesh % elements(i) % storage % U_y) if_present
+               !$acc update device(mesh % elements(i) % storage % U_z) if_present
+            end do
+         end if
+#endif
          Nm = self % fp_Nmax
          call Monitor_FileProbeKernel(self % fp_eID, self % fp_ownsProbe, &
                                       self % fp_lxi, self % fp_leta, self % fp_lzeta, &
