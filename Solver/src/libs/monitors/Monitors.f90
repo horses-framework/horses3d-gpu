@@ -2679,7 +2679,9 @@ end subroutine getNoOfMonitors
 
       deallocate(vbuf)
       deallocate(wmask)
-      ! File stays open; closed by Monitor_Destruct via Monitor_CloseHDF5FP.
+      ! Flush metadata to disk so the file is readable by h5ls/h5dump while
+      ! the simulation is still running (file stays open until Monitor_Destruct).
+      call h5fflush_f(file_id, H5F_SCOPE_GLOBAL_F, iError)
 
    end subroutine Monitor_WriteFileProbesHDF5
 
