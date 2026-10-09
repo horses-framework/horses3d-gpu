@@ -1819,9 +1819,16 @@ end subroutine getNoOfMonitors
       integer,          intent(in)    :: nfp, nv, Nm
       integer        :: probe_idx, var_idx, ii, jj, kk, eID_loc
       real(kind=RP)  :: val, q_val
+#ifdef NAVIERSTOKES
+      real(kind=RP)  :: g_rho, g_rhou, g_rhov, g_rhow, g_invRho, g_u, g_v, g_w, g_half_usq
+#endif
 
       !$acc parallel loop gang &
-      !$acc& present(mesh, l_eID, l_own, l_lxi, l_leta, l_lzeta, l_varCodes, l_vals)
+      !$acc& present(mesh, l_eID, l_own, l_lxi, l_leta, l_lzeta, l_varCodes, l_vals) &
+#ifdef NAVIERSTOKES
+      !$acc& private(g_rho, g_rhou, g_rhov, g_rhow, g_invRho, g_u, g_v, g_w, g_half_usq) &
+#endif
+      !$acc& private(val, q_val, eID_loc)
       do probe_idx = 1, nfp
          if ( .not. l_own(probe_idx) ) then
             do var_idx = 1, nv
@@ -1866,6 +1873,79 @@ end subroutine getNoOfMonitors
                              mesh % elements(eID_loc) % storage % Q(IRHO,ii,jj,kk)
                   case(FPVAR_RHO)
                      q_val = mesh % elements(eID_loc) % storage % Q(IRHO,ii,jj,kk)
+                  ! ── primitive gradient variables (quotient rule) ──────────
+                  case(FPVAR_U_X, FPVAR_U_Y, FPVAR_U_Z, &
+                       FPVAR_V_X, FPVAR_V_Y, FPVAR_V_Z, &
+                       FPVAR_W_X, FPVAR_W_Y, FPVAR_W_Z, &
+                       FPVAR_P_X, FPVAR_P_Y, FPVAR_P_Z, &
+                       FPVAR_RHO_X, FPVAR_RHO_Y, FPVAR_RHO_Z)
+                     g_rho    = mesh % elements(eID_loc) % storage % Q(IRHO, ii,jj,kk)
+                     g_rhou   = mesh % elements(eID_loc) % storage % Q(IRHOU,ii,jj,kk)
+                     g_rhov   = mesh % elements(eID_loc) % storage % Q(IRHOV,ii,jj,kk)
+                     g_rhow   = mesh % elements(eID_loc) % storage % Q(IRHOW,ii,jj,kk)
+                     g_invRho = 1.0_RP / g_rho
+                     g_u      = g_rhou * g_invRho
+                     g_v      = g_rhov * g_invRho
+                     g_w      = g_rhow * g_invRho
+                     g_half_usq = 0.5_RP * (g_u*g_u + g_v*g_v + g_w*g_w)
+                     select case (l_varCodes(var_idx))
+                     case(FPVAR_U_X)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_x(IRHOU,ii,jj,kk) &
+                              - g_u * g_invRho * mesh % elements(eID_loc) % storage % U_x(IRHO,ii,jj,kk)
+                     case(FPVAR_U_Y)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_y(IRHOU,ii,jj,kk) &
+                              - g_u * g_invRho * mesh % elements(eID_loc) % storage % U_y(IRHO,ii,jj,kk)
+                     case(FPVAR_U_Z)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_z(IRHOU,ii,jj,kk) &
+                              - g_u * g_invRho * mesh % elements(eID_loc) % storage % U_z(IRHO,ii,jj,kk)
+                     case(FPVAR_V_X)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_x(IRHOV,ii,jj,kk) &
+                              - g_v * g_invRho * mesh % elements(eID_loc) % storage % U_x(IRHO,ii,jj,kk)
+                     case(FPVAR_V_Y)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_y(IRHOV,ii,jj,kk) &
+                              - g_v * g_invRho * mesh % elements(eID_loc) % storage % U_y(IRHO,ii,jj,kk)
+                     case(FPVAR_V_Z)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_z(IRHOV,ii,jj,kk) &
+                              - g_v * g_invRho * mesh % elements(eID_loc) % storage % U_z(IRHO,ii,jj,kk)
+                     case(FPVAR_W_X)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_x(IRHOW,ii,jj,kk) &
+                              - g_w * g_invRho * mesh % elements(eID_loc) % storage % U_x(IRHO,ii,jj,kk)
+                     case(FPVAR_W_Y)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_y(IRHOW,ii,jj,kk) &
+                              - g_w * g_invRho * mesh % elements(eID_loc) % storage % U_y(IRHO,ii,jj,kk)
+                     case(FPVAR_W_Z)
+                        q_val = g_invRho * mesh % elements(eID_loc) % storage % U_z(IRHOW,ii,jj,kk) &
+                              - g_w * g_invRho * mesh % elements(eID_loc) % storage % U_z(IRHO,ii,jj,kk)
+                     case(FPVAR_P_X)
+                        q_val = thermodynamics%gammaMinus1 * ( &
+                                   mesh % elements(eID_loc) % storage % U_x(IRHOE,ii,jj,kk) &
+                                 - g_u * mesh % elements(eID_loc) % storage % U_x(IRHOU,ii,jj,kk) &
+                                 - g_v * mesh % elements(eID_loc) % storage % U_x(IRHOV,ii,jj,kk) &
+                                 - g_w * mesh % elements(eID_loc) % storage % U_x(IRHOW,ii,jj,kk) &
+                                 + g_half_usq * mesh % elements(eID_loc) % storage % U_x(IRHO,ii,jj,kk) )
+                     case(FPVAR_P_Y)
+                        q_val = thermodynamics%gammaMinus1 * ( &
+                                   mesh % elements(eID_loc) % storage % U_y(IRHOE,ii,jj,kk) &
+                                 - g_u * mesh % elements(eID_loc) % storage % U_y(IRHOU,ii,jj,kk) &
+                                 - g_v * mesh % elements(eID_loc) % storage % U_y(IRHOV,ii,jj,kk) &
+                                 - g_w * mesh % elements(eID_loc) % storage % U_y(IRHOW,ii,jj,kk) &
+                                 + g_half_usq * mesh % elements(eID_loc) % storage % U_y(IRHO,ii,jj,kk) )
+                     case(FPVAR_P_Z)
+                        q_val = thermodynamics%gammaMinus1 * ( &
+                                   mesh % elements(eID_loc) % storage % U_z(IRHOE,ii,jj,kk) &
+                                 - g_u * mesh % elements(eID_loc) % storage % U_z(IRHOU,ii,jj,kk) &
+                                 - g_v * mesh % elements(eID_loc) % storage % U_z(IRHOV,ii,jj,kk) &
+                                 - g_w * mesh % elements(eID_loc) % storage % U_z(IRHOW,ii,jj,kk) &
+                                 + g_half_usq * mesh % elements(eID_loc) % storage % U_z(IRHO,ii,jj,kk) )
+                     case(FPVAR_RHO_X)
+                        q_val = mesh % elements(eID_loc) % storage % U_x(IRHO,ii,jj,kk)
+                     case(FPVAR_RHO_Y)
+                        q_val = mesh % elements(eID_loc) % storage % U_y(IRHO,ii,jj,kk)
+                     case(FPVAR_RHO_Z)
+                        q_val = mesh % elements(eID_loc) % storage % U_z(IRHO,ii,jj,kk)
+                     case default
+                        q_val = 0.0_RP
+                     end select
 #endif
 #ifdef INCNS
                   case(FPVAR_PRESSURE)
