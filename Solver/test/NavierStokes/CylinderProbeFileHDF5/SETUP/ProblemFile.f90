@@ -503,6 +503,7 @@ end module ProblemFileFunctions
             use PhysicsStorage
             use FluidData
             use MonitorsClass
+            use MPI_Process_Info
             IMPLICIT NONE
             CLASS(HexMesh)                        :: mesh
             REAL(KIND=RP)                         :: time
@@ -524,57 +525,151 @@ end module ProblemFileFunctions
 !           Local variables
 !           ---------------
 !
-            CHARACTER(LEN=29)                  :: testName           = "Cylinder WALE"
+            CHARACTER(LEN=40)                  :: testName           = "Re 200 Cylinder - probe file (HDF5)"
             REAL(KIND=RP)                      :: maxError
             REAL(KIND=RP), ALLOCATABLE         :: QExpected(:,:,:,:)
             INTEGER                            :: eID
-            INTEGER                            :: i, j, k, N
+            INTEGER                            :: i, j, k, N, nv
             TYPE(FTAssertionsManager), POINTER :: sharedManager
             LOGICAL                            :: success
-            integer                            :: rank
-
-            real(kind=RP), parameter           :: cd =  3.4701284621010650E+01_RP  
-            real(kind=RP), parameter           :: cl = -3.5491030364454E-04_RP   
-            real(kind=RP), parameter           :: wake_u = 9.375821230506176E-09_RP   
-            real(kind=RP), parameter           :: res(5) = [   7.9687618041712476_RP, &
-                                                               16.312135941662717_RP, &
-                                                               0.2211855539938163_RP, &
-                                                               21.313216389082029_RP, &   
-                                                               218.00956664214917_RP]
+!
+!           -----------------------------------------------------------------------------------------
+!           Expected solutions. 
+!           InnerCylinder 0.0 NoSlipAdiabaticWall
+!           Front 0.0 Inflow
+!           bottom 0.0 FreeSlipWall
+!           top 0.0 FreeSlipWall
+!           Back 0.0 Inflow
+!           Left 0.0 Inflow
+!           Right 0.0 OutflowSpecifyP 
+!           -----------------------------------------------------------------------------------------
+!
+!
+!           ------------------------------------------------
+!           Expected Solutions: Wall conditions on the sides
+!           Number of iterations are for CFL of 0.3, for
+!           the roe solver and mach = 0.3
+!           ------------------------------------------------
+!
 #if defined(NAVIERSTOKES)
+            INTEGER                            :: iterations(3:7) = [100, 0, 0, 0, 0]
+  
+            real(kind=RP), parameter :: residuals(5) = [ 8.8131248889811715E+00_RP, &
+                                                         1.7608838068776613E+01_RP, &
+                                                         1.9037533106262516E-01_RP, &
+                                                         2.4301352846288605E+01_RP, &
+                                                         2.4063786464536835E+02_RP]
+
+            real(kind=RP), parameter           :: wake_u = 1.0965307794823676E-08_RP
+            real(kind=RP), parameter           :: cd = 3.4573345486345943E+01_RP
+            real(kind=RP), parameter           :: cl = -4.6800322917661674E-04_RP
+
+!
+            N = mesh % elements(1) % Nxyz(1) ! This works here because all the elements have the same order in all directions
 
             CALL initializeSharedAssertionsManager
             sharedManager => sharedAssertionsManager()
+
+            CALL FTAssertEqual(expectedValue = residuals(1)+1.0_RP, &
+                               actualValue   = monitors % residuals % values(1,1)+1.0_RP, &
+                               tol           = 1.d-11, &
+                               msg           = "Continuity residual")
+
+            CALL FTAssertEqual(expectedValue = residuals(2)+1.0_RP, &
+                               actualValue   = monitors % residuals % values(2,1)+1.0_RP, &
+                               tol           = 1.d-11, &
+                               msg           = "X-Momentum residual")
+
+            CALL FTAssertEqual(expectedValue = residuals(3)+1.0_RP, &
+                               actualValue   = monitors % residuals % values(3,1)+1.0_RP, &
+                               tol           = 1.d-11, &
+                               msg           = "Y-Momentum residual")
+
+            CALL FTAssertEqual(expectedValue = residuals(4)+1.0_RP, &
+                               actualValue   = monitors % residuals % values(4,1)+1.0_RP, &
+                               tol           = 1.d-11, &
+                               msg           = "Z-Momentum residual")
+
+            CALL FTAssertEqual(expectedValue = residuals(5)+1.0_RP, &
+                               actualValue   = monitors % residuals % values(5,1)+1.0_RP, &
+                               tol           = 1.d-11, &
+                               msg           = "Energy residual")
+
             
-            CALL FTAssertEqual(expectedValue = res(1) + 1.0_RP, &
-                               actualValue   = monitors % residuals % values(1,1) + 1.0_RP, &
-                               tol           = 1.0e-7_RP, &
-                               msg           = "continuity residual")
-
-            CALL FTAssertEqual(expectedValue = res(2) + 1.0_RP, &
-                               actualValue   = monitors % residuals % values(2,1) + 1.0_RP, &
-                               tol           = 1.0e-7_RP, &
-                               msg           = "x-momentum residual")
-
-            CALL FTAssertEqual(expectedValue = res(3) + 1.0_RP, &
-                               actualValue   = monitors % residuals % values(3,1) + 1.0_RP, &
-                               tol           = 1.0e-7_RP, &
-                               msg           = "y-momentum residual")
-
-            CALL FTAssertEqual(expectedValue = res(4) + 1.0_RP, &
-                               actualValue   = monitors % residuals % values(4,1) + 1.0_RP, &
-                               tol           = 1.0e-7_RP, &
-                               msg           = "z-momentum residual")
-
-            CALL FTAssertEqual(expectedValue = res(5) + 1.0_RP, &
-                               actualValue   = monitors % residuals % values(5,1) + 1.0_RP, &
-                               tol           = 1.0e-7_RP, &
-                               msg           = "energy residual")
+            CALL FTAssertEqual(expectedValue = iterations(N), &
+                               actualValue   = iter, &
+                               msg           = "Number of time steps to tolerance")
 
             CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
                                actualValue   = monitors % probes(1) % values(1,1) + 1.0_RP, &
                                tol           = 1.d-11, &
                                msg           = "Wake final x-velocity at the point [0,2.0,4.0]")
+!
+!           -----------------------------------------------------------------
+!           Bulk "probe file" checks (file-probes 1-4, all at [0,2.0,4.0]).
+!           File-probes no longer live in monitors % probes(:) (that would
+!           replicate a full Probe_t per probe on every rank - exactly the
+!           O(1e6) memory problem this was fixed for); their reduced values
+!           live in monitors % fp_buf, laid out as
+!           (local_file_probe_index-1)*nv + variable_index. Variable 1 ("u")
+!           must reproduce the inline-probe wake_u value exactly: same
+!           point, same variable, independent computation path
+!           (InitializeProbesFromFile / Monitor_UpdateFileProbes vs.
+!           Probe_Update). fp_buf is populated the same way (via
+!           Monitor_UpdateFileProbes's Allreduce) regardless of whether
+!           ASCII or HDF5 output is selected, so this test is identical
+!           to the ASCII one.
+!           -----------------------------------------------------------------
+!
+!           fp_buf is root-only (MPI_Gatherv to rank 0); guard assertions.
+            if ( MPI_Process % isRoot ) then
+               nv = size(monitors % probesVariables)
+               DO k = 1, 4
+                  CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
+                                     actualValue   = monitors % fp_buf((k-1)*nv + 1) + 1.0_RP, &
+                                     tol           = 1.d-11, &
+                                     msg           = "File-probe x-velocity at the point [0,2.0,4.0]")
+               END DO
+!
+!              Remaining file-probe variables (v, w, rho, pressure, mach, k,
+!              velocity) at file-probe 1, hardened with ground-truth values
+!              captured from an actual CI run (CI_parallel_NS, run 36995526283).
+!              ---------------------------------------------------------------
+               CALL FTAssertEqual(expectedValue = -5.1694788113224519E-12_RP + 1.0_RP, &
+                                  actualValue   = monitors % fp_buf(2) + 1.0_RP, &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe v at the point [0,2.0,4.0]")
+
+               CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
+                                  actualValue   = monitors % fp_buf(3), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe w at the point [0,2.0,4.0]")
+
+               CALL FTAssertEqual(expectedValue = 1.0000000480383817_RP, &
+                                  actualValue   = monitors % fp_buf(4), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe rho at the point [0,2.0,4.0]")
+
+               CALL FTAssertEqual(expectedValue = 7.9365084721826635_RP, &
+                                  actualValue   = monitors % fp_buf(5), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe pressure at the point [0,2.0,4.0]")
+
+               CALL FTAssertEqual(expectedValue = 0.30000004403061858_RP, &
+                                  actualValue   = monitors % fp_buf(6), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe mach at the point [0,2.0,4.0]")
+
+               CALL FTAssertEqual(expectedValue = 0.50000018051624784_RP, &
+                                  actualValue   = monitors % fp_buf(7), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe k at the point [0,2.0,4.0]")
+
+               CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
+                                  actualValue   = monitors % fp_buf(8), &
+                                  tol           = 1.d-11, &
+                                  msg           = "File-probe velocity at the point [0,2.0,4.0]")
+            end if
 
             CALL FTAssertEqual(expectedValue = cd, &
                                actualValue   = monitors % surfaceMonitors(1) % values(1), &
@@ -586,7 +681,8 @@ end module ProblemFileFunctions
                                tol           = 1.d-11, &
                                msg           = "Lift coefficient")
 
-           CALL sharedManager % summarizeAssertions(title = testName,iUnit = 6)
+
+            CALL sharedManager % summarizeAssertions(title = testName,iUnit = 6)
    
             IF ( sharedManager % numberOfAssertionFailures() == 0 )     THEN
                WRITE(6,*) testName, " ... Passed"

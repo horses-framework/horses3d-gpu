@@ -95,6 +95,7 @@ jobs:
           make -j8 install
           echo "HDF5_ROOT=$PWD/hdf5" >> $GITHUB_ENV
           echo "HDF5_DIR=$PWD/hdf5" >> $GITHUB_ENV
+          echo "$PWD/hdf5/bin" >> $GITHUB_PATH
           ./hdf5/bin/h5pfc -show
       - name: Check HDF5 PATH
         run: echo "HDF5_ROOT=$HDF5_ROOT"
@@ -451,7 +452,54 @@ jobs:
         run: |
           # source /opt/intel/oneapi/setvars.sh || true
           mpiexec --oversubscribe -n 8 ./horses3d.ns Cylinder.control
-        if: '!cancelled()'  
+        if: '!cancelled()'
+
+#
+# 1b) CYLINDER PROBE FILE (bulk "#define probe file" block: ASCII and HDF5
+#     output formats, cross-rank ownership resolution, ground-truth capture)
+# ----------------------------------------------------------------------------
+
+      - name: Build NSCylinderProbeFileASCII
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileASCII/SETUP
+        run: |
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run NSCylinderProbeFileASCII
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileASCII
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderProbeFileASCII.control
+        if: '!cancelled()'
+
+      - name: Validate NSCylinderProbeFileASCII output
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileASCII
+        run: |
+          pip3 install --quiet numpy
+          echo "=== RESULTS/probes contents ==="
+          ls -la RESULTS/probes/ || echo "(directory missing)"
+          python3 validate.py RESULTS
+        if: '!cancelled()'
+
+      - name: Build NSCylinderProbeFileHDF5
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5/SETUP
+        run: |
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run NSCylinderProbeFileHDF5
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
+        run: |
+          mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderProbeFileHDF5.control
+        if: '!cancelled()'
+
+      - name: Validate NSCylinderProbeFileHDF5 output
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
+        run: |
+          pip3 install --quiet numpy
+          echo "=== RESULTS/probes contents ==="
+          ls -la RESULTS/probes/ || echo "(directory missing)"
+          python3 validate.py RESULTS
+        if: '!cancelled()'
 
 #
 # 2) CYLINDER IP
