@@ -38,6 +38,24 @@ module MonitorsClass
    integer, parameter :: FPVAR_RHO        = 8
    integer, parameter :: FPVAR_STATICPRES = 9
    integer, parameter :: FPVAR_DENSITY    = 10
+   ! Velocity-gradient tensor components (∂u/∂x, etc.)
+   integer, parameter :: FPVAR_U_X        = 11
+   integer, parameter :: FPVAR_U_Y        = 12
+   integer, parameter :: FPVAR_U_Z        = 13
+   integer, parameter :: FPVAR_V_X        = 14
+   integer, parameter :: FPVAR_V_Y        = 15
+   integer, parameter :: FPVAR_V_Z        = 16
+   integer, parameter :: FPVAR_W_X        = 17
+   integer, parameter :: FPVAR_W_Y        = 18
+   integer, parameter :: FPVAR_W_Z        = 19
+   ! Pressure gradient components
+   integer, parameter :: FPVAR_P_X        = 20
+   integer, parameter :: FPVAR_P_Y        = 21
+   integer, parameter :: FPVAR_P_Z        = 22
+   ! Density gradient components
+   integer, parameter :: FPVAR_RHO_X      = 23
+   integer, parameter :: FPVAR_RHO_Y      = 24
+   integer, parameter :: FPVAR_RHO_Z      = 25
 !
 !  HDF5 persistent file handle for file-probe output.
 !  Opening and closing the .probes.h5 file on every write is expensive
@@ -1605,12 +1623,31 @@ end subroutine getNoOfMonitors
       real(kind=RP)  :: acc(nv)
 #ifdef NAVIERSTOKES
       real(kind=RP)  :: q_rho, q_rhou, q_rhov, q_rhow, q_rhoE, u2
+      ! Per-node gradient workspace (populated lazily only when a gradient variable is requested)
+      real(kind=RP)  :: g_invRho, g_u, g_v, g_w
+      real(kind=RP)  :: g_ux, g_uy, g_uz   ! ∂u/∂x, ∂u/∂y, ∂u/∂z
+      real(kind=RP)  :: g_vx, g_vy, g_vz   ! ∂v/∂x, ∂v/∂y, ∂v/∂z
+      real(kind=RP)  :: g_wx, g_wy, g_wz   ! ∂w/∂x, ∂w/∂y, ∂w/∂z
+      real(kind=RP)  :: g_px, g_py, g_pz   ! ∂p/∂x, ∂p/∂y, ∂p/∂z
+      logical        :: fp_grads_needed
 #endif
 #ifdef INCNS
       real(kind=RP)  :: q_rho, q_rhou, q_rhov, q_rhow, q_p
 #endif
 #ifdef MULTIPHASE
       real(kind=RP)  :: q_p, q_c, q_mu, q_cx, q_cy, q_cz
+#endif
+
+#ifdef NAVIERSTOKES
+      ! Determine once whether any gradient variable is in the request list
+      fp_grads_needed = any( self%fp_cpu_varCodes == FPVAR_U_X  .or. self%fp_cpu_varCodes == FPVAR_U_Y  .or. &
+                              self%fp_cpu_varCodes == FPVAR_U_Z  .or. self%fp_cpu_varCodes == FPVAR_V_X  .or. &
+                              self%fp_cpu_varCodes == FPVAR_V_Y  .or. self%fp_cpu_varCodes == FPVAR_V_Z  .or. &
+                              self%fp_cpu_varCodes == FPVAR_W_X  .or. self%fp_cpu_varCodes == FPVAR_W_Y  .or. &
+                              self%fp_cpu_varCodes == FPVAR_W_Z  .or. self%fp_cpu_varCodes == FPVAR_P_X  .or. &
+                              self%fp_cpu_varCodes == FPVAR_P_Y  .or. self%fp_cpu_varCodes == FPVAR_P_Z  .or. &
+                              self%fp_cpu_varCodes == FPVAR_RHO_X .or. self%fp_cpu_varCodes == FPVAR_RHO_Y .or. &
+                              self%fp_cpu_varCodes == FPVAR_RHO_Z )
 #endif
 
       do p = 1, self % fp_nOwned
@@ -1630,6 +1667,40 @@ end subroutine getNoOfMonitors
             q_rhov = Qe(IRHOV,ii,jj,kk)
             q_rhow = Qe(IRHOW,ii,jj,kk)
             q_rhoE = Qe(IRHOE,ii,jj,kk)
+            ! Compute primitive velocity gradients and pressure gradient when needed.
+            ! Uses getVelocityGradients_State: vel_x = [∂u/∂x, ∂v/∂x, ∂w/∂x], etc.
+            ! Pressure gradient: ∂p/∂x = (γ-1)[∂(ρE)/∂x - u·∂(ρu)/∂x - v·∂(ρv)/∂x
+            !                                   - w·∂(ρw)/∂x + ½|u|²·∂ρ/∂x]
+            if ( fp_grads_needed ) then
+               g_invRho = 1.0_RP / q_rho
+               g_u = q_rhou * g_invRho
+               g_v = q_rhov * g_invRho
+               g_w = q_rhow * g_invRho
+               associate( Ux => mesh%elements(eID)%storage%U_x, &
+                          Uy => mesh%elements(eID)%storage%U_y, &
+                          Uz => mesh%elements(eID)%storage%U_z  )
+               ! velocity gradients via quotient rule on conservative grads
+               g_ux = g_invRho * Ux(IRHOU,ii,jj,kk) - g_u * g_invRho * Ux(IRHO,ii,jj,kk)
+               g_uy = g_invRho * Uy(IRHOU,ii,jj,kk) - g_u * g_invRho * Uy(IRHO,ii,jj,kk)
+               g_uz = g_invRho * Uz(IRHOU,ii,jj,kk) - g_u * g_invRho * Uz(IRHO,ii,jj,kk)
+               g_vx = g_invRho * Ux(IRHOV,ii,jj,kk) - g_v * g_invRho * Ux(IRHO,ii,jj,kk)
+               g_vy = g_invRho * Uy(IRHOV,ii,jj,kk) - g_v * g_invRho * Uy(IRHO,ii,jj,kk)
+               g_vz = g_invRho * Uz(IRHOV,ii,jj,kk) - g_v * g_invRho * Uz(IRHO,ii,jj,kk)
+               g_wx = g_invRho * Ux(IRHOW,ii,jj,kk) - g_w * g_invRho * Ux(IRHO,ii,jj,kk)
+               g_wy = g_invRho * Uy(IRHOW,ii,jj,kk) - g_w * g_invRho * Uy(IRHO,ii,jj,kk)
+               g_wz = g_invRho * Uz(IRHOW,ii,jj,kk) - g_w * g_invRho * Uz(IRHO,ii,jj,kk)
+               ! pressure gradient
+               g_px = thermodynamics%gammaMinus1 * ( Ux(IRHOE,ii,jj,kk) &
+                        - g_u*Ux(IRHOU,ii,jj,kk) - g_v*Ux(IRHOV,ii,jj,kk) - g_w*Ux(IRHOW,ii,jj,kk) &
+                        + 0.5_RP*(g_u*g_u + g_v*g_v + g_w*g_w)*Ux(IRHO,ii,jj,kk) )
+               g_py = thermodynamics%gammaMinus1 * ( Uy(IRHOE,ii,jj,kk) &
+                        - g_u*Uy(IRHOU,ii,jj,kk) - g_v*Uy(IRHOV,ii,jj,kk) - g_w*Uy(IRHOW,ii,jj,kk) &
+                        + 0.5_RP*(g_u*g_u + g_v*g_v + g_w*g_w)*Uy(IRHO,ii,jj,kk) )
+               g_pz = thermodynamics%gammaMinus1 * ( Uz(IRHOE,ii,jj,kk) &
+                        - g_u*Uz(IRHOU,ii,jj,kk) - g_v*Uz(IRHOV,ii,jj,kk) - g_w*Uz(IRHOW,ii,jj,kk) &
+                        + 0.5_RP*(g_u*g_u + g_v*g_v + g_w*g_w)*Uz(IRHO,ii,jj,kk) )
+               end associate
+            end if
 #endif
 #ifdef INCNS
             q_rho  = Qe(INSRHO ,ii,jj,kk)
@@ -1667,6 +1738,36 @@ end subroutine getNoOfMonitors
                   acc(v) = acc(v) + w * 0.5_RP*(POW2(q_rhou)+POW2(q_rhov)+POW2(q_rhow)) / q_rho
                case(FPVAR_RHO)
                   acc(v) = acc(v) + w * q_rho
+               case(FPVAR_U_X)
+                  acc(v) = acc(v) + w * g_ux
+               case(FPVAR_U_Y)
+                  acc(v) = acc(v) + w * g_uy
+               case(FPVAR_U_Z)
+                  acc(v) = acc(v) + w * g_uz
+               case(FPVAR_V_X)
+                  acc(v) = acc(v) + w * g_vx
+               case(FPVAR_V_Y)
+                  acc(v) = acc(v) + w * g_vy
+               case(FPVAR_V_Z)
+                  acc(v) = acc(v) + w * g_vz
+               case(FPVAR_W_X)
+                  acc(v) = acc(v) + w * g_wx
+               case(FPVAR_W_Y)
+                  acc(v) = acc(v) + w * g_wy
+               case(FPVAR_W_Z)
+                  acc(v) = acc(v) + w * g_wz
+               case(FPVAR_P_X)
+                  acc(v) = acc(v) + w * g_px
+               case(FPVAR_P_Y)
+                  acc(v) = acc(v) + w * g_py
+               case(FPVAR_P_Z)
+                  acc(v) = acc(v) + w * g_pz
+               case(FPVAR_RHO_X)
+                  acc(v) = acc(v) + w * mesh%elements(eID)%storage%U_x(IRHO,ii,jj,kk)
+               case(FPVAR_RHO_Y)
+                  acc(v) = acc(v) + w * mesh%elements(eID)%storage%U_y(IRHO,ii,jj,kk)
+               case(FPVAR_RHO_Z)
+                  acc(v) = acc(v) + w * mesh%elements(eID)%storage%U_z(IRHO,ii,jj,kk)
 #endif
 #ifdef INCNS
                case(FPVAR_PRESSURE)
@@ -2020,6 +2121,21 @@ end subroutine getNoOfMonitors
             case("rho")            ; Monitors % fp_varCodes(ii) = FPVAR_RHO
             case("static-pressure"); Monitors % fp_varCodes(ii) = FPVAR_STATICPRES
             case("density")        ; Monitors % fp_varCodes(ii) = FPVAR_DENSITY
+            case("u_x")            ; Monitors % fp_varCodes(ii) = FPVAR_U_X
+            case("u_y")            ; Monitors % fp_varCodes(ii) = FPVAR_U_Y
+            case("u_z")            ; Monitors % fp_varCodes(ii) = FPVAR_U_Z
+            case("v_x")            ; Monitors % fp_varCodes(ii) = FPVAR_V_X
+            case("v_y")            ; Monitors % fp_varCodes(ii) = FPVAR_V_Y
+            case("v_z")            ; Monitors % fp_varCodes(ii) = FPVAR_V_Z
+            case("w_x")            ; Monitors % fp_varCodes(ii) = FPVAR_W_X
+            case("w_y")            ; Monitors % fp_varCodes(ii) = FPVAR_W_Y
+            case("w_z")            ; Monitors % fp_varCodes(ii) = FPVAR_W_Z
+            case("p_x")            ; Monitors % fp_varCodes(ii) = FPVAR_P_X
+            case("p_y")            ; Monitors % fp_varCodes(ii) = FPVAR_P_Y
+            case("p_z")            ; Monitors % fp_varCodes(ii) = FPVAR_P_Z
+            case("rho_x")          ; Monitors % fp_varCodes(ii) = FPVAR_RHO_X
+            case("rho_y")          ; Monitors % fp_varCodes(ii) = FPVAR_RHO_Y
+            case("rho_z")          ; Monitors % fp_varCodes(ii) = FPVAR_RHO_Z
             case default           ; Monitors % fp_varCodes(ii) = FPVAR_UNKNOWN
             end select
          end do
@@ -2095,6 +2211,21 @@ end subroutine getNoOfMonitors
             case("rho")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_RHO
             case("static-pressure") ; Monitors % fp_cpu_varCodes(ii) = FPVAR_STATICPRES
             case("density")         ; Monitors % fp_cpu_varCodes(ii) = FPVAR_DENSITY
+            case("u_x")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_U_X
+            case("u_y")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_U_Y
+            case("u_z")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_U_Z
+            case("v_x")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_V_X
+            case("v_y")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_V_Y
+            case("v_z")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_V_Z
+            case("w_x")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_W_X
+            case("w_y")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_W_Y
+            case("w_z")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_W_Z
+            case("p_x")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_P_X
+            case("p_y")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_P_Y
+            case("p_z")             ; Monitors % fp_cpu_varCodes(ii) = FPVAR_P_Z
+            case("rho_x")           ; Monitors % fp_cpu_varCodes(ii) = FPVAR_RHO_X
+            case("rho_y")           ; Monitors % fp_cpu_varCodes(ii) = FPVAR_RHO_Y
+            case("rho_z")           ; Monitors % fp_cpu_varCodes(ii) = FPVAR_RHO_Z
             case default            ; Monitors % fp_cpu_varCodes(ii) = FPVAR_UNKNOWN
             end select
          end do
