@@ -236,6 +236,7 @@ module SpatialDiscretization
 !
          INTEGER                 :: k, eID, fID, i, j, iFace, ierr
          real(kind=RP)           :: sqrtRho, invMa2, jacobian
+         real(kind=RP)           :: Source(NCONS)
          class(Element), pointer :: e
          logical                 :: set_mu   
          real(RP) :: cs_1, cs_2, Qclip
@@ -927,6 +928,33 @@ endif
          !$acc wait
          call ForcesFarm(farm, mesh, t)
          !$acc wait
+!
+!        ***********************************************************************
+!        Add the user-defined source term (Manufactured Solutions, etc.).
+!        WARNING: this does NOT work with nvfortran / OpenACC (GPU).
+!        UserDefinedSourceTermNS lives in the (non-acc) problemfile shared
+!        library and runs on the host; the problemfile cannot issue OpenACC data
+!        directives and on the GPU Q lives on the device. It is therefore
+!        compiled ONLY for non-OpenACC (CPU, e.g. gfortran) builds and skipped
+!        entirely under nvfortran/OpenACC - zero effect and zero cost on the GPU.
+!        Multiphase stores momentum as sqrt(rho)*u, so the momentum components of
+!        the source are divided by sqrt(rho) to match QDot = d(sqrt(rho) u)/dt.
+!        See the NS solver (TimeDerivative_ComputeQDot) for the same guard.
+!        ***********************************************************************
+#ifndef _OPENACC
+!$omp do schedule(runtime) private(i,j,k,sqrtRho,Source)
+         do eID = 1, mesh % no_of_elements
+            do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
+               sqrtRho = sqrt(mesh % elements(eID) % storage % rho(i,j,k))
+               Source  = 0.0_RP
+               call UserDefinedSourceTermNS(mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,k), t, &
+                                            Source, thermodynamics, dimensionless, refValues, multiphase)
+               mesh % elements(eID) % storage % S_NS(:,i,j,k) = mesh % elements(eID) % storage % S_NS(:,i,j,k) &
+                                            + Source / [1.0_RP, sqrtRho, sqrtRho, sqrtRho, 1.0_RP]
+            end do ; end do ; end do
+         end do
+!$omp end do
+#endif
 !
 !        ****************************
 !        Now add all the source terms
