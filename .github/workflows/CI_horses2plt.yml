@@ -1,0 +1,249 @@
+name: CI HORSES2PLT
+
+########################################################################
+# Tests the horses2plt post-processing tool (Solver/src/addons/horses2tecplot).
+#
+# A short NS cylinder simulation (Solver/test/AddOns/horses2plt) generates:
+#   * volumetric solutions with gradients  -> RESULTS/Cylinder_*.hsol
+#   * volumetric statistics               -> RESULTS/Cylinder.stats.hsol
+#   * surface solution on the cylinder    -> RESULTS/surfaces/*.surf.hsol
+#     (with u_tau, mu_NS and wall distance: "surface save utau/turbulent")
+# which are then converted to Tecplot with several horses2plt options.
+# Every conversion is checked with check_tec.sh, since horses2plt can exit
+# with code 0 even when no conversion was performed.
+########################################################################
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Permissions for codecov
+    permissions:
+      id-token: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['gfortran']
+        mode: ['RELEASE']
+        comm: ['SEQUENTIAL']
+        enable_threads: ['NO']
+
+    name: HORSES2PLT - ${{ matrix.compiler }} - ${{ matrix.mode }} - ${{ matrix.comm }}
+
+    env:
+      MAKE_FLAGS: MODE=${{ matrix.mode }} COMPILER=${{ matrix.compiler }} COMM=${{ matrix.comm }} ENABLE_THREADS=${{ matrix.enable_threads }} WITH_METIS=NO
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Coverage Flags
+        run: |
+          if [ "${{ matrix.mode }}" = "DEBUG" ]; then
+            echo "EXTRA_COV=-Og -fprofile-arcs -ftest-coverage" >> $GITHUB_ENV
+          else
+            echo "EXTRA_COV=" >> $GITHUB_ENV
+          fi
+
+      - name: Show ${{ matrix.compiler }} version
+        run: ${{ matrix.compiler }} --version
+
+      - name: Configure
+        working-directory: ./Solver
+        run: ./configure
+
+      - name: Compile horses3d.ns and horses2plt
+        working-directory: ./Solver
+        run: |
+          make allclean $MAKE_FLAGS
+          make ns $MAKE_FLAGS EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+          make addons ADDONS=horses2tecplot $MAKE_FLAGS EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+          ls -l bin
+
+########################################################################
+#######              GENERATE THE INPUT FILES                   ########
+########################################################################
+
+      - name: Run NS Cylinder (solution + statistics + surfaces)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          ./horses3d.ns Cylinder.control
+          ls -l MESH RESULTS RESULTS/surfaces
+          for f in MESH/Cylinder_0000000000.hmesh \
+                   MESH/Cylinder_bc001_0000000000.surf.hmesh \
+                   RESULTS/Cylinder_0000000010.hsol \
+                   RESULTS/Cylinder_0000000020.hsol \
+                   RESULTS/Cylinder.stats.hsol \
+                   RESULTS/surfaces/Cylinder_bc001_0000000020.surf.hsol; do
+            [ -s "$f" ] || { echo "Missing $f"; exit 1; }
+          done
+
+########################################################################
+#######              1) VOLUMETRIC SOLUTION                     ########
+########################################################################
+
+      - name: Volume - default (command line, Gauss, multizone)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/Cylinder_0000000020.tec
+          ./horses2plt MESH/Cylinder_0000000000.hmesh RESULTS/Cylinder_0000000020.hsol
+          ./check_tec.sh RESULTS/Cylinder_0000000020.tec ORDERED rho rhou rhov rhow rhoe
+        if: '!cancelled()'
+
+      - name: Volume - FE, fixed order, boundaries, variables (command line)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/Cylinder_0000000020.tec
+          ./horses2plt MESH/Cylinder_0000000000.hmesh RESULTS/Cylinder_0000000020.hsol \
+                       --output-order=2 --output-mode=FE --boundary-file=MESH/CylinderNSpol3.bmesh \
+                       --output-variables=rho,V,p,T,Mach,gradV,omega,Qcrit
+          ./check_tec.sh RESULTS/Cylinder_0000000020.tec BRICK rho u v w p T Mach u_x w_z omega_x Qcrit
+          # Boundary zones are appended after the fluid zone
+          [ $(grep -c '^ZONE' RESULTS/Cylinder_0000000020.tec) -gt 1 ] || { echo "Boundary zones not written"; exit 1; }
+        if: '!cancelled()'
+
+      - name: Volume - homogeneous basis, anisotropic order, dimensionless (command line)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/Cylinder_0000000020.tec
+          ./horses2plt MESH/Cylinder_0000000000.hmesh RESULTS/Cylinder_0000000020.hsol \
+                       --output-order=2,3,4 --output-basis=Homogeneous --dimensionless --output-variables=Q,Vabs
+          ./check_tec.sh RESULTS/Cylinder_0000000020.tec ORDERED rho rhoe Vabs
+          grep -m1 '^ZONE' RESULTS/Cylinder_0000000020.tec | grep -q 'I=3, J=4, K=5' || { echo "Wrong anisotropic output order"; exit 1; }
+        if: '!cancelled()'
+
+      - name: Volume - several solutions, FE, extra variables (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/Cylinder_0000000010.tec RESULTS/Cylinder_0000000020.tec
+          ./horses2plt convert/volume.convert
+          for f in RESULTS/Cylinder_0000000010.tec RESULTS/Cylinder_0000000020.tec; do
+            ./check_tec.sh $f BRICK rho Vabs Ht s c omega_abs divV eID Nxi Neta Nzeta Nav
+          done
+        if: '!cancelled()'
+
+      - name: Mesh only (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f MESH/Cylinder_0000000000.tec
+          ./horses2plt convert/mesh.convert
+          ./check_tec.sh MESH/Cylinder_0000000000.tec ORDERED
+        if: '!cancelled()'
+
+########################################################################
+#######              2) VOLUMETRIC STATISTICS                   ########
+########################################################################
+
+      - name: Statistics - default variables (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/Cylinder.stats.tec
+          ./horses2plt convert/stats.convert
+          ./check_tec.sh RESULTS/Cylinder.stats.tec ORDERED rho rhoe
+        if: '!cancelled()'
+
+      - name: Statistics - statistics variables, FE (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/Cylinder.stats.tec
+          ./horses2plt convert/stats_variables.convert
+          ./check_tec.sh RESULTS/Cylinder.stats.tec BRICK umean vmean wmean Sxx Syy Szz Sxy Sxz Syz rho p
+        if: '!cancelled()'
+
+      - name: Statistics legacy - "legacy stats = .true." must match the current format (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          # Legacy files only hold the 9 statistics per point: build one from the current file
+          rm -f RESULTS/Legacy.stats.hsol RESULTS/Legacy.stats.tec RESULTS/Cylinder.stats.tec
+          ./make_legacy_stats.py RESULTS/Cylinder.stats.hsol RESULTS/Legacy.stats.hsol
+          ./horses2plt convert/stats_legacy.convert
+          ./check_tec.sh RESULTS/Legacy.stats.tec ORDERED Umean Vmean Wmean Sxx Syy Szz Sxy Sxz Syz
+          # Same quantities from the current file (Stats2Plt output is dimensionless).
+          # The legacy writer prints 5 significant digits, hence the tolerance.
+          ./horses2plt convert/stats_dimensionless.convert
+          ../mergeStatistics/compare_tec.py RESULTS/Cylinder.stats.tec RESULTS/Legacy.stats.tec 1.0e-4
+        if: '!cancelled()'
+
+########################################################################
+#######              3) SURFACE SOLUTION (surf.hsol)            ########
+########################################################################
+
+      - name: Surface - default variables (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec
+          ./horses2plt convert/surface.convert
+          ./check_tec.sh RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec ORDERED rho rhoe
+        if: '!cancelled()'
+
+      - name: Surface - FE and derived variables (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec
+          ./horses2plt convert/surface_variables.convert
+          ./check_tec.sh RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec QUADRILATERAL rho u p T Cp u_x omega_x
+        if: '!cancelled()'
+
+      - name: Surface - wall variables from "surface save utau/turbulent" (control file)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec
+          ./horses2plt convert/surface_wall.convert
+          # "+" = the variable must be strictly positive (catches fields left at zero by the solver)
+          ./check_tec.sh RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec QUADRILATERAL \
+                         +u_tau +wall_shear +Cf +mu_ns +wall_distance +yplus rho p
+        if: '!cancelled()'
+
+      # TODO: known failures, enable once fixed
+      #  * Gauss basis with a fixed order different from the solution order segfaults:
+      #      ./horses2plt MESH/Cylinder_0000000000.hmesh RESULTS/Cylinder_0000000020.hsol --output-order=4 --output-basis=Gauss
+      #  * Statistics and surfaces interpolated to a fixed output order segfault intermittently,
+      #    also with legacy statistics:
+      #      ./horses2plt convert/surface_homogeneous.convert
+      #      ./horses2plt convert/stats_legacy_gauss.convert
+      #      ./horses2plt convert/stats_legacy_homogeneous.convert
+      #      (or add "output order = 2" to convert/stats_variables.convert)
+      #  * In a control file, an anisotropic "output order = Nx,Ny,Nz" is read as Nx in all
+      #    directions (getTaskTypeControl uses "pos" before setting it). The command-line
+      #    flag --output-order=Nx,Ny,Nz works.
+      #  * "legacy stats" can only be set in a control file (no command-line flag), and legacy
+      #    statistics are always written in multizone mode ("output mode = FE" is ignored).
+      #  * RMS statistics (Vfrms, ufrms, vfrms, wfrms) give NaN when the variance is ~0
+      #    (sqrt of a slightly negative number): add them to convert/stats_variables.convert
+      #  * Stats/surface files saved with gradients cannot be converted from the command line
+      #    (there is no equivalent of "has gradients = .true."):
+      #      ./horses2plt MESH/Cylinder_0000000000.hmesh RESULTS/Cylinder.stats.hsol
+      #  * "additional variables" without brackets (e.g. u_tau, turb instead of "[u_tau, turb]")
+      #    segfaults in getTaskTypeControl (getCharArrayFromString does not allocate the array)
+      #  * surf.hsol files saved with "surface save utau/turbulent" cannot be converted from the
+      #    command line (there is no equivalent of "additional variables")
+
+#
+# CHECK CODE COVERAGE
+# -------------------
+
+      - name: Install gcovr
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcovr
+
+      - name: Generate Coverage Report
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        run: gcovr --root . --print-summary --xml coverage.xml
+
+      - name: Upload Coverage to Codecov
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          flags: horses2plt
+          slug: horses-framework/horses3d-gpu
+          use_oidc: true
