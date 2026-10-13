@@ -83,6 +83,7 @@ module MonitorsClass
       character(len=STR_LEN_MONITORS), allocatable :: probesVariables(:)
       real(kind=RP)                              :: probeFileSaveTimestep = 0.0_RP
       character(len=8)                           :: probeFileOutputFormat = "ASCII"
+      logical                                    :: probeFileResume = .false.
       real(kind=RP)                              :: fp_lastSavedTime = -huge(0.0_RP)
       integer                                    :: fp_nOwned = 0
       integer             , allocatable          :: fp_ownedIdx(:)
@@ -197,6 +198,7 @@ module MonitorsClass
          integer                         :: no_of_probesVariables
          real(kind=RP)                   :: probeFileSaveTimestep
          character(len=8)                :: probeFileOutputFormat
+         logical                         :: probeFileResume
          character(len=LINE_LENGTH)      :: probes_solution_file
          character(len=LINE_LENGTH)      :: probes_dir
          integer                         :: last_slash, ierr
@@ -257,7 +259,7 @@ module MonitorsClass
 !           variables to be sampled and saved for the same probe location
 !           ---------------------------------------------------------------
 #ifdef FLOW
-            call readProbesFileBlock( probesFileName, probesVariablesLine, no_of_probesVariables, probeFileSaveTimestep, probeFileOutputFormat )
+            call readProbesFileBlock( probesFileName, probesVariablesLine, no_of_probesVariables, probeFileSaveTimestep, probeFileOutputFormat, probeFileResume )
 
             if ( len_trim(probesFileName) .gt. 0 ) then
 !
@@ -332,6 +334,7 @@ module MonitorsClass
             Monitors % probesFileName         = trim(probesFileName)
             Monitors % probeFileSaveTimestep  = probeFileSaveTimestep
             Monitors % probeFileOutputFormat  = probeFileOutputFormat
+            Monitors % probeFileResume        = probeFileResume
             Monitors % fp_lastSavedTime       = -huge(0.0_RP)
             allocate( Monitors % probesVariables(size(probesVariables)) )
             Monitors % probesVariables = probesVariables
@@ -340,7 +343,7 @@ module MonitorsClass
 
 #ifdef HAS_HDF5
             if ( trim(probeFileOutputFormat) .eq. "HDF5" ) then
-               call Monitor_InitFileProbesHDF5( Monitors, no_of_fileProbes )
+               call Monitor_InitFileProbesHDF5( Monitors, no_of_fileProbes, probeFileResume )
             end if
 #endif
          end if
@@ -832,6 +835,9 @@ module MonitorsClass
                write(STD_OUT,'(30X,A,A28,A)') "->" , "Save timestep: " , "every step"
             end if
             write(STD_OUT,'(30X,A,A28,A)') "->" , "Output format: " , trim(self % probeFileOutputFormat)
+            if ( self % probeFileResume ) then
+               write(STD_OUT,'(30X,A,A28,A)') "->" , "Resume: " , "yes (append to existing file)"
+            end if
             write(STD_OUT,'(/)')
          end if
 #endif
@@ -955,6 +961,7 @@ module MonitorsClass
          to % probesFileName              = from % probesFileName
          to % probeFileSaveTimestep       = from % probeFileSaveTimestep
          to % probeFileOutputFormat       = from % probeFileOutputFormat
+         to % probeFileResume             = from % probeFileResume
          to % fp_lastSavedTime            = from % fp_lastSavedTime
          if ( allocated(from % probesVariables) ) then
             safedeallocate ( to % probesVariables )
@@ -1186,7 +1193,7 @@ end subroutine getNoOfMonitors
 !
 !///////////////////////////////////////////////////////////////////////////////////
 !
-   subroutine readProbesFileBlock(fileName, variablesLine, no_of_probesVariables, saveTimestep, outputFormat)
+   subroutine readProbesFileBlock(fileName, variablesLine, no_of_probesVariables, saveTimestep, outputFormat, resume)
 !
 !     ******************************************************************
 !        Reads the "#define probe file ... #end" block from the case
@@ -1197,6 +1204,7 @@ end subroutine getNoOfMonitors
 !           variables           = u
 !           probe save timestep = 1.0E-3
 !           output format       = HDF5
+!           resume              = .true.
 !        #end
 !
 !     Note: this is a hand-rolled parser (rather than readValueInRegion)
@@ -1211,6 +1219,7 @@ end subroutine getNoOfMonitors
       integer,                    intent(out) :: no_of_probesVariables
       real(kind=RP),              intent(out) :: saveTimestep
       character(len=8),           intent(out) :: outputFormat
+      logical,                    intent(out) :: resume
 !
 !     ---------------
 !     Local variables
@@ -1227,6 +1236,7 @@ end subroutine getNoOfMonitors
       no_of_probesVariables = 0
       saveTimestep          = 0.0_RP
       outputFormat          = "ASCII"
+      resume                = .false.
       inside                = .false.
 
       call get_command_argument(1, paramFile)
@@ -1272,6 +1282,11 @@ end subroutine getNoOfMonitors
             else
                outputFormat = "ASCII"
             end if
+         elseif ( getSquashedLine(line(1:position-1)) .eq. getSquashedLine("resume") ) then
+            valStr = adjustl( removeQuotes( line(position+1:) ) )
+            valStr = adjustl( getSquashedLine(valStr) )
+            resume = ( index(valStr, ".true.") .gt. 0 .or. index(valStr, "true") .gt. 0 .or. &
+                       index(valStr, "yes")    .gt. 0 .or. index(valStr, "1")    .gt. 0 )
          end if
       end do
 
@@ -2518,18 +2533,18 @@ end subroutine getNoOfMonitors
 ! ============================================================
 
 #ifdef HAS_HDF5
-   subroutine Monitor_InitFileProbesHDF5(self, no_of_fileProbes)
+   subroutine Monitor_InitFileProbesHDF5(self, no_of_fileProbes, resume)
 !
 !     Creates (or resumes) the HDF5 output file for bulk file-probes.
 !
-!     Fresh start  — file does not exist:
+!     Fresh start  (resume=.false.):
 !       Creates the file and all datasets:
 !         /coordinates  (nProbes, 3)   — fixed, written once
 !         /time         (extendible)   — one value per saved step
 !         /iteration    (extendible)   — one value per saved step
 !         /<varname>    (nProbes, ext) — one row per saved step
 !
-!     Resume  — file already exists:
+!     Resume  (resume=.true., set via "resume = .true." in the probe block):
 !       Opens the existing file in read/write mode and reuses its datasets.
 !       New data is appended by Monitor_WriteFileProbesHDF5 after the
 !       time steps already stored.
@@ -2539,6 +2554,7 @@ end subroutine getNoOfMonitors
       implicit none
       class(Monitor_t), intent(inout) :: self
       integer,          intent(in)    :: no_of_fileProbes
+      logical,          intent(in)    :: resume
 !
 !     ---------------
 !     Local variables
@@ -2559,9 +2575,10 @@ end subroutine getNoOfMonitors
 
       call h5open_f(iError)
 
-      ! If the probe file already exists this is a resume: open it for
-      ! appending without touching the existing datasets or coordinates.
+      ! resume=.true. (set in the input block) → open existing file for appending.
+      ! resume=.false. → always create fresh (default behaviour).
       inquire(file=trim(fname), exist=file_exists)
+      file_exists = file_exists .and. resume
 
       if ( file_exists ) then
          call h5fopen_f(trim(fname), H5F_ACC_RDWR_F, file_id, iError)
