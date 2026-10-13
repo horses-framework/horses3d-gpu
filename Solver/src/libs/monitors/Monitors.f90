@@ -2520,13 +2520,19 @@ end subroutine getNoOfMonitors
 #ifdef HAS_HDF5
    subroutine Monitor_InitFileProbesHDF5(self, no_of_fileProbes)
 !
-!     Creates the HDF5 output file for bulk file-probes with
-!     the following structure:
+!     Creates (or resumes) the HDF5 output file for bulk file-probes.
 !
-!       /coordinates  (3, nProbes)   — fixed, written once
-!       /time         (extendible)   — one value per saved step
-!       /iteration    (extendible)   — one value per saved step
-!       /<varname>    (nProbes, ext) — one row per saved step
+!     Fresh start  — file does not exist:
+!       Creates the file and all datasets:
+!         /coordinates  (nProbes, 3)   — fixed, written once
+!         /time         (extendible)   — one value per saved step
+!         /iteration    (extendible)   — one value per saved step
+!         /<varname>    (nProbes, ext) — one row per saved step
+!
+!     Resume  — file already exists:
+!       Opens the existing file in read/write mode and reuses its datasets.
+!       New data is appended by Monitor_WriteFileProbesHDF5 after the
+!       time steps already stored.
 !
       use HDF5
       use MPI_Process_Info
@@ -2542,6 +2548,7 @@ end subroutine getNoOfMonitors
       integer(HSIZE_T) :: dims2(2), maxdims2(2), chunk2(2)
       integer(HSIZE_T) :: dims1(1), maxdims1(1), chunk1(1)
       integer          :: iError, v, nv
+      logical          :: file_exists
       character(len=LINE_LENGTH) :: fname
 
       if ( .not. MPI_Process % isRoot ) return
@@ -2551,58 +2558,79 @@ end subroutine getNoOfMonitors
       write(fname,'(A,A)') trim(self % probes_solution_file), ".probes.h5"
 
       call h5open_f(iError)
-      call h5fcreate_f(trim(fname), H5F_ACC_TRUNC_F, file_id, iError)
 
-      ! /coordinates  (3, nProbes) — fixed at creation, straight from fp_x
-      ! (populated for every file-probe by InitializeProbesFromFile)
-      dims2 = [ int(3, HSIZE_T), int(no_of_fileProbes, HSIZE_T) ]
-      call h5screate_simple_f(2, dims2, dspace_id, iError)
-      call h5dcreate_f(file_id, "coordinates", H5T_NATIVE_DOUBLE, dspace_id, dset_id, iError)
-      call h5dwrite_f(dset_id, H5T_NATIVE_DOUBLE, self % fp_x, dims2, iError)
-      call h5dclose_f(dset_id, iError)
-      call h5sclose_f(dspace_id, iError)
+      ! If the probe file already exists this is a resume: open it for
+      ! appending without touching the existing datasets or coordinates.
+      inquire(file=trim(fname), exist=file_exists)
 
-      ! /time  (extendible 1-D)
-      dims1(1)    = 0
-      maxdims1(1) = H5S_UNLIMITED_F
-      chunk1(1)   = int(max(BUFFER_SIZE, 1), HSIZE_T)
-      call h5screate_simple_f(1, dims1, dspace_id, iError, maxdims1)
-      call h5pcreate_f(H5P_DATASET_CREATE_F, dcpl_id, iError)
-      call h5pset_chunk_f(dcpl_id, 1, chunk1, iError)
-      call h5dcreate_f(file_id, "time", H5T_NATIVE_DOUBLE, dspace_id, dset_id, iError, dcpl_id)
-      call h5dclose_f(dset_id, iError)
-      call h5sclose_f(dspace_id, iError)
-      call h5pclose_f(dcpl_id, iError)
+      if ( file_exists ) then
+         call h5fopen_f(trim(fname), H5F_ACC_RDWR_F, file_id, iError)
+         if ( iError .ne. 0 ) then
+            ! Corrupt or unreadable file — fall back to a fresh one.
+            write(STD_OUT,'(A,A)') "WARNING: could not open probe file for resume, recreating: ", &
+                                    trim(fname)
+            file_exists = .false.
+            call h5fcreate_f(trim(fname), H5F_ACC_TRUNC_F, file_id, iError)
+         end if
+      else
+         call h5fcreate_f(trim(fname), H5F_ACC_TRUNC_F, file_id, iError)
+      end if
 
-      ! /iteration  (extendible 1-D)
-      call h5screate_simple_f(1, dims1, dspace_id, iError, maxdims1)
-      call h5pcreate_f(H5P_DATASET_CREATE_F, dcpl_id, iError)
-      call h5pset_chunk_f(dcpl_id, 1, chunk1, iError)
-      call h5dcreate_f(file_id, "iteration", H5T_NATIVE_INTEGER, dspace_id, dset_id, iError, dcpl_id)
-      call h5dclose_f(dset_id, iError)
-      call h5sclose_f(dspace_id, iError)
-      call h5pclose_f(dcpl_id, iError)
+      if ( .not. file_exists ) then
+         ! ── Fresh start: create all datasets ──────────────────────────────────
 
-      ! /<varname>  (extendible × nProbes) — h5ls shows {nProbes, Inf}
-      ! chunk2(1)=1: one time step per chunk avoids pre-allocation waste when
-      ! the save-timestep filter makes n_write << BUFFER_SIZE per flush.
-      dims2(1)    = 0
-      dims2(2)    = int(no_of_fileProbes, HSIZE_T)
-      maxdims2(1) = H5S_UNLIMITED_F
-      maxdims2(2) = int(no_of_fileProbes, HSIZE_T)
-      chunk2(1)   = int(1, HSIZE_T)
-      chunk2(2)   = int(no_of_fileProbes, HSIZE_T)
+         ! /coordinates  (nProbes, 3) — fixed at creation, straight from fp_x
+         ! (populated for every file-probe by InitializeProbesFromFile)
+         dims2 = [ int(3, HSIZE_T), int(no_of_fileProbes, HSIZE_T) ]
+         call h5screate_simple_f(2, dims2, dspace_id, iError)
+         call h5dcreate_f(file_id, "coordinates", H5T_NATIVE_DOUBLE, dspace_id, dset_id, iError)
+         call h5dwrite_f(dset_id, H5T_NATIVE_DOUBLE, self % fp_x, dims2, iError)
+         call h5dclose_f(dset_id, iError)
+         call h5sclose_f(dspace_id, iError)
 
-      do v = 1, nv
-         call h5screate_simple_f(2, dims2, dspace_id, iError, maxdims2)
+         ! /time  (extendible 1-D)
+         dims1(1)    = 0
+         maxdims1(1) = H5S_UNLIMITED_F
+         chunk1(1)   = int(max(BUFFER_SIZE, 1), HSIZE_T)
+         call h5screate_simple_f(1, dims1, dspace_id, iError, maxdims1)
          call h5pcreate_f(H5P_DATASET_CREATE_F, dcpl_id, iError)
-         call h5pset_chunk_f(dcpl_id, 2, chunk2, iError)
-         call h5dcreate_f(file_id, trim(self % probesVariables(v)), H5T_NATIVE_DOUBLE, &
-                          dspace_id, dset_id, iError, dcpl_id)
+         call h5pset_chunk_f(dcpl_id, 1, chunk1, iError)
+         call h5dcreate_f(file_id, "time", H5T_NATIVE_DOUBLE, dspace_id, dset_id, iError, dcpl_id)
          call h5dclose_f(dset_id, iError)
          call h5sclose_f(dspace_id, iError)
          call h5pclose_f(dcpl_id, iError)
-      end do
+
+         ! /iteration  (extendible 1-D)
+         call h5screate_simple_f(1, dims1, dspace_id, iError, maxdims1)
+         call h5pcreate_f(H5P_DATASET_CREATE_F, dcpl_id, iError)
+         call h5pset_chunk_f(dcpl_id, 1, chunk1, iError)
+         call h5dcreate_f(file_id, "iteration", H5T_NATIVE_INTEGER, dspace_id, dset_id, iError, dcpl_id)
+         call h5dclose_f(dset_id, iError)
+         call h5sclose_f(dspace_id, iError)
+         call h5pclose_f(dcpl_id, iError)
+
+         ! /<varname>  (extendible × nProbes) — h5ls shows {nProbes, Inf}
+         ! chunk2(1)=1: one time step per chunk avoids pre-allocation waste when
+         ! the save-timestep filter makes n_write << BUFFER_SIZE per flush.
+         dims2(1)    = 0
+         dims2(2)    = int(no_of_fileProbes, HSIZE_T)
+         maxdims2(1) = H5S_UNLIMITED_F
+         maxdims2(2) = int(no_of_fileProbes, HSIZE_T)
+         chunk2(1)   = int(1, HSIZE_T)
+         chunk2(2)   = int(no_of_fileProbes, HSIZE_T)
+
+         do v = 1, nv
+            call h5screate_simple_f(2, dims2, dspace_id, iError, maxdims2)
+            call h5pcreate_f(H5P_DATASET_CREATE_F, dcpl_id, iError)
+            call h5pset_chunk_f(dcpl_id, 2, chunk2, iError)
+            call h5dcreate_f(file_id, trim(self % probesVariables(v)), H5T_NATIVE_DOUBLE, &
+                             dspace_id, dset_id, iError, dcpl_id)
+            call h5dclose_f(dset_id, iError)
+            call h5sclose_f(dspace_id, iError)
+            call h5pclose_f(dcpl_id, iError)
+         end do
+
+      end if   ! .not. file_exists
 
       ! Keep the file open so Monitor_WriteFileProbesHDF5 can reuse the
       ! handle without paying a filesystem open/close on every probe save.
@@ -2654,8 +2682,9 @@ end subroutine getNoOfMonitors
       n_write = no_of_lines
 
       ! Reuse the persistent file handle opened by Monitor_InitFileProbesHDF5.
-      ! On restart (FirstCall=.false.) the init routine is skipped, so open
-      ! lazily here if the handle is not yet valid.
+      ! Reuse the persistent file handle opened by Monitor_InitFileProbesHDF5.
+      ! On resume the init routine opens the existing file, so the handle is
+      ! already valid; the lazy open below covers any unforeseen edge case.
       if ( hdf5_fp_open ) then
          file_id = hdf5_fp_fid
       else
