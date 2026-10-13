@@ -1,0 +1,248 @@
+name: PERFORMANCE PARALLEL (MPI) GPU
+
+########################################################################
+###                                                                  ###
+###  Manually-triggered performance benchmark.                       ###
+###                                                                  ###
+###  This workflow is NOT part of the automatic CI: the cases run    ###
+###  here are production-sized and take far longer than the          ###
+###  correctness tests, so it is only ever launched on demand to     ###
+###  measure the effect of a change on the solver run time.          ###
+###                                                                  ###
+###  The timings are extracted from the solver output and written    ###
+###  to the run summary page, so they can be read without opening    ###
+###  the job log.                                                    ###
+###                                                                  ###
+########################################################################
+
+on:
+  workflow_dispatch:
+  #manual trigger only 
+jobs:
+  wait-guard:
+    name: Runner availability guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 2880   # 48 hours
+    steps:
+    # This job serves as a guard to prevent the workflow from pending indefinitely if the self-hosted GPU runner is not available.
+      - run: echo "GPU runner did not appear within 48 hours"
+
+  parallel-gpu-performance:
+    # Uses self-hosted runner on nibbler cluster with GPU access
+    name: Parallel GPU Performance (NVFORTRAN)
+    runs-on: [self-hosted, nibbler, gpu]
+    # Much longer than the CI workflows: the benchmark itself runs for a
+    # good while and the SLURM queue wait counts towards this budget too.
+    timeout-minutes: 480
+
+    env:
+      METIS_HOME: ${{ github.workspace }}/metis-5.1.0/build/Linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fix ownership so the SLURM job user can read all checked-out files.
+      # Root (or the runner service account) owns files after checkout; a.ballout
+      # needs read access to mesh files, binaries, and control files at runtime.
+      - name: Fix workspace ownership
+        run: sudo chown -R a.ballout:a.ballout $GITHUB_WORKSPACE
+
+      # Install METIS library (required for parallel partitioning)
+      - name: Install METIS
+        run: |
+          module purge
+          module load cmake
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+
+          if [ ! -d "metis-5.1.0" ]; then
+            wget "https://src.fedoraproject.org/lookaside/pkgs/metis/metis-5.1.0.tar.gz/5465e67079419a69e0116de24fce58fe/metis-5.1.0.tar.gz"
+            tar -xvf metis-5.1.0.tar.gz
+            cd metis-5.1.0
+            # Update CMake minimum required version to 3.5
+            sed -i 's/cmake_minimum_required(VERSION [0-9.]\+)/cmake_minimum_required(VERSION 3.5)/' CMakeLists.txt
+            make config cc=gcc
+            make
+            mkdir -p build/Linux-x86_64/lib build/Linux-x86_64/bin
+            cp -r build/Linux-x86_64/libmetis/* build/Linux-x86_64/lib/ 2>/dev/null || true
+            cp -r build/Linux-x86_64/programs/* build/Linux-x86_64/bin/ 2>/dev/null || true
+          fi
+
+      - name: Configure Horses3D
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          cd Solver
+          ./configure
+
+      # Only the Navier-Stokes solver is needed by the performance cases.
+      # 'allclean' guarantees the timings come from a build of this commit only.
+      - name: Compile horses3d
+        working-directory: ./Solver
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          make allclean COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+          make ns COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+
+########################################################################
+#######              TAYLOR GREEN VORTEX (PERFORMANCE)          ########
+########################################################################
+#
+# Split-Form / Chandrasekar on Gauss-Lobatto nodes, P7 on a 32x32x32
+# element mesh. No monitors and a single solution dump at the end, so
+# essentially all of the measured time is spent in the spatial operator.
+#
+
+      - name: Build TaylorGreenPerformance
+        working-directory: ./Solver/test/NavierStokes/TaylorGreenPerformance/SETUP
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          make clean || true
+          make ns COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+        if: '!cancelled()'
+
+      - name: Fix test directory ownership
+        run: sudo chown -R a.ballout:a.ballout $GITHUB_WORKSPACE
+        if: '!cancelled()'
+
+      - name: Run TaylorGreenPerformance
+        working-directory: ./Solver/test/NavierStokes/TaylorGreenPerformance
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+
+          cat > run_test.sh << 'EOF'
+          #!/bin/bash
+          #SBATCH --job-name=TaylorGreenPerformance
+          #SBATCH --ntasks=2
+          #SBATCH --partition=gpu
+          #SBATCH --mem=64G
+          #SBATCH --gres=gpu:2  # number of gpus max 4
+          #SBATCH --time=06:00:00
+          #SBATCH --exclusive   # keep the node to ourselves so the timings are not polluted
+
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          nvidia-smi
+          mpirun -np 2 --bind-to none ./horses3d.ns TaylorGreen.control
+          EOF
+
+          job_id=$(sbatch --uid=a.ballout --parsable run_test.sh)
+          if ! echo "$job_id" | grep -qE '^[0-9]+$'; then
+            echo "sbatch did not return a job id (got: '$job_id')"
+            exit 1
+          fi
+          echo "Submitted SLURM job $job_id"
+
+          # Heartbeat while we wait: this benchmark runs for a long time and a
+          # silent log is indistinguishable from a hung runner.
+          waited=0
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do
+            sleep 30
+            waited=$((waited + 30))
+            if [ $((waited % 300)) -eq 0 ]; then
+              echo "[$(date -u +%H:%M:%S)] job $job_id still queued/running (${waited}s elapsed)"
+            fi
+          done
+
+          out="slurm-${job_id}.out"
+          # Guarded: a missing output file must not abort the step before the
+          # summary and the exit code check below have had their say.
+          if [ -f "$out" ]; then
+            cat "$out"
+          else
+            echo "WARNING: $out not found; the job produced no output file."
+          fi
+
+          #
+          # Performance summary
+          # -------------------
+          # These lines are printed by DisplaySimulationStatistics, see
+          # Solver/src/NavierStokesSolver/main.f90
+          #
+          value_after() { grep -m1 -F "$1" "$out" 2>/dev/null | awk -F"$1" '{print $2}' | awk '{print $1}'; }
+
+          n_elements=$(grep -m1 -F ' elements with polynomial order ' "$out" 2>/dev/null | awk '{print $2}')
+          n_dof=$(value_after 'NDOF = ' | tr -d ').')
+          n_steps=$(grep -i -m1 'Number of time steps' TaylorGreen.control | awk -F= '{print $2}' | tr -d ' ')
+          t_prep=$(value_after 'Preprocessing time: ')
+          t_elapsed=$(value_after 'Simulation elapsed time: ')
+          t_cpu=$(value_after 'Simulation CPU time: ')
+          ratio=$(grep -m1 -F 'Simulation CPU time: ' "$out" 2>/dev/null | sed -n 's/.*ratio is *\([^)]*\)).*/\1/p')
+          efficiency=$(value_after 'Solver efficiency: ')
+
+          {
+            printf '## TaylorGreen performance - parallel GPU (MPI, 2 ranks / 2 GPUs)\n\n'
+            printf 'Commit `%s` on `%s`, nvfortran / COMM=PARALLEL / WITH_METIS=YES.\n\n' "$GITHUB_SHA" "$GITHUB_REF_NAME"
+            printf '| Metric | Value |\n'
+            printf '| :--- | ---: |\n'
+            printf '| Elements | %s |\n'                              "${n_elements:-n/a}"
+            printf '| NDOF | %s |\n'                                  "${n_dof:-n/a}"
+            printf '| Time steps | %s |\n'                            "${n_steps:-n/a}"
+            printf '| Preprocessing time (s) | %s |\n'                "${t_prep:-n/a}"
+            printf '| **Simulation elapsed time (s)** | **%s** |\n'    "${t_elapsed:-n/a}"
+            printf '| **Simulation CPU time (s)** | **%s** |\n'        "${t_cpu:-n/a}"
+            printf '| CPU / elapsed ratio | %s |\n'                   "${ratio:-n/a}"
+            printf '| Solver efficiency (s per million DOF x iter) | %s |\n' "${efficiency:-n/a}"
+            printf '\n<details><summary>Stopwatch breakdown</summary>\n\n'
+            printf '```\n'
+            cat RESULTS/TGV.Stopwatch.info 2>/dev/null || printf 'not produced\n'
+            printf '```\n\n</details>\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+        if: '!cancelled()'
