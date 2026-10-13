@@ -1293,7 +1293,7 @@ module StorageClass
 !     Interpolate solution to another element storage
 !            this % Q  ->  other % Q
 !     -----------------------------------------------
-      impure elemental subroutine ElementStorage_InterpolateSolution(this,other,nodes,with_gradients)
+      subroutine ElementStorage_InterpolateSolution(this,other,nodes,with_gradients)
          implicit none
          !-arguments----------------------------------------------
          class(ElementStorage_t), intent(in)    :: this

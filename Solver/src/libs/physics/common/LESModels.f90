@@ -9,7 +9,7 @@ module LESModels
    use FluidData
 #if defined(NAVIERSTOKES)
    use Physics_NSKeywordsModule
-   use VariableConversion_NS     , only: getVelocityGradients, getTemperatureGradient, getVelocityGradients_State
+   use VariableConversion_NS     , only: getVelocityGradients, getTemperatureGradient, getVelocityGradients_SELECTED
 #elif defined(INCNS)
    use Physics_iNSKeywordsModule
    use VariableConversion_iNS     ,only: getVelocityGradients
@@ -318,7 +318,7 @@ module LESModels
          !-------------------------------------------------------
 #if !defined(INCNS)
          !call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-         call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         call getVelocityGradients_SELECTED(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
 #else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
 #endif
@@ -435,7 +435,7 @@ module LESModels
          
 #if !defined(INCNS)
          !call getVelocityGradients  (Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-         call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         call getVelocityGradients_SELECTED(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
 #else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
 #endif
@@ -572,7 +572,7 @@ module LESModels
 
 #if !defined(INCNS)
          !call getVelocityGradients  (Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
-         call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         call getVelocityGradients_SELECTED(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
 #else
          call getVelocityGradients(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
 #endif

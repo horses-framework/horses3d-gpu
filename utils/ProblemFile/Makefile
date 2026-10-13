@@ -54,7 +54,7 @@ INTEL_DEBUG_FLAGS= -cpp -O0 -g -warn all -fpscomp logicals -traceback \
 		   -check bounds -check uninit -ftrapuv -debug all \
 		   -ftrace=full -ftz -fp-model precise \
 		   -fp-speculation=off -assume bscc -D_has_Quad
-NVFORTRAN_RELEASE_FLAGS= -O3 -fast -Mfree -Mbackslash -Mpreprocess
+NVFORTRAN_RELEASE_FLAGS= -O3 -fast -cuda -Mfree -Mbackslash -Mpreprocess
 ARFLAGS=crv
 
 TARGET=./libproblemfile

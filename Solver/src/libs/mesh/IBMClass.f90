@@ -1072,9 +1072,12 @@ module IBMClass
       end if
       !$acc wait
 
+#ifdef _OPENACC
+      !$acc parallel loop present(this, elements)
+#else
 !$omp parallel
 !$omp do schedule(runtime) private(i,j,k,eID)
-      !$acc parallel loop present(this, elements)
+#endif
       do n = 1, this% BandRegion(STLNum)% NumOfObjs
          if( this% BandRegion(STLNum)% x(n)% partition .eq. MPI_Process% rank ) then
             i   = this% BandRegion(STLNum)% x(n)% local_Position(1)
@@ -1089,9 +1092,12 @@ module IBMClass
             end if
          end if
       end do
+#ifdef _OPENACC
       !$acc end parallel loop
+#else
 !$omp end do
 !$omp end parallel
+#endif
 
       !$acc wait
       !Update CPU variables
@@ -2092,19 +2098,24 @@ module IBMClass
 
       !$acc wait
       if( this % Wallfunction ) call this % GetBandRegionStates( elements )
-!$omp parallel
-      !$omp do schedule(runtime) private(i,j,k)
+#ifdef _OPENACC
       !$acc parallel loop gang present(this, elements)
+#else
+!$omp parallel
+!$omp do schedule(runtime) private(i,j,k)
+#endif
       do eID = 1, SIZE( elements )
-         !$acc loop vector collapse(3)   
+         !$acc loop vector collapse(3)
          do i = 0, elements(eID) % Nxyz(1); do j = 0, elements(eID) % Nxyz(2); do k = 0, elements(eID) % Nxyz(3)
             if( elements(eID) % isInsideBody(i,j,k) ) then 
                call IBM_GetSemiImplicitStep(this, eID, 0.5_RP*dt, elements(eID) % storage % Q(:,i,j,k) ) 
-            end if 
+            end if
          end do; end do; end do
       end do
+#ifdef _OPENACC
       !$acc end parallel loop
-!$omp end do 
+#else
+!$omp end do
 
       if( this% Wallfunction ) then
 !$omp do schedule(runtime) private(i,j,k)
@@ -2119,7 +2130,8 @@ module IBMClass
          end do
 !$omp end do 
       end if 
-!$omp end parallel    
+!$omp end parallel
+#endif
     end subroutine IBM_SemiImplicitCorrection
     
    subroutine IBM_GetBandRegionStates( this, elements )

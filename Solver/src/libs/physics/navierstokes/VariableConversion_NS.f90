@@ -11,6 +11,7 @@ module VariableConversion_NS
    public   NSGradientVariables_STATE
    public   NSGradientVariables_ENTROPY
    public   NSGradientVariables_ENERGY
+   public   NSGradientVariables_SELECTED, getVelocityGradients_SELECTED
    public   getPrimitiveVariables, getEntropyVariables
    public   getRoeVariables, GetNSViscosity, getVelocityGradients, getTemperatureGradient, getConservativeGradients
    public   set_getVelocityGradients
@@ -197,6 +198,23 @@ module VariableConversion_NS
 !! quantities of which the gradients will be taken.
 !---------------------------------------------------------------------
 !
+      pure subroutine NSGradientVariables_SELECTED(nEqn, nGrad, Q, U, rho_)
+         !$acc routine seq
+         integer, intent(in) :: nEqn, nGrad
+         real(RP), intent(in) :: Q(nEqn)
+         real(RP), intent(out) :: U(nGrad)
+         real(RP), intent(in), optional :: rho_
+
+         select case (grad_vars)
+         case (GRADVARS_ENERGY)
+            call NSGradientVariables_ENERGY(nEqn, nGrad, Q, U)
+         case (GRADVARS_ENTROPY)
+            call NSGradientVariables_ENTROPY(nEqn, nGrad, Q, U)
+         case default
+            call NSGradientVariables_STATE(nEqn, nGrad, Q, U)
+         end select
+      end subroutine NSGradientVariables_SELECTED
+
       pure subroutine NSGradientVariables_STATE( nEqn, nGrad, Q, U, rho_ )
          !$acc routine seq
          implicit none
@@ -376,6 +394,21 @@ module VariableConversion_NS
 !     Routines to get the velocity gradients
 !     --------------------------------------
 !
+      pure subroutine getVelocityGradients_SELECTED(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         !$acc routine seq
+         real(RP), intent(in) :: Q(NCONS), Q_x(NGRAD), Q_y(NGRAD), Q_z(NGRAD)
+         real(RP), intent(out) :: U_x(NDIM), U_y(NDIM), U_z(NDIM)
+
+         select case (grad_vars)
+         case (GRADVARS_ENERGY)
+            call getVelocityGradients_Energy(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         case (GRADVARS_ENTROPY)
+            call getVelocityGradients_Entropy(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         case default
+            call getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
+         end select
+      end subroutine getVelocityGradients_SELECTED
+
       pure subroutine getVelocityGradients_State(Q,Q_x,Q_y,Q_z,U_x,U_y,U_z)
          !$acc routine seq
          implicit none
@@ -430,9 +463,9 @@ module VariableConversion_NS
          pDivRho = Pressure(Q) / Q(IRHO)
          U = Q(IRHOU:IRHOW) / Q(IRHO)
 
-         U_x = pDivRho * Q_x(IRHOU:IRHOW) + U / pDivRho * Q_x(IRHOE)
-         U_y = pDivRho * Q_y(IRHOU:IRHOW) + U / pDivRho * Q_y(IRHOE)
-         U_z = pDivRho * Q_z(IRHOU:IRHOW) + U / pDivRho * Q_z(IRHOE)
+         U_x = pDivRho * (Q_x(IRHOU:IRHOW) + U * Q_x(IRHOE))
+         U_y = pDivRho * (Q_y(IRHOU:IRHOW) + U * Q_y(IRHOE))
+         U_z = pDivRho * (Q_z(IRHOU:IRHOW) + U * Q_z(IRHOE))
 
       end subroutine getVelocityGradients_Entropy
 

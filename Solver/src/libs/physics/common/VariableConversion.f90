@@ -4,6 +4,7 @@ module VariableConversion
    use VariableConversion_NS
 #elif defined(SPALARTALMARAS)
    USE VariableConversion_NSSA
+   use VariableConversion_NSSA, only: NSGradientVariables_SELECTED => NSGradientVariables_STATE
 #elif defined(INCNS)
    use VariableConversion_iNS
 #elif defined(MULTIPHASE)

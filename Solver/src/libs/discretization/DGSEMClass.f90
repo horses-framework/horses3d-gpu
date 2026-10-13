@@ -643,9 +643,12 @@ Module DGSEMClass
       R6 = 0.0_RP
       c    = 0.0_RP 
 
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh) reduction(max:R1,R2,R3,R4,R5,c)
+#else
 !$omp parallel shared(maxResidual, R1, R2, R3, R4, R5, R6, c, mesh) default(private)
 !$omp do reduction(max:R1,R2,R3,R4,R5,R6,c) schedule(runtime)
+#endif
       DO id = 1, SIZE( mesh % elements )
          N = mesh % elements(id) % Nxyz
          
@@ -700,9 +703,12 @@ Module DGSEMClass
 
       
       END DO
+#ifdef _OPENACC
+!$acc end parallel loop
+#else
 !$omp end do
 !$omp end parallel
-!$acc end parallel loop
+#endif
       
 
 #if defined FLOW && (!(SPALARTALMARAS))
@@ -778,9 +784,12 @@ Module DGSEMClass
       TimeStep_Conv = huge(1._RP)
       TimeStep_Visc = huge(1._RP)
       if (present(MaxDtVec)) MaxDtVec = huge(1._RP)
+#ifdef _OPENACC
 !$acc parallel loop gang present(self) copyin(cfl, dcfl) reduction(min:TimeStep_Conv,TimeStep_Visc)
+#else
 !$omp parallel shared(self,TimeStep_Conv,TimeStep_Visc,NodalStorage,cfl,dcfl,flowIsNavierStokes,MaxDtVec) default(private)
 !$omp do reduction(min:TimeStep_Conv,TimeStep_Visc) schedule(runtime)
+#endif
       do eID = 1, SIZE(self % mesh % elements)
          N = self % mesh % elements(eID) % Nxyz
 
@@ -876,9 +885,12 @@ Module DGSEMClass
 
          end do ; end do ; end do
       end do
+#ifdef _OPENACC
+!$acc end parallel loop
+#else
 !$omp end do
 !$omp end parallel
-!$acc end parallel loop
+#endif
 
       !!$acc update host(TimeStep_Conv, TimeStep_Visc)
 

@@ -369,7 +369,7 @@ module FreeSlipWallBCClass
             do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
                Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
 
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q, u_int)
+               call NSGradientVariables_SELECTED(NCONS, NGRAD, Q, u_int)
 
                Q_aux(IRHO) = Q(IRHO)
                Q_aux(IRHOU:IRHOW) = Q(IRHOU:IRHOW)
@@ -377,7 +377,7 @@ module FreeSlipWallBCClass
 #if defined(SPALARTALMARAS)
                Q_aux(IRHOTHETA)= Q(IRHOTHETA)
 #endif
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
+               call NSGradientVariables_SELECTED(NCONS, NGRAD, Q_aux, u_star)
 
                mesh % faces(fID) % storage(1) % unStar(:,1,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(1,i,j) * mesh % faces(fID) % geom % jacobian(i,j)
                mesh % faces(fID) % storage(1) % unStar(:,2,i,j) = (u_star-u_int) * mesh % faces(fID) % geom % normal(2,i,j) * mesh % faces(fID) % geom % jacobian(i,j)    

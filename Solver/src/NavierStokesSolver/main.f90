@@ -209,6 +209,8 @@
 !
 #ifdef _OPENACC
       call sem % mesh % ExitDeviceData()
+!     balance the shallow mapping created and fixes a seg fault that used to happen
+      !$acc exit data delete(sem)
       print*, "I delete the data from the GPU"
 #endif
 

@@ -280,8 +280,8 @@ module GenericBoundaryConditionClass
                call iNSGradientVariables(NCONS, NGRAD, Q    , u_int)
                call iNSGradientVariables(NCONS, NGRAD, Q_aux, u_star)
 #else
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q    , u_int)
-               call NSGradientVariables_STATE(NCONS, NGRAD, Q_aux, u_star)
+               call NSGradientVariables_SELECTED(NCONS, NGRAD, Q    , u_int)
+               call NSGradientVariables_SELECTED(NCONS, NGRAD, Q_aux, u_star)
 #endif
 
                u_star = 0.5_RP* (u_star + u_int)

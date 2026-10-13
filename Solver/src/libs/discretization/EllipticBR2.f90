@@ -199,14 +199,20 @@ module EllipticBR2
             end do
 !$omp end do nowait
          else
-!$omp do schedule(runtime) private(fID)
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh) private(fID)
+#else
+!$omp do schedule(runtime) private(fID)
+#endif
             do iFace = 1, size(mesh % faces_interior)
                fID = mesh % faces_interior(iFace)
                call BR2_GradientInterfaceSolution(self, mesh % faces(fID), nEqn, nGradEqn)
             end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do nowait
+#endif
          end if
          !$acc wait
          print*, "I am in BR2 line 232"
@@ -219,14 +225,20 @@ module EllipticBR2
             end do
 !$omp end do 
          else
-!$omp do schedule(runtime) private(fID)
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh)
+#else
+!$omp do schedule(runtime) private(fID)
+#endif
             do iFace = 1, size(mesh % faces_boundary)
                fID = mesh % faces_boundary(iFace)
                call BR2_GradientInterfaceSolutionBoundary(mesh % faces(fID), nEqn, nGradEqn, time)
             end do
+#ifdef _OPENACC
 !$acc end parallel loop
-!$omp end do 
+#else
+!$omp end do
+#endif
          end if
          !$acc wait
          print*, "I am in BR2 line 254"
@@ -244,14 +256,20 @@ module EllipticBR2
             end do
 !$omp end do
          else
-!$omp do schedule(runtime) private(eID) 
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh, self) copyin(self)
+#else
+!$omp do schedule(runtime) private(eID)
+#endif
             do iEl = 1, size(mesh % elements_sequential)
                eID = mesh % elements_sequential(iEl)
                call BR2_ComputeGradientFaceIntegrals(self, nGradEqn, mesh % elements(eID), mesh)
             end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
          end if
          !$acc wait
          print*, "I am in BR2 line 278"
@@ -272,14 +290,20 @@ module EllipticBR2
 !        Compute MPI interface solutions
 !        *******************************
 !
-!$omp do schedule(runtime) private(fID)
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh)
+#else
+!$omp do schedule(runtime) private(fID)
+#endif
          do iFace = 1, size(mesh % faces_mpi)
             fID = mesh % faces_mpi(iFace)
             call BR2_GradientInterfaceSolutionMPI(self, mesh % faces(fID), nEqn, nGradEqn)
          end do
+#ifdef _OPENACC
 !$acc end parallel loop
-!$omp end do 
+#else
+!$omp end do
+#endif
 !
 !        **************************************************
 !        Compute face integrals for elements with MPI faces
@@ -293,14 +317,20 @@ module EllipticBR2
             end do
 !$omp end do
          else
-!$omp do schedule(runtime) private(eID)
+#ifdef _OPENACC
 !$acc parallel loop gang present(mesh, self) copyin(self)
+#else
+!$omp do schedule(runtime) private(eID)
+#endif
             do iEl = 1, size(mesh % elements_mpi)
                eID = mesh % elements_mpi(iEl)
                call BR2_ComputeGradientFaceIntegrals(self, nGradEqn, mesh % elements(eID), mesh)
             end do
+#ifdef _OPENACC
 !$acc end parallel loop
+#else
 !$omp end do
+#endif
          end if
 #endif
 
@@ -538,8 +568,8 @@ module EllipticBR2
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)           
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            call NSGradientVariables_SELECTED(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+            call NSGradientVariables_SELECTED(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
 #endif
 
             !$acc loop seq
@@ -599,8 +629,8 @@ module EllipticBR2
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(1) % Q(:,i,j), U = UL)
             call iNSGradientVariables(nEqn, nGradEqn, Q = f % storage(2) % Q(:,i,j), U = UR)              
 #else
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
-            call NSGradientVariables_STATE(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
+            call NSGradientVariables_SELECTED(nEqn, nGradEqn, f % storage(1) % Q(:,i,j), UL)
+            call NSGradientVariables_SELECTED(nEqn, nGradEqn, f % storage(2) % Q(:,i,j), UR)
 #endif
    
             Uhat = 0.5_RP * (UL - UR) * f % geom % jacobian(i,j)
