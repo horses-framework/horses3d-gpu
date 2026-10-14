@@ -50,6 +50,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/CylinderGradVarsEnergy \
             ./NavierStokes/CylinderProbeFileASCII \
             ./NavierStokes/CylinderProbeFileHDF5 \
+            ./NavierStokes/CylinderProbeFileAnalytic \
             ./NavierStokes/FavreStatistics \
             ./NavierStokes/CylinderFAS \
             ./NavierStokes/CylinderAnisFAS \

@@ -432,6 +432,69 @@ jobs:
           fi
         if: '!cancelled()'
 
+# Analytic linear field (0 time steps): every file-probe value and
+# gradient is compared with the exact field at the probe coordinates.
+
+      - name: Build NSCylinderProbeFileAnalytic
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileAnalytic/SETUP
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          make clean || true
+          make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+
+      - name: Run NSCylinderProbeFileAnalytic
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileAnalytic
+        run: |
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+
+          cat > run_test.sh << 'EOF'
+          #!/bin/bash
+          #SBATCH --job-name=NSCylinderProbeFileAnalytic_Serial
+          #SBATCH --ntasks=1
+          #SBATCH --mem=20G
+          #SBATCH --partition=gpu
+          #SBATCH --gres=gpu:1
+          #SBATCH --time=00:15:00
+
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          ./horses3d.ns CylinderProbeFileAnalytic.control
+          EOF
+
+          job_id=$(sbatch --parsable run_test.sh)
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+
+          cat slurm-${job_id}.out
+
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+        if: '!cancelled()'
+
+
       - name: Build NSCylinderProbeFileHDF5
         working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5/SETUP
         run: |
