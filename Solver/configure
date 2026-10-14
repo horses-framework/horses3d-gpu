@@ -47,6 +47,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/Cylinder \
             ./NavierStokes/CylinderProbeFileASCII \
             ./NavierStokes/CylinderProbeFileHDF5 \
+            ./NavierStokes/CylinderProbeFileAnalytic \
             ./NavierStokes/CylinderFAS \
             ./NavierStokes/CylinderAnisFAS \
             ./NavierStokes/CylinderBR2 \
