@@ -731,6 +731,14 @@ end module ProblemFileFunctions
                                      msg = "File-probe element/weights reproduce probe position")
                end if
             end block
+!
+!           Values at the line probes, for capturing ground truth from CI logs.
+            if ( MPI_Process % isRoot ) then
+               do k = 5, monitors % no_of_fileProbes
+                  write(STD_OUT,'(A,I4,*(1X,ES24.16))') "FP_GROUND_TRUTH ", k, &
+                     monitors % fp_buf( (k-1)*size(monitors % probesVariables) + 1 : k*size(monitors % probesVariables) )
+               end do
+            end if
 
             CALL FTAssertEqual(expectedValue = cd, &
                                actualValue   = monitors % surfaceMonitors(1) % values(1), &
