@@ -503,7 +503,6 @@ end module ProblemFileFunctions
             use PhysicsStorage
             use FluidData
             use MonitorsClass
-            use NodalStorageClass, only: NodalStorage
             use MPI_Process_Info
 #ifdef _HAS_MPI_
             use mpi
@@ -675,70 +674,64 @@ end module ProblemFileFunctions
                                   msg           = "File-probe velocity at the point [0,2.0,4.0]")
             end if
 !
-!           File-probes 5..nfp lie on three lines (streamwise, cross-stream,
-!           spanwise) that cross many element faces, so the init-time search
-!           must step from the previous probe's element into its neighbours.
-!           Each u is compared with an independent brute-force search over all
-!           local elements, using the same ownership rule (highest rank).
+!           Every owned file-probe must map back onto its own coordinates:
+!           x_rec = sum l_i(xi) l_j(eta) l_k(zeta) * geom%x(:,i,j,k) over the
+!           stored element and Lagrange weights. Probes 5..nfp lie on three
+!           lines crossing many element faces, so a wrong element or a xi
+!           from a failed Newton solve in the init-time search shows up here.
+!           Only data is read: calling mesh/spectral procedures from this
+!           shared library would pull non-PIC objects into the link.
 !           -----------------------------------------------------------------
             block
-               integer       :: p, ie, ii, jj, kk, owner, gowner, nNotFound, worst, ierr
-               real(kind=RP) :: x(NDIM), xi(NDIM), uref, err, maxErr
-               logical       :: found
+               integer       :: p, q, ie, ii, jj, kk, nInactive, worst, ierr
+               integer       :: Nx(3)
+               real(kind=RP) :: xrec(NDIM), err, maxErr
 
-               maxErr = 0.0_RP ; worst = 0 ; nNotFound = 0
-               do p = 5, monitors % no_of_fileProbes
-                  x = monitors % fp_x(:,p)
-                  found = .false.
-                  do ie = 1, mesh % no_of_elements
-                     if ( mesh % elements(ie) % FindPointWithCoords(x, mesh % dir2D_ctrl, xi) ) then
-                        found = .true.
-                        exit
-                     end if
-                  end do
-                  owner = -1
-                  uref  = 0.0_RP
-                  if ( found ) then
-                     owner = MPI_Process % rank
-                     associate( e   => mesh % elements(ie), &
-                                Nx  => mesh % elements(ie) % Nxyz )
-                     associate( lx => NodalStorage(Nx(1)) % lj(xi(1)), &
-                                ly => NodalStorage(Nx(2)) % lj(xi(2)), &
-                                lz => NodalStorage(Nx(3)) % lj(xi(3)) )
-                     do kk = 0, Nx(3) ; do jj = 0, Nx(2) ; do ii = 0, Nx(1)
-                        uref = uref + lx(ii)*ly(jj)*lz(kk) * e % storage % Q(IRHOU,ii,jj,kk) &
-                                                         / e % storage % Q(IRHO ,ii,jj,kk)
-                     end do ; end do ; end do
-                     end associate
-                     end associate
-                  end if
-                  gowner = owner
-#ifdef _HAS_MPI_
-                  if ( MPI_Process % doMPIAction ) then
-                     call MPI_Allreduce(owner, gowner, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, ierr)
-                     if ( MPI_Process % rank .ne. gowner ) uref = 0.0_RP
-                     call MPI_Allreduce(MPI_IN_PLACE, uref, 1, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
-                  end if
+               maxErr    = 0.0_RP
+               worst     = 0
+               nInactive = count( .not. monitors % fp_active )
+#ifdef _OPENACC
+               do p = 1, monitors % no_of_fileProbes
+                  if ( .not. monitors % fp_ownsProbe(p) ) cycle
+                  ie   = monitors % fp_eID(p)
+                  Nx   = mesh % elements(ie) % Nxyz
+                  xrec = 0.0_RP
+                  do kk = 0, Nx(3) ; do jj = 0, Nx(2) ; do ii = 0, Nx(1)
+                     xrec = xrec + monitors % fp_lxi(ii,p) * monitors % fp_leta(jj,p) &
+                                 * monitors % fp_lzeta(kk,p) * mesh % elements(ie) % geom % x(:,ii,jj,kk)
+                  end do ; end do ; end do
+#else
+               do q = 1, monitors % fp_nOwned
+                  p    = monitors % fp_ownedIdx(q)
+                  ie   = monitors % fp_cpu_eID(q)
+                  Nx   = mesh % elements(ie) % Nxyz
+                  xrec = 0.0_RP
+                  do kk = 0, Nx(3) ; do jj = 0, Nx(2) ; do ii = 0, Nx(1)
+                     xrec = xrec + monitors % fp_cpu_lxi(ii,q) * monitors % fp_cpu_leta(jj,q) &
+                                 * monitors % fp_cpu_lzeta(kk,q) * mesh % elements(ie) % geom % x(:,ii,jj,kk)
+                  end do ; end do ; end do
 #endif
-                  if ( gowner .lt. 0 ) then
-                     nNotFound = nNotFound + 1
-                     cycle
-                  end if
-                  err = abs( monitors % fp_buf((p-1)*nv + 1) - uref )
+                  err = maxval( abs( xrec - monitors % fp_x(:,p) ) )
                   if ( .not. (err .le. maxErr) ) then
                      maxErr = err
                      worst  = p
                   end if
                end do
 
+               if ( worst .gt. 0 .and. .not. (maxErr .le. 1.0e-6_RP) ) &
+                  write(STD_OUT,'(A,I0,A,I0,A,ES12.4)') "File-probe position check: rank ", &
+                     MPI_Process % rank, ", worst probe ", worst, ", |x_rec - x| = ", maxErr
+#ifdef _HAS_MPI_
+               if ( MPI_Process % doMPIAction ) then
+                  call MPI_Allreduce(MPI_IN_PLACE, maxErr, 1, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, ierr)
+               end if
+#endif
                if ( MPI_Process % isRoot ) then
-                  if ( worst .gt. 0 ) write(STD_OUT,'(A,I0,A,ES12.4)') &
-                     "File-probe line check: worst probe ", worst, ", |u - u_ref| = ", maxErr
-                  CALL FTAssertEqual(expectedValue = 0, actualValue = nNotFound, &
-                                     msg = "File-probe line points not found in mesh")
+                  CALL FTAssertEqual(expectedValue = 0, actualValue = nInactive, &
+                                     msg = "File-probes not found in mesh")
                   CALL FTAssertEqual(expectedValue = 1.0_RP, actualValue = maxErr + 1.0_RP, &
-                                     tol = 1.d-10, &
-                                     msg = "File-probe u along lines vs brute-force element search")
+                                     tol = 1.d-6, &
+                                     msg = "File-probe element/weights reproduce probe position")
                end if
             end block
 
