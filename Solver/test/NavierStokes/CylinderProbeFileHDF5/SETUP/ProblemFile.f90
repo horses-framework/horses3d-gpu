@@ -503,7 +503,11 @@ end module ProblemFileFunctions
             use PhysicsStorage
             use FluidData
             use MonitorsClass
+            use NodalStorageClass, only: NodalStorage
             use MPI_Process_Info
+#ifdef _HAS_MPI_
+            use mpi
+#endif
             IMPLICIT NONE
             CLASS(HexMesh)                        :: mesh
             REAL(KIND=RP)                         :: time
@@ -670,6 +674,73 @@ end module ProblemFileFunctions
                                   tol           = 1.d-11, &
                                   msg           = "File-probe velocity at the point [0,2.0,4.0]")
             end if
+!
+!           File-probes 5..nfp lie on three lines (streamwise, cross-stream,
+!           spanwise) that cross many element faces, so the init-time search
+!           must step from the previous probe's element into its neighbours.
+!           Each u is compared with an independent brute-force search over all
+!           local elements, using the same ownership rule (highest rank).
+!           -----------------------------------------------------------------
+            block
+               integer       :: p, ie, ii, jj, kk, owner, gowner, nNotFound, worst, ierr
+               real(kind=RP) :: x(NDIM), xi(NDIM), uref, err, maxErr
+               logical       :: found
+
+               maxErr = 0.0_RP ; worst = 0 ; nNotFound = 0
+               do p = 5, monitors % no_of_fileProbes
+                  x = monitors % fp_x(:,p)
+                  found = .false.
+                  do ie = 1, mesh % no_of_elements
+                     if ( mesh % elements(ie) % FindPointWithCoords(x, mesh % dir2D_ctrl, xi) ) then
+                        found = .true.
+                        exit
+                     end if
+                  end do
+                  owner = -1
+                  uref  = 0.0_RP
+                  if ( found ) then
+                     owner = MPI_Process % rank
+                     associate( e   => mesh % elements(ie), &
+                                Nx  => mesh % elements(ie) % Nxyz )
+                     associate( lx => NodalStorage(Nx(1)) % lj(xi(1)), &
+                                ly => NodalStorage(Nx(2)) % lj(xi(2)), &
+                                lz => NodalStorage(Nx(3)) % lj(xi(3)) )
+                     do kk = 0, Nx(3) ; do jj = 0, Nx(2) ; do ii = 0, Nx(1)
+                        uref = uref + lx(ii)*ly(jj)*lz(kk) * e % storage % Q(IRHOU,ii,jj,kk) &
+                                                         / e % storage % Q(IRHO ,ii,jj,kk)
+                     end do ; end do ; end do
+                     end associate
+                     end associate
+                  end if
+                  gowner = owner
+#ifdef _HAS_MPI_
+                  if ( MPI_Process % doMPIAction ) then
+                     call MPI_Allreduce(owner, gowner, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, ierr)
+                     if ( MPI_Process % rank .ne. gowner ) uref = 0.0_RP
+                     call MPI_Allreduce(MPI_IN_PLACE, uref, 1, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
+                  end if
+#endif
+                  if ( gowner .lt. 0 ) then
+                     nNotFound = nNotFound + 1
+                     cycle
+                  end if
+                  err = abs( monitors % fp_buf((p-1)*nv + 1) - uref )
+                  if ( .not. (err .le. maxErr) ) then
+                     maxErr = err
+                     worst  = p
+                  end if
+               end do
+
+               if ( MPI_Process % isRoot ) then
+                  if ( worst .gt. 0 ) write(STD_OUT,'(A,I0,A,ES12.4)') &
+                     "File-probe line check: worst probe ", worst, ", |u - u_ref| = ", maxErr
+                  CALL FTAssertEqual(expectedValue = 0, actualValue = nNotFound, &
+                                     msg = "File-probe line points not found in mesh")
+                  CALL FTAssertEqual(expectedValue = 1.0_RP, actualValue = maxErr + 1.0_RP, &
+                                     tol = 1.d-10, &
+                                     msg = "File-probe u along lines vs brute-force element search")
+               end if
+            end block
 
             CALL FTAssertEqual(expectedValue = cd, &
                                actualValue   = monitors % surfaceMonitors(1) % values(1), &

@@ -7,7 +7,7 @@ Checks:
   2. The HDF5 file contains the expected datasets (/coordinates, /time,
      /iteration, /u, /v, /w, /rho, /pressure, /mach, /k, /velocity).
   3. Physical sanity: rho > 0, pressure > 0, mach >= 0, velocity >= 0.
-  4. Agreement: the 'u' values for all 4 file probes match the inline-probe
+  4. Agreement: the 'u' values for the 4 file probes at [0,2,4] match the inline-probe
      'u' values to within a tight tolerance.
 
 The script reads HDF5 data using h5dump (subprocess) + numpy so that it
@@ -145,8 +145,13 @@ def main():
     n_probes = shapes["u"][0]   # (nProbes, nSteps) — Fortran-transposed
     n_steps  = shapes["u"][1]
 
-    if n_probes != 4:
-        errors.append(f"Expected 4 file probes in HDF5, got {n_probes}")
+    # Probes 0-3 sit at the inline-probe point; the rest lie on lines
+    # crossing element faces (checked in ProblemFile.f90).
+    n_same = 4
+    with open("probes_wake.dat") as f:
+        n_expected = sum(1 for l in f if l.strip() and not l.lstrip().startswith("#"))
+    if n_probes != n_expected:
+        errors.append(f"Expected {n_expected} file probes in HDF5, got {n_probes}")
 
     # --- Read HDF5 'u' for all 4 probes: shape (n_probes, n_steps) → transpose ---
     u_h5 = _h5dump_array(h5_path, "u", start=(0, 0), count=(n_probes, n_steps)).T
@@ -162,7 +167,7 @@ def main():
         )
     else:
         tol = 1.0e-10
-        for i in range(n_probes):
+        for i in range(n_same):
             max_diff = np.max(np.abs(u_h5[:, i] - u_inline))
             if max_diff > tol:
                 errors.append(
