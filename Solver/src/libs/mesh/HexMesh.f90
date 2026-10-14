@@ -4084,6 +4084,8 @@ slavecoord:             DO l = 1, 4
          integer :: fID, nID, new_eID
          !------------------------------------------------------------
 
+         HexMesh_FindPointWithCoordsInNeighbors = .FALSE.
+
          success = self % elements(eID) % FindPointWithCoords(x, self % dir2D_ctrl, xi)
          if ( success ) then
             HexMesh_FindPointWithCoordsInNeighbors = .TRUE.
