@@ -2134,7 +2134,12 @@ end subroutine getNoOfMonitors
       do i = 1, nFound
          foundLocal(i) = mesh % FindPointWithCoords(allX(:,i), eID_local(i), &
                                                       xi_local(:,i), eID_hint=prev_eID_local)
-         if ( foundLocal(i) ) prev_eID_local = eID_local(i)
+         if ( foundLocal(i) ) then
+            prev_eID_local = eID_local(i)
+            ! Accepted points may sit up to INSIDE_TOL outside [-1,1]; high-order
+            ! Lagrange extrapolation amplifies that, so snap onto the element.
+            xi_local(:,i) = max(-1.0_RP, min(1.0_RP, xi_local(:,i)))
+         end if
          if ( MPI_Process % isRoot .and. mod(i, max(1,nFound/10)) .eq. 0 ) then
             write(STD_OUT,'(30X,A,I3,A)') "   ... ", (i*100)/nFound, "% done"
          end if
