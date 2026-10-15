@@ -1615,6 +1615,7 @@ variable 	&
 \item w
 \item mach
 \item k
+\item rho
 \end{itemize}
 \end{multicols}
 			 &
@@ -1624,6 +1625,72 @@ position 	&
 			\textit{REAL(3)}: Coordinates of the point to be monitored. &
 							\textbf{Mandatory Keyword} \\ \hline
 \end{longtable}
+
+Each probe writes its results to a dedicated \texttt{.probe} file, whose header reports
+the monitor name and its $x$, $y$, $z$ coordinates on a single line:
+
+\begin{lstlisting}
+ Monitor name:      probe_1
+      x, y, z coordinates:         5.0000000000E-01    0.0000000000E+00    0.0000000000E+00
+\end{lstlisting}
+
+\subsection{Probes from a file}
+
+Instead of (or in addition to) defining probes one-by-one with \texttt{\#define probe} blocks,
+a set of probes can be defined in bulk through a plain text \texttt{.dat} file, each line
+holding the coordinates of a point. The same list of variables is sampled at every
+probe in the file, and the probes-file block is defined like any other monitor block:
+
+\begin{lstlisting}
+#define probe file
+   file                = MyProbes.dat
+   variables           = pressure u v
+   probe save timestep = 1.4285714E-03
+#end
+\end{lstlisting}
+
+\begin{longtable}{|p{4cm}|p{10cm}|p{2.2cm}|}
+\caption{Keywords for probes from a file.} \label{tab:ProbesFileKey} \\
+\hline
+\multicolumn{1}{|c|}{\textbf{Keyword}} & \multicolumn{1}{c|}{\textbf{Description}} & \multicolumn{1}{c|}{\textbf{Default value}} \\ \hline
+\endfirsthead
+
+\caption{Keywords for probes from a file - continued.} \\
+\hline
+\multicolumn{1}{|c|}{\textbf{Keyword}} & \multicolumn{1}{c|}{\textbf{Description}} & \multicolumn{1}{c|}{\textbf{Default value}} \\ \hline
+\endhead
+
+file 	&
+			\textit{CHARACTER}: Path to the \texttt{.dat} file defining the probes' coordinates. May optionally be wrapped in quotes (\texttt{"..."} or \texttt{'...'}); case is preserved. &
+							\textbf{Mandatory Keyword} \\ \hline
+
+variables 	&
+			\textit{CHARACTER}: Whitespace-separated list of variables to sample at every probe in the file. &
+							\textbf{Mandatory Keyword} \\ \hline
+
+probe save timestep 	&
+			\textit{REAL}: Minimum physical-time interval between consecutive writes to the \texttt{.probe} files. If omitted or set to zero, data is written every iteration. &
+							0 (every iteration) \\ \hline
+\end{longtable}
+
+\begin{lstlisting}
+# x       y      z
+0.5d0     0.d0   0.d0
+1.0d0     0.d0   0.d0
+2.0d0     1.d0   0.d0
+\end{lstlisting}
+
+Lines that are empty or start with \texttt{\#} are ignored; every remaining line holds the
+\texttt{x y z} coordinates of one probe. For each of these probes a dedicated output file
+\texttt{<solution\_file>.probe\_N.probe} is created (\texttt{N} being the probe's position in the
+file), with one column per variable (as listed in \texttt{variables}) and one row per saved
+time step (in addition to the \texttt{Iteration} and \texttt{Time} columns).
+
+To keep the per-iteration screen log readable when many probes are defined this way,
+file-based probes are excluded from it; their individual \texttt{.probe} files are still
+written normally. Instead, a summary of the probes-file monitor (file path, number of
+probes and sampled variables) is printed once in the startup log, right after the
+"Time integrator" section.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

@@ -635,8 +635,8 @@ module pAdaptationClassTE
       
       call Stopwatch % Pause("pAdapt: Adaptation")
       
-      ! Reconstruct probes
-      do i=1, sem % monitors % no_of_probes
+      ! Reconstruct probes (exclude file-based probes which are re-initialized separately)
+      do i=1, sem % monitors % no_of_probes - sem % monitors % no_of_fileProbes
          call sem % monitors % probes(i) % Initialization (sem % mesh, i, trim(sem % monitors % solution_file), .FALSE.)
       end do
       

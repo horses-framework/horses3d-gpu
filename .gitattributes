@@ -1,0 +1,25 @@
+# Todos los archivos de texto en LF
+* text=auto eol=lf
+
+# Fortran
+*.f90 text eol=lf
+*.F90 text eol=lf
+*.f text eol=lf
+*.F text eol=lf
+
+# Scripts
+*.sh text eol=lf
+*.py text eol=lf
+*.cmake text eol=lf
+Makefile text eol=lf
+
+# Windows
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.pdf binary
+*.zip binary
+*.h5 binary
