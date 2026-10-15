@@ -127,6 +127,7 @@ probe in the file, and the probes-file block is defined like any other monitor b
    variables           = pressure u v
    probe save timestep = 1.4285714E-03
    output format       = ASCII
+   resume              = .false.
 #end
 ```
 
@@ -136,6 +137,11 @@ probe in the file, and the probes-file block is defined like any other monitor b
 | variables           | *CHARACTER*: Whitespace-separated list of variables to sample at every probe in the file. | **Mandatory Keyword** |
 | probe save timestep | *REAL*: Minimum physical-time interval between consecutive writes. If omitted or set to zero, data is written every iteration. | 0 (every iteration) |
 | output format       | *CHARACTER*: Output format for the probe data. `ASCII` writes one `.probe` text file per probe. `HDF5` writes a single `<solution>.probes.h5` file containing all probes (requires compilation with `HAS_HDF5`). | `ASCII` |
+| resume              | *LOGICAL*: Only for `output format = HDF5`. If `.true.` and the `<solution>.probes.h5` file already exists, it is opened and extended instead of overwritten; see [Resuming a simulation](#resuming-a-simulation). | `.false.` |
+
+For Navier-Stokes, the variables that can be sampled are `pressure`, `velocity`, `u`,
+`v`, `w`, `rho`, `mach`, `k` and the Cartesian gradients
+`u_x u_y u_z v_x v_y v_z w_x w_y w_z p_x p_y p_z rho_x rho_y rho_z`.
 
 ```
 # x       y      z
@@ -176,6 +182,27 @@ are written to a single `<solution_file>.probes.h5` file with the following stru
 All variable datasets are extendible — data is appended every time the monitor buffer
 is flushed. This format is recommended for large probe sets (thousands or more) because
 it avoids the overhead of opening and closing a separate file for every probe.
+
+### Resuming a simulation
+
+A restarted simulation normally goes back to a time earlier than the last step stored
+in the probe file. With `resume = .true.` (HDF5 output only) the existing
+`<solution>.probes.h5` is kept and extended as follows:
+
+1. The file is opened in read/write mode; `coordinates` and the existing datasets are
+   not recreated.
+2. Once the restart file has been read, every stored step with `time >= t_restart` is
+   removed from `time`, `iteration` and all the variable datasets. These steps are
+   recomputed by the new run (including the one at `t_restart`), so the file never
+   contains duplicated or out-of-order steps. A line in the startup log reports how
+   many steps were kept.
+3. New steps are appended after the last kept one.
+
+If the file does not exist, or cannot be opened, it is created from scratch. The probes
+file (coordinates and variables) must be the same as in the previous run. Without a
+restart (`restart = .false.`) the initial time is zero, so `resume = .true.` empties
+the datasets: use it only together with `restart = .true.`. With `output format = ASCII`
+the keyword has no effect.
 
 
 ## Surface Monitors
