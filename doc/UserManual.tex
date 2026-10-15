@@ -1664,6 +1664,8 @@ probe in the file, and the probes-file block is defined like any other monitor b
    file                = MyProbes.dat
    variables           = pressure u v
    probe save timestep = 1.4285714E-03
+   output format       = ASCII
+   resume              = .false.
 #end
 \end{lstlisting}
 
@@ -1689,7 +1691,19 @@ variables 	&
 probe save timestep 	&
 			\textit{REAL}: Minimum physical-time interval between consecutive writes to the \texttt{.probe} files. If omitted or set to zero, data is written every iteration. &
 							0 (every iteration) \\ \hline
+
+output format 	&
+			\textit{CHARACTER}: Output format for the probe data. \texttt{ASCII} writes one \texttt{.probe} text file per probe. \texttt{HDF5} writes a single \texttt{<solution>.probes.h5} file containing all the probes (requires compilation with \texttt{HAS\_HDF5}). &
+							\texttt{ASCII} \\ \hline
+
+resume 	&
+			\textit{LOGICAL}: Only for \texttt{output format = HDF5}. If \texttt{.true.} and the \texttt{<solution>.probes.h5} file already exists, it is opened and extended instead of overwritten (see below). &
+							\texttt{.false.} \\ \hline
 \end{longtable}
+
+For Navier-Stokes, the variables that can be sampled are \texttt{pressure}, \texttt{velocity}, \texttt{u}, \texttt{v},
+\texttt{w}, \texttt{rho}, \texttt{mach}, \texttt{k} and the Cartesian gradients
+\texttt{u\_x u\_y u\_z v\_x v\_y v\_z w\_x w\_y w\_z p\_x p\_y p\_z rho\_x rho\_y rho\_z}.
 
 \begin{lstlisting}
 # x       y      z
@@ -1709,6 +1723,33 @@ file-based probes are excluded from it; their individual \texttt{.probe} files a
 written normally. Instead, a summary of the probes-file monitor (file path, number of
 probes and sampled variables) is printed once in the startup log, right after the
 "Time integrator" section.
+
+\subsubsection*{HDF5 output}
+
+When \texttt{output format = HDF5} is set (requires \texttt{HAS\_HDF5} at compile time), all the probes are
+written to a single \texttt{<solution\_file>.probes.h5} file with the following datasets:
+\texttt{coordinates} (x, y, z of each probe, fixed at initialization), \texttt{time} and \texttt{iteration}
+(one value per saved step) and one \texttt{<varname>} dataset of shape \texttt{(nProbes, nTimesteps)} per
+sampled variable. The time-dependent datasets are extendible and data is appended every time the
+monitor buffer is flushed. This format is recommended for large probe sets (thousands or more).
+
+\subsubsection*{Resuming a simulation}
+
+A restarted simulation normally goes back to a time earlier than the last step stored in the probe
+file. With \texttt{resume = .true.} (HDF5 output only) the existing \texttt{<solution\_file>.probes.h5}
+is kept and extended as follows:
+\begin{enumerate}
+\item The file is opened in read/write mode; \texttt{coordinates} and the existing datasets are not recreated.
+\item Once the restart file has been read, every stored step with $t \geq t_{restart}$ is removed from
+\texttt{time}, \texttt{iteration} and all the variable datasets. These steps are recomputed by the new run
+(including the one at $t_{restart}$), so the file never contains duplicated or out-of-order steps. A line in
+the startup log reports how many steps were kept.
+\item New steps are appended after the last kept one.
+\end{enumerate}
+If the file does not exist, or cannot be opened, it is created from scratch. The probes file and the
+sampled variables must be the same as in the previous run. Without a restart (\texttt{restart = .false.}) the
+initial time is zero, so \texttt{resume = .true.} empties the datasets: use it only together with
+\texttt{restart = .true.}. With \texttt{output format = ASCII} the keyword has no effect.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
