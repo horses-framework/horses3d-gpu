@@ -599,7 +599,7 @@ end module ProblemFileFunctions
 
 
             CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
-                               actualValue   = monitors % probes(1) % values(1) + 1, &
+                               actualValue   = monitors % probes(1) % values(1,1) + 1, &
                                tol           = 1.d-11, &
                                msg           = "Wake final x-velocity at the point [0,2.0,4.0]")
 
