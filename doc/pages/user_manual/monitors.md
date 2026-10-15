@@ -191,12 +191,14 @@ in the probe file. With `resume = .true.` (HDF5 output only) the existing
 
 1. The file is opened in read/write mode; `coordinates` and the existing datasets are
    not recreated.
-2. Once the restart file has been read, every stored step with `time >= t_restart` is
-   removed from `time`, `iteration` and all the variable datasets. These steps are
-   recomputed by the new run (including the one at `t_restart`), so the file never
-   contains duplicated or out-of-order steps. A line in the startup log reports how
-   many steps were kept.
-3. New steps are appended after the last kept one.
+2. Once the restart file has been read, every stored step with `time > t_restart` is
+   removed from `time`, `iteration` and all the variable datasets; these steps are
+   recomputed by the new run. The steps up to `t_restart` are kept. A line in the
+   startup log reports how many steps were kept.
+3. No sample is saved at `t_restart` itself, and the `probe save timestep` filter
+   continues from the last kept step. The sampling grid is therefore the same as in an
+   uninterrupted run, and the file never contains duplicated or out-of-order steps.
+4. New steps are appended after the last kept one.
 
 If the file does not exist, or cannot be opened, it is created from scratch. The probes
 file (coordinates and variables) must be the same as in the previous run. Without a

@@ -1740,10 +1740,12 @@ file. With \texttt{resume = .true.} (HDF5 output only) the existing \texttt{<sol
 is kept and extended as follows:
 \begin{enumerate}
 \item The file is opened in read/write mode; \texttt{coordinates} and the existing datasets are not recreated.
-\item Once the restart file has been read, every stored step with $t \geq t_{restart}$ is removed from
-\texttt{time}, \texttt{iteration} and all the variable datasets. These steps are recomputed by the new run
-(including the one at $t_{restart}$), so the file never contains duplicated or out-of-order steps. A line in
-the startup log reports how many steps were kept.
+\item Once the restart file has been read, every stored step with $t > t_{restart}$ is removed from
+\texttt{time}, \texttt{iteration} and all the variable datasets; these steps are recomputed by the new run.
+The steps up to $t_{restart}$ are kept. A line in the startup log reports how many steps were kept.
+\item No sample is saved at $t_{restart}$ itself, and the \texttt{probe save timestep} filter continues from the
+last kept step. The sampling grid is therefore the same as in an uninterrupted run, and the file never
+contains duplicated or out-of-order steps.
 \item New steps are appended after the last kept one.
 \end{enumerate}
 If the file does not exist, or cannot be opened, it is created from scratch. The probes file and the

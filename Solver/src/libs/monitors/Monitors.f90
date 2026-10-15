@@ -84,6 +84,7 @@ module MonitorsClass
       real(kind=RP)                              :: probeFileSaveTimestep = 0.0_RP
       character(len=8)                           :: probeFileOutputFormat = "ASCII"
       logical                                    :: probeFileResume = .false.
+      logical                                    :: fp_skipInitialSave = .false.
       real(kind=RP)                              :: fp_lastSavedTime = -huge(0.0_RP)
       integer                                    :: fp_nOwned = 0
       integer             , allocatable          :: fp_ownedIdx(:)
@@ -650,7 +651,11 @@ module MonitorsClass
 !        every step when save_timestep >> dt wastes most of that cost.
 !        ----------------------------------------------------------
          if ( self % no_of_fileProbes .gt. 0 ) then
-            if ( self % probeFileSaveTimestep .le. 0.0_RP .or. &
+            if ( self % fp_skipInitialSave ) then
+!              First call of a resumed run (at t_restart): the file already holds
+!              the steps up to t_restart, so no sample is added here.
+               self % fp_skipInitialSave = .false.
+            else if ( self % probeFileSaveTimestep .le. 0.0_RP .or. &
                  t .ge. self % fp_lastSavedTime + self % probeFileSaveTimestep ) then
                call Monitor_UpdateFileProbes( self, mesh, 1 )
                call Monitor_FlushFileProbesNow( self, t, iter )
@@ -966,6 +971,7 @@ module MonitorsClass
          to % probeFileSaveTimestep       = from % probeFileSaveTimestep
          to % probeFileOutputFormat       = from % probeFileOutputFormat
          to % probeFileResume             = from % probeFileResume
+         to % fp_skipInitialSave          = from % fp_skipInitialSave
          to % fp_lastSavedTime            = from % fp_lastSavedTime
          if ( allocated(from % probesVariables) ) then
             safedeallocate ( to % probesVariables )
@@ -1090,13 +1096,22 @@ module MonitorsClass
    subroutine Monitor_ResumeFileProbes(self, t_restart)
 !
 !     Called once the initial time is known (after the restart file is read).
-!     With "resume = .true." in the probe block, drops from the HDF5 probe file
-!     every saved step with time >= t_restart: the run restarts from t_restart,
-!     so those steps are recomputed (including the one at t_restart itself,
-!     which is saved again by the first Monitors % UpdateValues call).
-!     Without a restart t_restart = 0, which empties the datasets.
+!     Only acts with "resume = .true." and an existing HDF5 probe file.
+!
+!     Keeps the saved steps with time <= t_restart and drops the later ones,
+!     which the restarted run recomputes. The file then looks exactly as it
+!     did when the previous run was at t_restart, so:
+!       - fp_lastSavedTime is set to the last kept time, so the probe save
+!         timestep filter continues the original sampling grid, and
+!       - the first Monitors % UpdateValues call, made at t_restart before
+!         any time step, does not save a sample (fp_skipInitialSave).
+!     Every sample then comes from the time-stepping path, as in an
+!     uninterrupted run. Without a restart t_restart = 0.
 !
       use MPI_Process_Info
+#ifdef _HAS_MPI_
+      use mpi
+#endif
 #ifdef HAS_HDF5
       use HDF5
 #endif
@@ -1106,58 +1121,81 @@ module MonitorsClass
 #if defined(FLOW) && defined(HAS_HDF5)
       integer(HID_T)   :: dset_id, dspace_id
       integer(HSIZE_T) :: cur1(1), max1(1), new1(1), cur2(2), max2(2), new2(2)
-      integer          :: iError, v, n_keep, n_old
-      real(kind=RP)    :: tol
+      integer          :: iError, v, n_keep, n_old, ierr
+      real(kind=RP)    :: tol, lastKept
+      logical          :: resumed
       real(kind=RP), allocatable :: tfile(:)
 
-      if ( .not. MPI_Process % isRoot ) return
       if ( .not. self % probeFileResume ) return
-      if ( .not. hdf5_fp_open ) return
+      if ( self % no_of_fileProbes .le. 0 ) return
 
-      call h5dopen_f(hdf5_fp_fid, "time", dset_id, iError)
-      call h5dget_space_f(dset_id, dspace_id, iError)
-      call h5sget_simple_extent_dims_f(dspace_id, cur1, max1, iError)
-      call h5sclose_f(dspace_id, iError)
-      n_old = int(cur1(1))
-      allocate( tfile(max(n_old,1)) )
-      if ( n_old .gt. 0 ) call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tfile, cur1, iError)
-      call h5dclose_f(dset_id, iError)
+      resumed  = .false.
+      lastKept = -huge(0.0_RP)
 
-      tol    = 1.0e-12_RP * max(1.0_RP, abs(t_restart))
-      n_keep = 0
-      do while ( n_keep .lt. n_old )
-         if ( tfile(n_keep+1) .ge. t_restart - tol ) exit
-         n_keep = n_keep + 1
-      end do
-      deallocate(tfile)
-
-      if ( n_keep .lt. n_old ) then
-         new1(1) = int(n_keep, HSIZE_T)
-
+      if ( MPI_Process % isRoot .and. hdf5_fp_open ) then
          call h5dopen_f(hdf5_fp_fid, "time", dset_id, iError)
-         call h5dset_extent_f(dset_id, new1, iError)
+         call h5dget_space_f(dset_id, dspace_id, iError)
+         call h5sget_simple_extent_dims_f(dspace_id, cur1, max1, iError)
+         call h5sclose_f(dspace_id, iError)
+         n_old = int(cur1(1))
+         allocate( tfile(max(n_old,1)) )
+         if ( n_old .gt. 0 ) call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tfile, cur1, iError)
          call h5dclose_f(dset_id, iError)
 
-         call h5dopen_f(hdf5_fp_fid, "iteration", dset_id, iError)
-         call h5dset_extent_f(dset_id, new1, iError)
-         call h5dclose_f(dset_id, iError)
-
-         do v = 1, size(self % probesVariables)
-            call h5dopen_f(hdf5_fp_fid, trim(self % probesVariables(v)), dset_id, iError)
-            call h5dget_space_f(dset_id, dspace_id, iError)
-            call h5sget_simple_extent_dims_f(dspace_id, cur2, max2, iError)
-            call h5sclose_f(dspace_id, iError)
-            new2(1) = int(n_keep, HSIZE_T)
-            new2(2) = cur2(2)
-            call h5dset_extent_f(dset_id, new2, iError)
-            call h5dclose_f(dset_id, iError)
+         tol    = 1.0e-12_RP * max(1.0_RP, abs(t_restart))
+         n_keep = 0
+         do while ( n_keep .lt. n_old )
+            if ( tfile(n_keep+1) .gt. t_restart + tol ) exit
+            n_keep = n_keep + 1
          end do
+         if ( n_keep .gt. 0 ) then
+            resumed  = .true.
+            lastKept = tfile(n_keep)
+         end if
+         deallocate(tfile)
 
-         call h5fflush_f(hdf5_fp_fid, H5F_SCOPE_GLOBAL_F, iError)
+         if ( n_keep .lt. n_old ) then
+            new1(1) = int(n_keep, HSIZE_T)
+
+            call h5dopen_f(hdf5_fp_fid, "time", dset_id, iError)
+            call h5dset_extent_f(dset_id, new1, iError)
+            call h5dclose_f(dset_id, iError)
+
+            call h5dopen_f(hdf5_fp_fid, "iteration", dset_id, iError)
+            call h5dset_extent_f(dset_id, new1, iError)
+            call h5dclose_f(dset_id, iError)
+
+            do v = 1, size(self % probesVariables)
+               call h5dopen_f(hdf5_fp_fid, trim(self % probesVariables(v)), dset_id, iError)
+               call h5dget_space_f(dset_id, dspace_id, iError)
+               call h5sget_simple_extent_dims_f(dspace_id, cur2, max2, iError)
+               call h5sclose_f(dspace_id, iError)
+               new2(1) = int(n_keep, HSIZE_T)
+               new2(2) = cur2(2)
+               call h5dset_extent_f(dset_id, new2, iError)
+               call h5dclose_f(dset_id, iError)
+            end do
+
+            call h5fflush_f(hdf5_fp_fid, H5F_SCOPE_GLOBAL_F, iError)
+         end if
+
+         write(STD_OUT,'(/,30X,A,I0,A,I0,A,ES12.5,A)') "-> Probe resume: kept ", n_keep, " of ", n_old, &
+                                                         " saved steps (time <= ", t_restart, ")"
       end if
-
-      write(STD_OUT,'(/,30X,A,I0,A,I0,A,ES12.5,A)') "-> Probe resume: kept ", n_keep, " of ", n_old, &
-                                                      " saved steps (time < ", t_restart, ")"
+!
+!     Every rank must take the same decision in Monitor_UpdateValues (it
+!     contains collectives), so share root's result.
+!     -----------------------------------------------------------------
+#ifdef _HAS_MPI_
+      if ( MPI_Process % doMPIAction ) then
+         call MPI_Bcast(resumed,  1, MPI_LOGICAL,          0, MPI_COMM_WORLD, ierr)
+         call MPI_Bcast(lastKept, 1, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+      end if
+#endif
+      if ( resumed ) then
+         self % fp_lastSavedTime   = lastKept
+         self % fp_skipInitialSave = .true.
+      end if
 #endif
    end subroutine Monitor_ResumeFileProbes
 

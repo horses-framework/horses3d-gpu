@@ -9,19 +9,16 @@ taken before the restart is the reference. After the restart the file must:
 
   1. keep the same shape (no steps lost, none duplicated),
   2. have strictly increasing time and iteration,
-  3. contain the same data as the reference in every dataset (the restart
-     recomputes iterations 50..100 and must overwrite them, not append).
-
-Gradient probes at the restart iteration are reported but not compared: in the
-uninterrupted run the stored gradients come from the last Runge-Kutta stage,
-whereas after a restart the first record uses gradients of the restored state.
+  3. contain the same data as the reference in every dataset. On resume the
+     steps up to iteration 50 are kept, the later ones are dropped and
+     recomputed, and no sample is added at the restart itself, so the result
+     must be identical to the uninterrupted run (gradients included).
 
 Usage:
-  python3 validate_resume.py REFERENCE.probes.h5 RESUMED.probes.h5 [--restart-iteration N]
+  python3 validate_resume.py REFERENCE.probes.h5 RESUMED.probes.h5
 """
 
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -60,11 +57,6 @@ def h5dump_array(h5_file, dset, shape, dtype):
 
 def main():
     args = sys.argv[1:]
-    restart_iter = None
-    if "--restart-iteration" in args:
-        i = args.index("--restart-iteration")
-        restart_iter = int(args[i + 1])
-        del args[i:i + 2]
     if len(args) != 2:
         print(__doc__)
         sys.exit(2)
@@ -97,7 +89,6 @@ def main():
     if iter_new[0] != 0:
         errors.append(f"first saved iteration is {iter_new[0]}, expected 0 (steps before the restart were lost)")
 
-    grad_re = re.compile(r"^(u|v|w|p|rho)_[xyz]$")
     worst = {}
     for name, shape in ref_shapes.items():
         dtype = np.int32 if name == "iteration" else np.float64
@@ -113,13 +104,7 @@ def main():
             err_step = rel
         else:
             err_step = np.array([rel.max()])
-        skip = np.zeros(err_step.shape, dtype=bool)
-        if restart_iter is not None and grad_re.match(name) and err_step.size == n_steps:
-            skip = (iter_new == restart_iter)
-            if skip.any():
-                print(f"  info: '{name}' at restart iteration {restart_iter}: "
-                      f"relative diff {err_step[skip].max():.3e} (not compared)", flush=True)
-        checked = np.where(skip, 0.0, err_step)
+        checked = err_step
         k = int(np.argmax(checked))
         worst[name] = float(checked[k])
         if checked[k] > 1.0e-9:
