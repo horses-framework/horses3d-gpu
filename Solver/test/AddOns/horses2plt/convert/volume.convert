@@ -1,0 +1,10 @@
+!
+!  horses2plt CI: several volumetric solutions, FE mode, boundaries and extra variables
+!
+hmesh file       = MESH/Cylinder_0000000000.hmesh
+boundary file    = MESH/CylinderNSpol3.bmesh
+hsol file        = RESULTS/Cylinder_0000000010.hsol, RESULTS/Cylinder_0000000020.hsol
+output mode      = FE
+output order     = 2
+output basis     = Homogeneous
+output variables = Q,Vabs,Ht,s,c,omega_abs,divV,eID,N

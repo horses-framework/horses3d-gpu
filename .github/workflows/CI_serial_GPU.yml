@@ -6,29 +6,37 @@ on:
   workflow_dispatch:
 
 jobs:
-  wait-guard:
-    name: Runner availability guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 2880   # 48 hours
-    steps:
-    # This job serves as a guard to prevent the workflow from pending indefinitely if the self-hosted GPU runner is not available.
-      - run: echo "GPU runner did not appear within 48 hours"
-
   serial-gpu-tests:
     # Uses self-hosted runner on nibbler with GPU access
     name: Serial GPU Tests (NVFORTRAN)
     runs-on: [self-hosted, nibbler, gpu]
     # Prevent runaway jobs from consuming cluster resources indefinitely
     timeout-minutes: 120
-    
+
+    # Run every step in a login shell so that "module" is defined;
+    # -e keeps the default stop-on-first-error behaviour
+    defaults:
+      run:
+        shell: bash -l -e {0}
+
     env:
       METIS_HOME: ${{ github.workspace }}/metis-5.1.0/build/Linux-x86_64
+
+      # Cluster account the tests run as
+      CI_USER: a.ballout
+
+      # Set HOME explicitly: the runner is a systemd service and nvfortran
+      # refuses to compile without it
+      HOME: /home/a.ballout
     
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure Horses3D
+      # Modules and compiler paths. Sourced by the build steps on nibbler
+      # and by every SLURM batch script on the compute node.
+      - name: Create environment script
         run: |
+          cat > "$GITHUB_WORKSPACE/ci_env.sh" << 'ENV_EOF'
           module purge
           module load hpc_sdk
           module load nvhpc/24.11
@@ -37,22 +45,75 @@ jobs:
           export CUDA_PATH=$NVHPC_CUDA_HOME
           export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
           export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          ENV_EOF
+          chmod +x "$GITHUB_WORKSPACE/ci_env.sh"
+
+      # Submits one test, waits for it, prints its log and fails the step
+      # if the test failed. Used by every test step below.
+      # Both this script and the batch script it writes start with
+      # "#!/bin/bash -l", a login shell, so that "module" exists here and on
+      # the compute node. A comment cannot go on a "#!" line itself.
+      # The job is submitted with --uid so it runs as the cluster account
+      # rather than as root.
+      - name: Create test runner script
+        run: |
+          cat > "$GITHUB_WORKSPACE/ci_run_slurm_test.sh" << 'RUNNER_EOF'
+          #!/bin/bash -l
+          # Usage: ci_run_slurm_test.sh <job name> <command to run on the compute node>
+          set -e   # stop at the first failing command, as the workflow shell does
+
+          job_name="$1"
+          shift
+          test_cmd="$*"
+
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+
+          cat > run_test.sh << SBATCH_EOF
+          #!/bin/bash -l
+          #SBATCH --job-name=${job_name}
+          #SBATCH --ntasks=1
+          #SBATCH --mem=20G
+          #SBATCH --partition=gpu
+          #SBATCH --gres=gpu:1
+          #SBATCH --time=00:15:00
+
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          ${test_cmd}
+          SBATCH_EOF
+
+          job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+
+          cat slurm-${job_id}.out
+
+          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+          RUNNER_EOF
+          chmod +x "$GITHUB_WORKSPACE/ci_run_slurm_test.sh"
+
+
+      - name: Configure Horses3D
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           cd Solver
           ./configure
 
       - name: Compile horses3d
         working-directory: ./Solver
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make allclean COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
           make ns ins mu COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+
+      # Hand the whole workspace to the cluster account before any test runs:
+      # the checkout and the builds above are done by root, and the SLURM jobs
+      # run as a.ballout.
+      - name: Fix workspace ownership
+        run: sudo chown -R "$CI_USER:$CI_USER" $GITHUB_WORKSPACE
 
 #
 # UNIT TESTS: WALL SHEAR STRESS (|tau_vector| vs. tau, |u_tau_vector| vs. u_tau)
@@ -61,60 +122,13 @@ jobs:
       - name: Build unit test WallShearStress
         working-directory: ./Solver/test/Components/WallShearStress
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make unittest COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
       - name: Run unit test WallShearStress
         working-directory: ./Solver/test/Components/WallShearStress
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=UnitTestWallShearStress_Serial
-          #SBATCH --ntasks=1
-          #SBATCH --mem=4G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:05:00
-
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./bin/TestWallShearStress
-          EOF
-
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-
-          cat slurm-${job_id}.out
-
-          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ')
-          if [ "$exit_code" != "0:0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh UnitTestWallShearStress_Serial ./bin/TestWallShearStress
         if: '!cancelled()'
 
 ########################################################################
@@ -128,61 +142,15 @@ jobs:
       - name: Build NSCylinder
         working-directory: ./Solver/test/NavierStokes/Cylinder/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
+
       - name: Run NSCylinder
         working-directory: ./Solver/test/NavierStokes/Cylinder
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinder_Serial
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns Cylinder.control
-          EOF
-          
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          
-          cat slurm-${job_id}.out
-          
-          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinder_Serial ./horses3d.ns Cylinder.control
         if: '!cancelled()'
 
 #
@@ -217,7 +185,7 @@ jobs:
       #     export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
           
       #     cat > run_test.sh << 'EOF'
-      #     #!/bin/bash
+      #     #!/bin/bash -l
       #     #SBATCH --job-name=NSCylinderSmagorinsky
       #     #SBATCH --ntasks=1
       #     #SBATCH --mem=20G
@@ -236,7 +204,7 @@ jobs:
       #     ./horses3d.ns CylinderSmagorinsky.control
       #     EOF
           
-      #     job_id=$(sbatch --parsable run_test.sh)
+      #     job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
       #     while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
           
       #     cat slurm-${job_id}.out
@@ -256,60 +224,14 @@ jobs:
       - name: Build NSCylinderWALE
         working-directory: ./Solver/test/NavierStokes/CylinderWALE/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
       - name: Run NSCylinderWALE
         working-directory: ./Solver/test/NavierStokes/CylinderWALE
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderWALE
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderWALE.control
-          EOF
-
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-
-          cat slurm-${job_id}.out
-
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderWALE ./horses3d.ns CylinderWALE.control
         if: '!cancelled()'
 
 #
@@ -319,60 +241,14 @@ jobs:
       - name: Build NSCylinderVreman
         working-directory: ./Solver/test/NavierStokes/CylinderVreman/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
       - name: Run NSCylinderVreman
         working-directory: ./Solver/test/NavierStokes/CylinderVreman
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderVreman
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderVreman.control
-          EOF
-
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-
-          cat slurm-${job_id}.out
-
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderVreman ./horses3d.ns CylinderVreman.control
         if: '!cancelled()'
 
 #
@@ -382,60 +258,14 @@ jobs:
       - name: Build NSCylinderChandrasekarRoe
         working-directory: ./Solver/test/NavierStokes/CylinderChandrasekarRoe/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
       - name: Run NSCylinderChandrasekarRoe
         working-directory: ./Solver/test/NavierStokes/CylinderChandrasekarRoe
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderChandrasekarRoe
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderChandrasekarRoe.control
-          EOF
-
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-
-          cat slurm-${job_id}.out
-
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderChandrasekarRoe ./horses3d.ns CylinderChandrasekarRoe.control
         if: '!cancelled()'
 
 #
@@ -470,7 +300,7 @@ jobs:
       #     export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
           
       #     cat > run_test.sh << 'EOF'
-      #     #!/bin/bash
+      #     #!/bin/bash -l
       #     #SBATCH --job-name=TaylorGreen_Serial
       #     #SBATCH --ntasks=1
       #     #SBATCH --mem=20G
@@ -489,7 +319,7 @@ jobs:
       #     ./horses3d.ns TaylorGreen.control
       #     EOF
           
-      #     job_id=$(sbatch --parsable run_test.sh)
+      #     job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
       #     while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
           
       #     cat slurm-${job_id}.out
@@ -534,7 +364,7 @@ jobs:
 #           export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
 
 #           cat > run_test.sh << 'EOF'
-#           #!/bin/bash
+#           #!/bin/bash -l
 #           #SBATCH --job-name=DualTimeStepping
 #           #SBATCH --ntasks=1
 #           #SBATCH --mem=20G
@@ -553,7 +383,7 @@ jobs:
 #           ./horses3d.ns DualTimeStepping.control
 #           EOF
 
-#           job_id=$(sbatch --parsable run_test.sh)
+#           job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
 #           while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
 
 #           cat slurm-${job_id}.out
@@ -572,60 +402,14 @@ jobs:
       - name: Build IBM_Cylinder
         working-directory: ./Solver/test/NavierStokes/IBM_Cylinder/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
       - name: Run IBM_Cylinder
         working-directory: ./Solver/test/NavierStokes/IBM_Cylinder
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=IBM_Cylinder
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns IBMCylinder.control
-          EOF
-
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-
-          cat slurm-${job_id}.out
-
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh IBM_Cylinder ./horses3d.ns IBMCylinder.control
         if: '!cancelled()'
 #
 # 40) CYLINDER EntropyConservingCentral
@@ -633,54 +417,13 @@ jobs:
       - name: Build NSCylinderEntropyConservingCentral
         working-directory: ./Solver/test/NavierStokes/CylinderEntropyConservingCentral/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderEntropyConservingCentral
         working-directory: ./Solver/test/NavierStokes/CylinderEntropyConservingCentral
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderEntropyConservingCentral
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderEntropyConservingCentral.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderEntropyConservingCentral ./horses3d.ns CylinderEntropyConservingCentral.control
         if: '!cancelled()'
 #
 # 41) CYLINDER RoePikePirozzoli
@@ -688,54 +431,13 @@ jobs:
       - name: Build NSCylinderRoePikePirozzoli
         working-directory: ./Solver/test/NavierStokes/CylinderRoePikePirozzoli/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderRoePikePirozzoli
         working-directory: ./Solver/test/NavierStokes/CylinderRoePikePirozzoli
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderRoePikePirozzoli
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderRoePikePirozzoli.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderRoePikePirozzoli ./horses3d.ns CylinderRoePikePirozzoli.control
         if: '!cancelled()'
 #
 # 42) CYLINDER KennedyGruberLaxFriedrichs
@@ -743,54 +445,13 @@ jobs:
       - name: Build NSCylinderKennedyGruberLaxFriedrichs
         working-directory: ./Solver/test/NavierStokes/CylinderKennedyGruberLaxFriedrichs/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderKennedyGruberLaxFriedrichs
         working-directory: ./Solver/test/NavierStokes/CylinderKennedyGruberLaxFriedrichs
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderKennedyGruberLaxFriedrichs
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderKennedyGruberLaxFriedrichs.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderKennedyGruberLaxFriedrichs ./horses3d.ns CylinderKennedyGruberLaxFriedrichs.control
         if: '!cancelled()'
 #
 # 43) CYLINDER MorinishiLowDissipationRoe
@@ -798,54 +459,13 @@ jobs:
       - name: Build NSCylinderMorinishiLowDissipationRoe
         working-directory: ./Solver/test/NavierStokes/CylinderMorinishiLowDissipationRoe/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderMorinishiLowDissipationRoe
         working-directory: ./Solver/test/NavierStokes/CylinderMorinishiLowDissipationRoe
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderMorinishiLowDissipationRoe
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderMorinishiLowDissipationRoe.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderMorinishiLowDissipationRoe ./horses3d.ns CylinderMorinishiLowDissipationRoe.control
         if: '!cancelled()'
 #
 # 44) CYLINDER DucrosMatrixDissipation
@@ -853,54 +473,13 @@ jobs:
       - name: Build NSCylinderDucrosMatrixDissipation
         working-directory: ./Solver/test/NavierStokes/CylinderDucrosMatrixDissipation/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderDucrosMatrixDissipation
         working-directory: ./Solver/test/NavierStokes/CylinderDucrosMatrixDissipation
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderDucrosMatrixDissipation
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderDucrosMatrixDissipation.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderDucrosMatrixDissipation ./horses3d.ns CylinderDucrosMatrixDissipation.control
         if: '!cancelled()'
 #
 # 45) CYLINDER ViscousStandard
@@ -908,54 +487,13 @@ jobs:
       - name: Build NSCylinderViscousStandard
         working-directory: ./Solver/test/NavierStokes/CylinderViscousStandard/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderViscousStandard
         working-directory: ./Solver/test/NavierStokes/CylinderViscousStandard
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderViscousStandard
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderViscousStandard.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderViscousStandard ./horses3d.ns CylinderViscousStandard.control
         if: '!cancelled()'
 
 #
@@ -964,54 +502,13 @@ jobs:
       - name: Build NSCylinderRusanovStandard
         working-directory: ./Solver/test/NavierStokes/CylinderRusanovStandard/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderRusanovStandard
         working-directory: ./Solver/test/NavierStokes/CylinderRusanovStandard
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderRusanovStandard
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderRusanovStandard.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderRusanovStandard ./horses3d.ns CylinderRusanovStandard.control
         if: '!cancelled()'
 #
 # 47) CYLINDER UdissStandard
@@ -1019,54 +516,13 @@ jobs:
       - name: Build NSCylinderUdissStandard
         working-directory: ./Solver/test/NavierStokes/CylinderUdissStandard/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderUdissStandard
         working-directory: ./Solver/test/NavierStokes/CylinderUdissStandard
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderUdissStandard
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns CylinderUdissStandard.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderUdissStandard ./horses3d.ns CylinderUdissStandard.control
         if: '!cancelled()'
 #
 # 48) CYLINDER sprk33
@@ -1074,54 +530,13 @@ jobs:
       - name: Build NSCylinderssprk33
         working-directory: ./Solver/test/NavierStokes/Cylinderssprk33/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderssprk33
         working-directory: ./Solver/test/NavierStokes/Cylinderssprk33
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderssprk33
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns Cylinderssprk33.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderssprk33 ./horses3d.ns Cylinderssprk33.control
         if: '!cancelled()'
 #
 # 49) CYLINDER sprk43
@@ -1129,54 +544,13 @@ jobs:
       - name: Build NSCylinderssprk43
         working-directory: ./Solver/test/NavierStokes/Cylinderssprk43/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSCylinderssprk43
         working-directory: ./Solver/test/NavierStokes/Cylinderssprk43
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSCylinderssprk43
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns Cylinderssprk43.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSCylinderssprk43 ./horses3d.ns Cylinderssprk43.control
         if: '!cancelled()'
 
 
@@ -1186,54 +560,13 @@ jobs:
       - name: Build NSLimiterTest
         working-directory: ./Solver/test/NavierStokes/LimiterTest/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
       - name: Run NSLimiterTest
         working-directory: ./Solver/test/NavierStokes/LimiterTest
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=NSLimiterTest
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.ns LimiterTest.control
-          EOF
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-          cat slurm-${job_id}.out
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSLimiterTest ./horses3d.ns LimiterTest.control
         if: '!cancelled()'
 ########################################################################
 #######                INCOMPRESSIBLE_NS TESTS                 ########
@@ -1272,7 +605,7 @@ jobs:
       #     export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
 
       #     cat > run_test.sh << 'EOF'
-      #     #!/bin/bash
+      #     #!/bin/bash -l
       #     #SBATCH --job-name=NACA0012
       #     #SBATCH --ntasks=1
       #     #SBATCH --mem=20G
@@ -1291,7 +624,7 @@ jobs:
       #     ./horses3d.ins NACA0012.control
       #     EOF
 
-      #     job_id=$(sbatch --parsable run_test.sh)
+      #     job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
       #     while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
 
       #     cat slurm-${job_id}.out
@@ -1315,58 +648,12 @@ jobs:
       - name: Build MultiphaseEntropyConservingTest
         working-directory: ./Solver/test/Multiphase/EntropyConservingTest/SETUP
         run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          source "$GITHUB_WORKSPACE/ci_env.sh"
           make clean || true
           make mu COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
         if: '!cancelled()'
 
       - name: Run MultiphaseEntropyConservingTest
         working-directory: ./Solver/test/Multiphase/EntropyConservingTest
-        run: |
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-
-          cat > run_test.sh << 'EOF'
-          #!/bin/bash
-          #SBATCH --job-name=MultiphaseEntropyConservingTest
-          #SBATCH --ntasks=1
-          #SBATCH --mem=20G
-          #SBATCH --partition=gpu
-          #SBATCH --gres=gpu:1
-          #SBATCH --time=00:15:00
-
-          module purge
-          module load hpc_sdk
-          module load nvhpc/24.11
-          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
-          export CUDA_HOME=$NVHPC_CUDA_HOME
-          export CUDA_PATH=$NVHPC_CUDA_HOME
-          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
-          ./horses3d.mu EntropyConservingTest.control
-          EOF
-
-          job_id=$(sbatch --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
-
-          cat slurm-${job_id}.out
-
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
-          if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
-            exit 1
-          fi
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh MultiphaseEntropyConservingTest ./horses3d.mu EntropyConservingTest.control
         if: '!cancelled()'

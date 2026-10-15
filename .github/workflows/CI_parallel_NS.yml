@@ -60,6 +60,7 @@ jobs:
       - name: Install OpenMPI
         if: (matrix.compiler == 'gfortran')
         run: |
+          sudo apt-get update
           sudo apt-get install -y openmpi-bin libopenmpi-dev
           export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
           mpif90 --version

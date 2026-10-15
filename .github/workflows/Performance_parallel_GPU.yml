@@ -1,0 +1,177 @@
+name: PERFORMANCE PARALLEL (MPI) GPU
+
+########################################################################
+###                                                                  ###
+###  Manually-triggered performance benchmark.                       ###
+###                                                                  ###
+###  This workflow is NOT part of the automatic CI: the cases run    ###
+###  here are production-sized and take far longer than the          ###
+###  correctness tests, so it is only ever launched on demand to     ###
+###  measure the effect of a change on the solver run time.          ###
+###                                                                  ###
+###  The timings are extracted from the solver output and written    ###
+###  to the run summary page, so they can be read without opening    ###
+###  the job log.                                                    ###
+###                                                                  ###
+########################################################################
+
+on:
+  workflow_dispatch:
+  #manual trigger only 
+jobs:
+  parallel-gpu-performance:
+    # Uses self-hosted runner on nibbler cluster with GPU access
+    name: Parallel GPU Performance (NVFORTRAN)
+    runs-on: [self-hosted, nibbler, gpu]
+    # Much longer than the CI workflows: the benchmark itself runs for a
+    # good while and the SLURM queue wait counts towards this budget too.
+    timeout-minutes: 480
+
+    # Run every step in a login shell so that "module" is defined;
+    # -e keeps the default stop-on-first-error behaviour
+    defaults:
+      run:
+        shell: bash -l -e {0}
+
+    env:
+      METIS_HOME: ${{ github.workspace }}/metis-5.1.0/build/Linux-x86_64
+
+      # Cluster account the tests run as
+      CI_USER: a.ballout
+
+      # Set HOME explicitly: the runner is a systemd service and nvfortran
+      # refuses to compile without it
+      HOME: /home/a.ballout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Modules and compiler paths. Sourced by the build steps on nibbler
+      # and by every SLURM batch script on the compute node.
+      - name: Create environment script
+        run: |
+          cat > "$GITHUB_WORKSPACE/ci_env.sh" << 'ENV_EOF'
+          module purge
+          module load hpc_sdk
+          module load nvhpc/24.11
+          export NVHPC_CUDA_HOME=$NVHPC_ROOT/cuda
+          export CUDA_HOME=$NVHPC_CUDA_HOME
+          export CUDA_PATH=$NVHPC_CUDA_HOME
+          export LD_LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$NVHPC_ROOT/math_libs/12.6/targets/x86_64-linux/lib:$NVHPC_CUDA_HOME/lib64:$LIBRARY_PATH
+          export NVCOMPILER_COMM_LIBS_HOME=$NVHPC_ROOT/comm_libs/12.6
+          export OPAL_PREFIX=$NVHPC_ROOT/comm_libs/mpi
+          ENV_EOF
+          chmod +x "$GITHUB_WORKSPACE/ci_env.sh"
+
+      # Submits one test, waits for it, prints its log and fails the step
+      # if the test failed. Used by every test step below.
+      # Both this script and the batch script it writes start with
+      # "#!/bin/bash -l", a login shell, so that "module" exists here and on
+      # the compute node. A comment cannot go on a "#!" line itself.
+      # The job is submitted with --uid so it runs as the cluster account
+      # rather than as root.
+      - name: Create test runner script
+        run: |
+          cat > "$GITHUB_WORKSPACE/ci_run_slurm_test.sh" << 'RUNNER_EOF'
+          #!/bin/bash -l
+          # Usage: ci_run_slurm_test.sh <job name> <command to run on the compute node>
+          set -e   # stop at the first failing command, as the workflow shell does
+
+          job_name="$1"
+          shift
+          test_cmd="$*"
+
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+
+          cat > run_test.sh << SBATCH_EOF
+          #!/bin/bash -l
+          #SBATCH --job-name=${job_name}
+          #SBATCH --ntasks=2
+          #SBATCH --mem=64G
+          #SBATCH --partition=gpu
+          #SBATCH --gres=gpu:2   # number of gpus max 4
+          #SBATCH --time=06:00:00
+          #SBATCH --exclusive   # keep the node to ourselves so the timings are not polluted
+
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          ${test_cmd}
+          SBATCH_EOF
+
+          job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
+          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+
+          cat slurm-${job_id}.out
+
+          # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
+          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          if [ "$exit_code" != "0" ]; then
+            echo "Test failed with exit code: $exit_code"
+            exit 1
+          fi
+          RUNNER_EOF
+          chmod +x "$GITHUB_WORKSPACE/ci_run_slurm_test.sh"
+
+
+      # Install METIS library (required for parallel partitioning)
+      - name: Install METIS
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          module load cmake
+
+          if [ ! -d "metis-5.1.0" ]; then
+            wget "https://src.fedoraproject.org/lookaside/pkgs/metis/metis-5.1.0.tar.gz/5465e67079419a69e0116de24fce58fe/metis-5.1.0.tar.gz"
+            tar -xvf metis-5.1.0.tar.gz
+            cd metis-5.1.0
+            # Update CMake minimum required version to 3.5
+            sed -i 's/cmake_minimum_required(VERSION [0-9.]\+)/cmake_minimum_required(VERSION 3.5)/' CMakeLists.txt
+            make config cc=gcc
+            make
+            mkdir -p build/Linux-x86_64/lib build/Linux-x86_64/bin
+            cp -r build/Linux-x86_64/libmetis/* build/Linux-x86_64/lib/ 2>/dev/null || true
+            cp -r build/Linux-x86_64/programs/* build/Linux-x86_64/bin/ 2>/dev/null || true
+          fi
+
+      - name: Configure Horses3D
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          cd Solver
+          ./configure
+
+      # Only the Navier-Stokes solver is needed by the performance cases.
+      # 'allclean' guarantees the timings come from a build of this commit only.
+      - name: Compile horses3d
+        working-directory: ./Solver
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make allclean COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+          make ns COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+
+      # Hand the whole workspace to the cluster account before any test runs:
+      # the checkout and the builds above are done by root, and the SLURM jobs
+      # run as a.ballout.
+      - name: Fix workspace ownership
+        run: sudo chown -R "$CI_USER:$CI_USER" $GITHUB_WORKSPACE
+
+########################################################################
+#######              TAYLOR GREEN VORTEX (PERFORMANCE)          ########
+########################################################################
+#
+# Split-Form / Chandrasekar on Gauss-Lobatto nodes, P7 on a 32x32x32
+# element mesh. No monitors and a single solution dump at the end, so
+# essentially all of the measured time is spent in the spatial operator.
+#
+
+      - name: Build TaylorGreenPerformance
+        working-directory: ./Solver/test/NavierStokes/TaylorGreenPerformance/SETUP
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make clean || true
+          make ns COMPILER=nvfortran COMM=PARALLEL ENABLE_THREADS=NO WITH_METIS=YES
+        if: '!cancelled()'
+
+
+      - name: Run TaylorGreenPerformance
+        working-directory: ./Solver/test/NavierStokes/TaylorGreenPerformance
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh TaylorGreenPerformance mpirun -np 2 --bind-to none ./horses3d.ns TaylorGreen.control
+        if: '!cancelled()'
