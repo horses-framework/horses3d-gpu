@@ -4082,7 +4082,7 @@ slavecoord:             DO l = 1, 4
          if ( present(eID_hint) ) then
             hint = eID_hint
             if ( hint >= 1 .and. hint <= self % no_of_elements ) then
-               if ( self % FindPointWithCoordsInNeighbors(x, xi, hint, 6) ) then
+               if ( self % FindPointWithCoordsInNeighbors(x, xi, hint, 2) ) then
                   eID = hint
                   HexMesh_FindPointWithCoords = .true.
                   return
@@ -4264,16 +4264,34 @@ slavecoord:             DO l = 1, 4
          integer       , intent(inout)  :: eID
          integer       , intent(in)     :: depth
          !-local-variables--------------------------------------------
-         logical :: success
-         integer :: fID, nID, new_eID
+         logical :: success, mayContain
+         integer :: fID, nID, new_eID, i
+         real(kind=RP) :: xlo(NDIM), xhi(NDIM), xn(NDIM), margin(NDIM)
          !------------------------------------------------------------
 
          HexMesh_FindPointWithCoordsInNeighbors = .FALSE.
+!
+!        Cheap rejection before the Newton solve: the point must lie inside the
+!        element's corner bounding box enlarged by half its size (covers curved
+!        faces). Without it every failed lookup costs a Newton solve per visited
+!        neighbour, which dominates the file-probe preprocessing time.
+!        -----------------------------------------------------------------------
+         xlo =  huge(1.0_RP)
+         xhi = -huge(1.0_RP)
+         do i = 1, 8
+            xn  = self % nodes(self % elements(eID) % nodeIDs(i)) % x
+            xlo = min(xlo, xn)
+            xhi = max(xhi, xn)
+         end do
+         margin     = 0.5_RP * (xhi - xlo)
+         mayContain = all( x .ge. xlo - margin ) .and. all( x .le. xhi + margin )
 
-         success = self % elements(eID) % FindPointWithCoords(x, self % dir2D_ctrl, xi)
-         if ( success ) then
-            HexMesh_FindPointWithCoordsInNeighbors = .TRUE.
-            return
+         if ( mayContain ) then
+            success = self % elements(eID) % FindPointWithCoords(x, self % dir2D_ctrl, xi)
+            if ( success ) then
+               HexMesh_FindPointWithCoordsInNeighbors = .TRUE.
+               return
+            end if
          end if
 
          if (depth > 1) then
