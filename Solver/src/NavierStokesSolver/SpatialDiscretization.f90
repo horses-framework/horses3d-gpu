@@ -1409,36 +1409,14 @@ module SpatialDiscretization
                      mesh % elements(eID) % storage % Qdot(eq,i,j,k)  = 0.0_RP
                   end do
             end do               ; end do                ; end do
-
-         call ScalarWeakIntegrals_StdVolumeGreen( mesh % elements(eID) % Nxyz, NCONS, mesh % elements(eID) % storage % contravariantFlux, &
-                                                  mesh % elements(eID) % storage % QDot)
 !
-!        *************************************
-!        Compute interior contravariant fluxes
-!        *************************************
+!           ***************************************************************************
+!           Compute split volume integral with viscous and two-point flux contributions
+!           ***************************************************************************
 !
-!        Compute inviscid contravariant flux
-!        -----------------------------------
-            !$acc loop vector collapse(3) private(Flux)
-            do k = 0, mesh % elements(eID) % Nxyz(3)  
-               do j = 0, mesh % elements(eID) % Nxyz(2)  
-                  do i = 0, mesh % elements(eID) % Nxyz(1)
-                     !$acc loop seq
-                     do l = 0, mesh % elements(eID) % Nxyz(1)
-                        call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,l,j,k), mesh % elements(eID) % geom % jGradXi(:,i,j,k),  mesh % elements(eID) % geom % jGradXi(:,l,j,k), Flux(:,IX))
-                        call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,l,k), mesh % elements(eID) % geom % jGradEta(:,i,j,k), mesh % elements(eID) % geom % jGradEta(:,i,l,k), Flux(:,IY))
-                        call TwoPointFlux_Selector(mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,l), mesh % elements(eID) % geom % jGradZeta(:,i,j,k), mesh % elements(eID) % geom % jGradZeta(:,i,j,l), Flux(:,IZ))
-                        
-                        !$acc loop seq
-                        do eq = 1, NCONS
-                           mesh % elements(eID) % storage % QDot(eq,i,j,k) = mesh % elements(eID) % storage % QDot(eq,i,j,k) &
-                                                                           - NodalStorage(mesh % elements(eID) % Nxyz(1)) % sharpD(i,l) *  Flux(eq,IX) &
-                                                                           - NodalStorage(mesh % elements(eID) % Nxyz(2)) % sharpD(j,l) *  Flux(eq,IY) &
-                                                                           - NodalStorage(mesh % elements(eID) % Nxyz(3)) % sharpD(k,l) *  Flux(eq,IZ)
-                        end do
-                     end do 
-
-            end do               ; end do                ; end do
+            call ScalarWeakIntegrals_SplitVolumeDivergence( mesh % elements(eID), &
+                                                            mesh % elements(eID) % storage % contravariantFlux, &
+                                                            mesh % elements(eID) % storage % QDot )
 
          enddo
          !$acc end parallel loop

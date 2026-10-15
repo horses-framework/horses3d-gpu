@@ -1,0 +1,12 @@
+!
+!  horses2plt CI: surface solution (surf.hsol), wall variables
+!     u_tau, wall_shear, Cf         -> need "surface save utau"      in the simulation
+!     mu_ns, wall_distance          -> need "surface save turbulent" in the simulation
+!     yplus                         -> needs both
+!
+hmesh file           = MESH/Cylinder_bc001_0000000000.surf.hmesh
+hsol file            = RESULTS/surfaces/Cylinder_bc001_0000000020.surf.hsol
+has gradients        = .true.
+additional variables = "[u_tau, turb]"
+output mode          = FE
+output variables     = u_tau,wall_shear,Cf,mu_ns,wall_distance,yplus,rho,p
