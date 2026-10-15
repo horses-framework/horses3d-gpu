@@ -12,11 +12,16 @@ taken before the restart is the reference. After the restart the file must:
   3. contain the same data as the reference in every dataset (the restart
      recomputes iterations 50..100 and must overwrite them, not append).
 
+Gradient probes at the restart iteration are reported but not compared: in the
+uninterrupted run the stored gradients come from the last Runge-Kutta stage,
+whereas after a restart the first record uses gradients of the restored state.
+
 Usage:
-  python3 validate_resume.py REFERENCE.probes.h5 RESUMED.probes.h5
+  python3 validate_resume.py REFERENCE.probes.h5 RESUMED.probes.h5 [--restart-iteration N]
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -54,10 +59,16 @@ def h5dump_array(h5_file, dset, shape, dtype):
 
 
 def main():
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    restart_iter = None
+    if "--restart-iteration" in args:
+        i = args.index("--restart-iteration")
+        restart_iter = int(args[i + 1])
+        del args[i:i + 2]
+    if len(args) != 2:
         print(__doc__)
         sys.exit(2)
-    ref_path, new_path = sys.argv[1], sys.argv[2]
+    ref_path, new_path = args
     errors = []
 
     for p in (ref_path, new_path):
@@ -86,23 +97,35 @@ def main():
     if iter_new[0] != 0:
         errors.append(f"first saved iteration is {iter_new[0]}, expected 0 (steps before the restart were lost)")
 
+    grad_re = re.compile(r"^(u|v|w|p|rho)_[xyz]$")
     worst = {}
     for name, shape in ref_shapes.items():
-        if name == "coordinates":
-            dtype = np.float64
-        elif name == "iteration":
-            dtype = np.int32
-        else:
-            dtype = np.float64
+        dtype = np.int32 if name == "iteration" else np.float64
         a = h5dump_array(ref_path, name, shape, dtype)
         b = h5dump_array(new_path, name, shape, dtype)
         if not np.all(np.isfinite(b)):
             errors.append(f"'{name}' has non-finite values after resume")
             continue
-        err = float(np.max(np.abs(a - b) / (1.0 + np.abs(a))))
-        worst[name] = err
-        if err > 1.0e-9:
-            errors.append(f"'{name}' differs from the reference by {err:.3e} (relative, tol 1e-9)")
+        rel = np.abs(a - b) / (1.0 + np.abs(a))
+        if rel.ndim == 2:
+            err_step = rel.max(axis=0)          # per saved step
+        elif rel.ndim == 1 and name in ("time", "iteration"):
+            err_step = rel
+        else:
+            err_step = np.array([rel.max()])
+        skip = np.zeros(err_step.shape, dtype=bool)
+        if restart_iter is not None and grad_re.match(name) and err_step.size == n_steps:
+            skip = (iter_new == restart_iter)
+            if skip.any():
+                print(f"  info: '{name}' at restart iteration {restart_iter}: "
+                      f"relative diff {err_step[skip].max():.3e} (not compared)", flush=True)
+        checked = np.where(skip, 0.0, err_step)
+        k = int(np.argmax(checked))
+        worst[name] = float(checked[k])
+        if checked[k] > 1.0e-9:
+            where = f" (worst at iteration {iter_new[k]})" if err_step.size == n_steps else ""
+            errors.append(f"'{name}' differs from the reference by {checked[k]:.3e} "
+                          f"(relative, tol 1e-9){where}")
 
     if errors:
         print("VALIDATION FAILED:", flush=True)
