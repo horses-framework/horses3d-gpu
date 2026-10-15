@@ -171,6 +171,24 @@ jobs:
           mpiexec -n 64 ./horses3d.ins NACA0012.control
 
 #
+# 2) CYLINDER VREMAN
+# ----------------------------
+
+      - name: Build iNS-Cylinder-Vreman
+        working-directory: ./Solver/test/IncompressibleNS/CylinderVreman/SETUP
+        run: |
+          source /opt/intel/oneapi/setvars.sh || true
+          make ins MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=Yes EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run iNS-Cylinder-Vreman
+        working-directory: ./Solver/test/IncompressibleNS/CylinderVreman
+        run: |
+          source /opt/intel/oneapi/setvars.sh || true
+          mpiexec -n 64 ./horses3d.ins CylinderVremanRe3900.control
+        if: '!cancelled()'
+
+#
 # CHECK CODE COVERAGE
 # -------------------------
 
