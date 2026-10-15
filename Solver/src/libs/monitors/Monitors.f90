@@ -157,6 +157,7 @@ module MonitorsClass
          procedure   :: UpdateValues    => Monitor_UpdateValues
          procedure   :: WriteToFile     => Monitor_WriteToFile
          procedure   :: WritePostProcessingSummary => Monitor_WritePostProcessingSummary
+         procedure   :: ResumeFileProbes => Monitor_ResumeFileProbes
          procedure   :: destruct        => Monitor_Destruct
          procedure   :: copy            => Monitor_Assign
          generic     :: assignment(=)   => copy
@@ -1086,6 +1087,80 @@ module MonitorsClass
 !//////////////////////////////////////////////////////////////////////////////
 !
 !        Auxiliars
+   subroutine Monitor_ResumeFileProbes(self, t_restart)
+!
+!     Called once the initial time is known (after the restart file is read).
+!     With "resume = .true." in the probe block, drops from the HDF5 probe file
+!     every saved step with time >= t_restart: the run restarts from t_restart,
+!     so those steps are recomputed (including the one at t_restart itself,
+!     which is saved again by the first Monitors % UpdateValues call).
+!     Without a restart t_restart = 0, which empties the datasets.
+!
+      use MPI_Process_Info
+#ifdef HAS_HDF5
+      use HDF5
+#endif
+      implicit none
+      class(Monitor_t), intent(inout) :: self
+      real(kind=RP),    intent(in)    :: t_restart
+#if defined(FLOW) && defined(HAS_HDF5)
+      integer(HID_T)   :: dset_id, dspace_id
+      integer(HSIZE_T) :: cur1(1), max1(1), new1(1), cur2(2), max2(2), new2(2)
+      integer          :: iError, v, n_keep, n_old
+      real(kind=RP)    :: tol
+      real(kind=RP), allocatable :: tfile(:)
+
+      if ( .not. MPI_Process % isRoot ) return
+      if ( .not. self % probeFileResume ) return
+      if ( .not. hdf5_fp_open ) return
+
+      call h5dopen_f(hdf5_fp_fid, "time", dset_id, iError)
+      call h5dget_space_f(dset_id, dspace_id, iError)
+      call h5sget_simple_extent_dims_f(dspace_id, cur1, max1, iError)
+      call h5sclose_f(dspace_id, iError)
+      n_old = int(cur1(1))
+      allocate( tfile(max(n_old,1)) )
+      if ( n_old .gt. 0 ) call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tfile, cur1, iError)
+      call h5dclose_f(dset_id, iError)
+
+      tol    = 1.0e-12_RP * max(1.0_RP, abs(t_restart))
+      n_keep = 0
+      do while ( n_keep .lt. n_old )
+         if ( tfile(n_keep+1) .ge. t_restart - tol ) exit
+         n_keep = n_keep + 1
+      end do
+      deallocate(tfile)
+
+      if ( n_keep .lt. n_old ) then
+         new1(1) = int(n_keep, HSIZE_T)
+
+         call h5dopen_f(hdf5_fp_fid, "time", dset_id, iError)
+         call h5dset_extent_f(dset_id, new1, iError)
+         call h5dclose_f(dset_id, iError)
+
+         call h5dopen_f(hdf5_fp_fid, "iteration", dset_id, iError)
+         call h5dset_extent_f(dset_id, new1, iError)
+         call h5dclose_f(dset_id, iError)
+
+         do v = 1, size(self % probesVariables)
+            call h5dopen_f(hdf5_fp_fid, trim(self % probesVariables(v)), dset_id, iError)
+            call h5dget_space_f(dset_id, dspace_id, iError)
+            call h5sget_simple_extent_dims_f(dspace_id, cur2, max2, iError)
+            call h5sclose_f(dspace_id, iError)
+            new2(1) = int(n_keep, HSIZE_T)
+            new2(2) = cur2(2)
+            call h5dset_extent_f(dset_id, new2, iError)
+            call h5dclose_f(dset_id, iError)
+         end do
+
+         call h5fflush_f(hdf5_fp_fid, H5F_SCOPE_GLOBAL_F, iError)
+      end if
+
+      write(STD_OUT,'(/,30X,A,I0,A,I0,A,ES12.5,A)') "-> Probe resume: kept ", n_keep, " of ", n_old, &
+                                                      " saved steps (time < ", t_restart, ")"
+#endif
+   end subroutine Monitor_ResumeFileProbes
+
 !
 !//////////////////////////////////////////////////////////////////////////////
 !
@@ -2703,7 +2778,6 @@ end subroutine getNoOfMonitors
       wmask  = .true.
       n_write = no_of_lines
 
-      ! Reuse the persistent file handle opened by Monitor_InitFileProbesHDF5.
       ! Reuse the persistent file handle opened by Monitor_InitFileProbesHDF5.
       ! On resume the init routine opens the existing file, so the handle is
       ! already valid; the lazy open below covers any unforeseen edge case.
