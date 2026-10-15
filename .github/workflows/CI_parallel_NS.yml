@@ -531,7 +531,7 @@ jobs:
         working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
         run: |
           pip3 install --quiet numpy
-          python3 validate_resume.py RESULTS/probes/CylinderProbeFileHDF5_reference.probes.h5 RESULTS/probes/CylinderProbeFileHDF5.probes.h5
+          python3 validate_resume.py RESULTS/probes/CylinderProbeFileHDF5_reference.probes.h5 RESULTS/probes/CylinderProbeFileHDF5.probes.h5 --restart-iteration 50
         if: '!cancelled()'
 
 #
