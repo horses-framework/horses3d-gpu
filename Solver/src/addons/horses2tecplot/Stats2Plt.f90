@@ -204,10 +204,8 @@ module Stats2PltModule
          end if
 
          if (NSTAT .gt. 0) e % statsout(1:,0:,0:,0:) => e % stats
-         if (statsHasFavre) then
-            e % favreout(1:,0:,0:,0:) => e % favre
-            e % Qout(1:,0:,0:,0:) => e % Q
-         end if
+         if (statsHasFavre) e % favreout(1:,0:,0:,0:) => e % favre
+         if (.not. isOldStats) e % Qout(1:,0:,0:,0:) => e % Q      ! mean conservative variables (rho, rhoe, Favre)
 
       end subroutine ProjectStorageGaussPoints
 !
@@ -365,10 +363,8 @@ module Stats2PltModule
 !        --------------------
          if ( all( e % Nsol .eq. e % Nout ) ) then
             if (NSTAT .gt. 0) e % statsout(1:,0:,0:,0:) => e % stats
-            if (statsHasFavre) then
-               e % favreout(1:,0:,0:,0:) => e % favre
-               e % Qout(1:,0:,0:,0:) => e % Q
-            end if
+            if (statsHasFavre) e % favreout(1:,0:,0:,0:) => e % favre
+            if (.not. isOldStats) e % Qout(1:,0:,0:,0:) => e % Q   ! mean conservative variables (rho, rhoe, Favre)
 
          else
             if (NSTAT .gt. 0) then
@@ -378,6 +374,8 @@ module Stats2PltModule
             if (statsHasFavre) then
                allocate( e % favreout(1:NFAVRE_VARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
                call prolongSolutionToGaussPoints(NFAVRE_VARS, e % Nsol, e % favre, e % Nout, e % favreout, Tx, Ty, Tz)
+            end if
+            if (.not. isOldStats) then
                allocate( e % Qout(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
                call prolongSolutionToGaussPoints(NVARS, e % Nsol, e % Q, e % Nout, e % Qout, Tx, Ty, Tz)
             end if
@@ -567,7 +565,9 @@ module Stats2PltModule
                   e % favreout(:,i,j,k) = e % favreout(:,i,j,k) + e % favre(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
                end do            ; end do            ; end do
             end do            ; end do            ; end do
+         end if
 
+         if (.not. isOldStats) then
             allocate( e % Qout(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
             e % Qout = 0.0_RP
             do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
