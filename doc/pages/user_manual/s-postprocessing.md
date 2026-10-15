@@ -127,10 +127,12 @@ As with standard solution files, the variables to export can be restricted with 
 | `Vmean` or `V`  | `Umean, Vmean, Wmean`                           |
 | `Rij`           | `Rxx, Ryy, Rzz, Rxy, Rxz, Ryz`                  |
 | `Fij`           | `Fxx, Fyy, Fzz, Fxy, Fxz, Fyz`                  |
-| `all`           | Every Reynolds and (if available) Favre variable |
+| `all`           | Every Reynolds and (if available) Favre variable, plus `rho` and `rhoe` |
+
+The mean density `rho` and mean total energy `rhoe` (from the averaged conservative variables) are exported by default and can also be selected by name.
 
 ```
-output variables = Vmean, Rij
+output variables = Vmean, Rij, rho, rhoe
 ```
 
 

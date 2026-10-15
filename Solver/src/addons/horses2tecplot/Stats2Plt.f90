@@ -14,14 +14,18 @@ module Stats2PltModule
 
    integer, parameter :: NSTATS_OUTVARS = 9
    integer, parameter :: NFAVRE_OUTVARS = 6
+   integer, parameter :: NMEAN_OUTVARS  = 2
    ! Canonical output names for Reynolds and Favre stats variables (order matters)
    character(len=8), parameter :: STATS_OUT_NAMES(NSTATS_OUTVARS) = &
       ["Umean   ","Vmean   ","Wmean   ","Rxx     ","Ryy     ","Rzz     ","Rxy     ","Rxz     ","Ryz     "]
    character(len=4), parameter :: FAVRE_OUT_NAMES(NFAVRE_OUTVARS) = &
       ["Fxx ","Fyy ","Fzz ","Fxy ","Fxz ","Fyz "]
+   ! Mean density and mean total energy (conservative variables, always stored)
+   character(len=4), parameter :: MEAN_OUT_NAMES(NMEAN_OUTVARS) = ["rho ","rhoe"]
    ! Per-run output filter; set by buildStatsFilter() before each file write
    logical :: statsVarInclude(NSTATS_OUTVARS) = .true.
    logical :: favreVarInclude(NFAVRE_OUTVARS) = .true.
+   logical :: meanVarInclude(NMEAN_OUTVARS)   = .true.
 
    contains
       subroutine Stats2Plt(meshName, solutionName, fixedOrder, basis, Nout, mode)
@@ -594,6 +598,9 @@ module Stats2PltModule
          do var = 1, NFAVRE_OUTVARS
             if (statsHasFavre .and. favreVarInclude(var)) vi = vi + 1
          end do
+         do var = 1, NMEAN_OUTVARS
+            if (meanVarInclude(var)) vi = vi + 1
+         end do
          nout_vars = vi
 
       end function countStatsOutputVars
@@ -601,7 +608,7 @@ module Stats2PltModule
       subroutine ComputeStatsOutputVars(e, nout_vars)
          use Storage
          use StatisticsMonitor
-         use PhysicsStorage, only: IRHO, IRHOU, IRHOV, IRHOW
+         use PhysicsStorage, only: IRHO, IRHOU, IRHOV, IRHOW, IRHOE
          implicit none
          type(Element_t),    intent(inout) :: e
          integer,            intent(out)   :: nout_vars
@@ -611,7 +618,7 @@ module Stats2PltModule
 !        ---------------
 !
          integer                    :: i, j, k, var, vi
-         integer                    :: statsIdx(NSTATS_OUTVARS), favreIdx(NFAVRE_OUTVARS)
+         integer                    :: statsIdx(NSTATS_OUTVARS), favreIdx(NFAVRE_OUTVARS), meanIdx(NMEAN_OUTVARS)
          real(kind=RP)              :: stats9(NSTATS_OUTVARS)
          real(kind=RP)              :: favre6(NFAVRE_OUTVARS)
          real(kind=RP)              :: rhoMean, rhouMean, rhovMean, rhowMean
@@ -631,6 +638,13 @@ module Stats2PltModule
                vi = vi + 1 ; favreIdx(var) = vi
             else
                favreIdx(var) = 0
+            end if
+         end do
+         do var = 1, NMEAN_OUTVARS
+            if (meanVarInclude(var)) then
+               vi = vi + 1 ; meanIdx(var) = vi
+            else
+               meanIdx(var) = 0
             end if
          end do
          nout_vars = vi
@@ -677,6 +691,11 @@ module Stats2PltModule
                      e % outputVars(favreIdx(var), i,j,k) = favre6(var)
                end do
             end if
+!
+!           Mean density and mean total energy
+!           ----------------------------------
+            if (meanIdx(1) .gt. 0) e % outputVars(meanIdx(1), i,j,k) = e % Qout(IRHO ,i,j,k)
+            if (meanIdx(2) .gt. 0) e % outputVars(meanIdx(2), i,j,k) = e % Qout(IRHOE,i,j,k)
 
          end do ; end do ; end do
 
@@ -1043,7 +1062,7 @@ module Stats2PltModule
 !
       subroutine buildStatsFilter()
          use OutputVariables, only: hasVariablesFlag, askedVariables, getNoOfCommas
-         use Storage,         only: NSTAT, statsHasFavre
+         use Storage,         only: NSTAT, statsHasFavre, isOldStats
          implicit none
          integer            :: n, pos, pos2, i
          character(len=16)  :: tok
@@ -1051,12 +1070,15 @@ module Stats2PltModule
          ! Default: include all available variables (existing behaviour when no filter)
          statsVarInclude = (NSTAT .gt. 0)
          favreVarInclude = statsHasFavre
+         ! Legacy files only hold the 9 statistics, so there are no mean conservative variables
+         meanVarInclude  = .not. isOldStats
 
          if (.not. hasVariablesFlag) return
 
          ! User specified a list: start with nothing, include only what is requested
          statsVarInclude = .false.
          favreVarInclude = .false.
+         meanVarInclude  = .false.
 
          n = getNoOfCommas(trim(askedVariables)) + 1
          pos = 0
@@ -1074,6 +1096,8 @@ module Stats2PltModule
             99 continue
          end do
 
+         if (isOldStats) meanVarInclude = .false.
+
       end subroutine buildStatsFilter
 
       subroutine applyStatsToken(tok)
@@ -1081,7 +1105,13 @@ module Stats2PltModule
          character(len=*), intent(in) :: tok
          integer :: i
 
-         ! Check against Reynolds stat names (Umean, Vmean, Wmean, Sxx, ..., Syz)
+         ! "Vmean" is also the name of the mean v component: as a token it is the vector shorthand
+         if (trim(tok) .eq. "Vmean" .or. trim(tok) .eq. "V") then
+            statsVarInclude(1:3) = .true.
+            return
+         end if
+
+         ! Check against Reynolds stat names (Umean, Vmean, Wmean, Rxx, ..., Ryz)
          do i = 1, NSTATS_OUTVARS
             if (trim(tok) .eq. trim(STATS_OUT_NAMES(i))) then
                statsVarInclude(i) = .true.
@@ -1097,6 +1127,14 @@ module Stats2PltModule
             end if
          end do
 
+         ! Check against the mean conservative variables (rho, rhoe)
+         do i = 1, NMEAN_OUTVARS
+            if (trim(tok) .eq. trim(MEAN_OUT_NAMES(i))) then
+               meanVarInclude(i) = .true.
+               return
+            end if
+         end do
+
          ! Shorthands
          select case (trim(tok))
          case ("Vmean", "V")         ! mean velocity vector
@@ -1108,8 +1146,9 @@ module Stats2PltModule
          case ("all")                ! everything
             statsVarInclude = .true.
             favreVarInclude = .true.
+            meanVarInclude  = .true.
          end select
-         ! Variables not meaningful for stats files (rho, p, Mach, etc.) are silently ignored
+         ! Variables not meaningful for stats files (p, Mach, etc.) are silently ignored
 
       end subroutine applyStatsToken
 
@@ -1135,6 +1174,10 @@ module Stats2PltModule
             end do
          end if
 
+         do i = 1, NMEAN_OUTVARS
+            if (meanVarInclude(i)) write(STD_OUT,'(30X,A,A)') "* ", trim(MEAN_OUT_NAMES(i))
+         end do
+
       end subroutine printStatsOutputVariables
 
       character(len=512) function buildVarsHeader()
@@ -1157,6 +1200,11 @@ module Stats2PltModule
                end if
             end do
          end if
+         do i = 1, NMEAN_OUTVARS
+            if (meanVarInclude(i)) then
+               buildVarsHeader = trim(buildVarsHeader) // ',"' // trim(MEAN_OUT_NAMES(i)) // '"'
+            end if
+         end do
 
       end function buildVarsHeader
 

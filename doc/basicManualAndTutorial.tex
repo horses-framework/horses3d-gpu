@@ -662,11 +662,13 @@ As with standard solution files, the variables to export can be restricted with 
 \item \textbf{Vmean} or \textbf{V}: expands to \textit{Umean, Vmean, Wmean}.
 \item \textbf{Rij}: expands to \textit{Rxx, Ryy, Rzz, Rxy, Rxz, Ryz}.
 \item \textbf{Fij}: expands to \textit{Fxx, Fyy, Fzz, Fxy, Fxz, Fyz}.
-\item \textbf{all}: every Reynolds and (if available) Favre variable.
+\item \textbf{all}: every Reynolds and (if available) Favre variable, plus \textit{rho} and \textit{rhoe}.
 \end{itemize}
 
+The mean density \textit{rho} and mean total energy \textit{rhoe} (from the averaged conservative variables) are exported by default and can also be selected by name.
+
 \begin{lstlisting}[language=bash]
-output variables = Vmean, Rij
+output variables = Vmean, Rij, rho, rhoe
 \end{lstlisting}
 
 \section{Merge statistics tool}
