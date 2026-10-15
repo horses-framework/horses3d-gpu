@@ -511,6 +511,11 @@ end module ProblemFileFunctions
 !
 !//////////////////////////////////////////////////////////////////////// 
 ! 
+#ifdef _OPENACC
+#define FPVAL(v,k) monitors % fp_values_gpu(v,k)
+#else
+#define FPVAL(v,k) monitors % fp_buf(((k)-1)*nv+(v))
+#endif
          SUBROUTINE UserDefinedFinalize(mesh, time, iter, maxResidual &
 #ifdef FLOW
                                                     , thermodynamics_ &
@@ -611,7 +616,7 @@ end module ProblemFileFunctions
                         idir     = index("xyz", vname(len_trim(vname):len_trim(vname)))
                         expected = AnalyticGradient(ivar, idir)
                      end select
-                     err = abs( monitors % fp_buf((k-1)*nv + iv) - expected )
+                     err = abs( FPVAL(iv,k) - expected )
                      if ( .not. (err .le. maxErr(iv)) ) then
                         maxErr(iv) = err
                         worst(iv)  = k
