@@ -517,6 +517,23 @@ jobs:
           python3 validate.py RESULTS
         if: '!cancelled()'
 
+      # Probe resume: restart from iteration 50 with "resume = .true." and check that
+      # the HDF5 probe file keeps iterations 0..49, rewrites 50..100 without duplicates
+      # and ends up identical to the file produced by the uninterrupted run.
+      - name: Run NSCylinderProbeFileHDF5 resume (restart from iteration 50)
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
+        run: |
+          cp RESULTS/probes/CylinderProbeFileHDF5.probes.h5 RESULTS/probes/CylinderProbeFileHDF5_reference.probes.h5
+          mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderProbeFileHDF5_resume.control
+        if: '!cancelled()'
+
+      - name: Validate NSCylinderProbeFileHDF5 resume output
+        working-directory: ./Solver/test/NavierStokes/CylinderProbeFileHDF5
+        run: |
+          pip3 install --quiet numpy
+          python3 validate_resume.py RESULTS/probes/CylinderProbeFileHDF5_reference.probes.h5 RESULTS/probes/CylinderProbeFileHDF5.probes.h5
+        if: '!cancelled()'
+
 #
 # 2) CYLINDER IP
 # --------------
