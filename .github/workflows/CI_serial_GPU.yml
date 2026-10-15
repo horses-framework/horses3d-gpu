@@ -115,6 +115,61 @@ jobs:
       - name: Fix workspace ownership
         run: sudo chown -R "$CI_USER:$CI_USER" $GITHUB_WORKSPACE
 
+#
+# UNIT TESTS: WALL SHEAR STRESS (|tau_vector| vs. tau, |u_tau_vector| vs. u_tau)
+# -----------------------------------------------------------------------------
+
+      - name: Build unit test WallShearStress
+        working-directory: ./Solver/test/Components/WallShearStress
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make unittest COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+
+      - name: Run unit test WallShearStress
+        working-directory: ./Solver/test/Components/WallShearStress
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh UnitTestWallShearStress_Serial ./bin/TestWallShearStress
+        if: '!cancelled()'
+
+#
+# HORSES2PLT: WALL SHEAR STRESS VECTOR (u_tau_x/y/z, tau, tau_x/y/z)
+# Same checks as CI_horses2plt.yml (CPU): generate surface solution with
+# "surface save utau/utau vector/turbulent", convert it and check
+# |u_tau_vector| = u_tau, tau = rho u_tau^2, tau_i = rho u_tau u_tau_i, |tau_vector| = tau
+# -----------------------------------------------------------------------------
+
+      - name: Build horses2plt
+        working-directory: ./Solver
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make addons ADDONS=horses2tecplot COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+
+      - name: Run NS Cylinder (surface wall variables) for horses2plt
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          mkdir -p MESH RESULTS/surfaces
+          ln -sf ../../../bin/horses3d.ns horses3d.ns
+          ln -sf ../../../bin/horses2plt horses2plt
+          $GITHUB_WORKSPACE/ci_run_slurm_test.sh HORSES2PLT_Serial ./horses3d.ns Cylinder.control
+        if: '!cancelled()'
+
+      - name: horses2plt - surface wall shear stress vector (u_tau_vector, tau, tau_x/y/z)
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          ulimit -s unlimited
+          for conv in surface_wall surface_wall_vector surface_wall_vector_dimensionless; do
+            rm -f RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec
+            ./horses2plt convert/$conv.convert
+            ./check_tec.sh RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec QUADRILATERAL +u_tau +tau +rho
+            if [ "$conv" != "surface_wall" ]; then
+              ./check_tec.sh RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec QUADRILATERAL u_tau_x u_tau_y u_tau_z tau_x tau_y tau_z
+              python3 check_wall_shear.py RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec 1.0e-4
+            fi
+          done
+        if: '!cancelled()'
+
 ########################################################################
 #######                    NAVIER-STOKES TESTS                  ########
 ########################################################################
