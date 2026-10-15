@@ -3,10 +3,11 @@
 !     u_tau, tau, Cf                -> need "surface save utau"      in the simulation
 !     mu_ns, wall_distance          -> need "surface save turbulent" in the simulation
 !     yplus                         -> needs both
+!     (u_tau also exports u_tau_x/y/z, since the surface is saved with "surface save utau vector")
 !
 hmesh file           = MESH/Cylinder_bc001_0000000000.surf.hmesh
 hsol file            = RESULTS/surfaces/Cylinder_bc001_0000000020.surf.hsol
 has gradients        = .true.
-additional variables = "[u_tau, turb]"
+additional variables = "[u_tau, u_tau_vector, turb]"
 output mode          = FE
 output variables     = u_tau,tau,Cf,mu_ns,wall_distance,yplus,rho,p
