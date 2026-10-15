@@ -479,6 +479,11 @@ end module ProblemFileFunctions
 !
 !//////////////////////////////////////////////////////////////////////// 
 ! 
+#ifdef _OPENACC
+#define FPVAL(v,k) monitors % fp_values_gpu(v,k)
+#else
+#define FPVAL(v,k) monitors % fp_buf(((k)-1)*nv+(v))
+#endif
          SUBROUTINE UserDefinedFinalize(mesh, time, iter, maxResidual &
 #ifdef FLOW
                                                     , thermodynamics_ &
@@ -627,7 +632,7 @@ end module ProblemFileFunctions
                nv = size(monitors % probesVariables)
                DO k = 1, 4
                   CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
-                                     actualValue   = monitors % fp_buf((k-1)*nv + 1) + 1.0_RP, &
+                                     actualValue   = FPVAL(1,k) + 1.0_RP, &
                                      tol           = 1.d-11, &
                                      msg           = "File-probe x-velocity at the point [0,2.0,4.0]")
                END DO
@@ -637,37 +642,37 @@ end module ProblemFileFunctions
 !              captured from an actual CI run (CI_parallel_NS, run 36995526283).
 !              ---------------------------------------------------------------
                CALL FTAssertEqual(expectedValue = -5.1694788113224519E-12_RP + 1.0_RP, &
-                                  actualValue   = monitors % fp_buf(2) + 1.0_RP, &
+                                  actualValue   = FPVAL(2,1) + 1.0_RP, &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe v at the point [0,2.0,4.0]")
 
                CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
-                                  actualValue   = monitors % fp_buf(3), &
+                                  actualValue   = FPVAL(3,1), &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe w at the point [0,2.0,4.0]")
 
                CALL FTAssertEqual(expectedValue = 1.0000000480383817_RP, &
-                                  actualValue   = monitors % fp_buf(4), &
+                                  actualValue   = FPVAL(4,1), &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe rho at the point [0,2.0,4.0]")
 
                CALL FTAssertEqual(expectedValue = 7.9365084721826635_RP, &
-                                  actualValue   = monitors % fp_buf(5), &
+                                  actualValue   = FPVAL(5,1), &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe pressure at the point [0,2.0,4.0]")
 
                CALL FTAssertEqual(expectedValue = 0.30000004403061858_RP, &
-                                  actualValue   = monitors % fp_buf(6), &
+                                  actualValue   = FPVAL(6,1), &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe mach at the point [0,2.0,4.0]")
 
                CALL FTAssertEqual(expectedValue = 0.50000018051624784_RP, &
-                                  actualValue   = monitors % fp_buf(7), &
+                                  actualValue   = FPVAL(7,1), &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe k at the point [0,2.0,4.0]")
 
                CALL FTAssertEqual(expectedValue = 1.0000001564970464_RP, &
-                                  actualValue   = monitors % fp_buf(8), &
+                                  actualValue   = FPVAL(8,1), &
                                   tol           = 1.d-11, &
                                   msg           = "File-probe velocity at the point [0,2.0,4.0]")
             end if
@@ -736,8 +741,12 @@ end module ProblemFileFunctions
 !           Values at the line probes, for capturing ground truth from CI logs.
             if ( MPI_Process % isRoot ) then
                do k = 5, monitors % no_of_fileProbes
+#ifdef _OPENACC
+                  write(STD_OUT,'(A,I4,*(1X,ES24.16))') "FP_GROUND_TRUTH ", k, monitors % fp_values_gpu(:,k)
+#else
                   write(STD_OUT,'(A,I4,*(1X,ES24.16))') "FP_GROUND_TRUTH ", k, &
                      monitors % fp_buf( (k-1)*size(monitors % probesVariables) + 1 : k*size(monitors % probesVariables) )
+#endif
                end do
             end if
 
