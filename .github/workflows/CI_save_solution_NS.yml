@@ -1,0 +1,82 @@
+name: CI SAVE SOLUTION (touch) NS CPU
+
+########################################################################
+# Tests the on-demand solution save: touching SAVE_SOLUTION while the
+# NS solver runs makes it write a solution file (checked every 50 it).
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Solver/src/libs/timeintegrator/**'
+      - 'Solver/test/NavierStokes/SaveSolutionTouch/**'
+      - '.github/workflows/CI_save_solution_NS.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Solver/src/libs/timeintegrator/**'
+      - 'Solver/test/NavierStokes/SaveSolutionTouch/**'
+      - '.github/workflows/CI_save_solution_NS.yml'
+  workflow_dispatch:
+
+jobs:
+  save-solution-cpu:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['gfortran']
+        mode: ['RELEASE']
+        comm: ['SERIAL', 'PARALLEL']
+
+    name: Save solution by touch - NS CPU - ${{ matrix.compiler }} - ${{ matrix.mode }} - ${{ matrix.comm }}
+
+    env:
+      METIS_HOME: ${{ github.workspace }}/metis-5.1.0/build/Linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenMPI
+        if: matrix.comm == 'PARALLEL'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - name: Install METIS
+        run: |
+          export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
+          wget "https://src.fedoraproject.org/lookaside/pkgs/metis/metis-5.1.0.tar.gz/5465e67079419a69e0116de24fce58fe/metis-5.1.0.tar.gz"
+          tar -xf metis-5.1.0.tar.gz
+          cd metis-5.1.0
+          make config cc=gcc
+          make
+          mv build/Linux-x86_64/libmetis build/Linux-x86_64/lib
+          mv build/Linux-x86_64/programs build/Linux-x86_64/bin
+
+      - name: Configure
+        working-directory: ./Solver
+        run: ./configure
+
+      - name: Compile horses3d
+        working-directory: ./Solver
+        run: |
+          export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08"
+          make allclean MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=NO WITH_METIS=YES WITH_HDF5=NO
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=NO WITH_METIS=YES WITH_HDF5=NO
+
+      - name: Build NSSaveSolutionTouch
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch/SETUP
+        run: |
+          export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08"
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=NO WITH_METIS=YES WITH_HDF5=NO
+
+      - name: Run NSSaveSolutionTouch (serial)
+        if: matrix.comm == 'SERIAL'
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch
+        run: ./check_save_solution.sh ./horses3d.ns SaveSolutionTouch.control
+
+      - name: Run NSSaveSolutionTouch (MPI, 8 ranks)
+        if: matrix.comm == 'PARALLEL'
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch
+        run: ./check_save_solution.sh mpiexec --oversubscribe -n 8 ./horses3d.ns SaveSolutionTouch.control
