@@ -29,6 +29,7 @@
       use ParticlesClass
       use Utilities                       , only: ToLower, AlmostEqual
       use FileReadingUtilities            , only: getFileName
+      use FileReaders                     , only: controlFileName
       use ProblemFileFunctions            , only: UserDefinedPeriodicOperation_f
       use pAdaptationClass                , only: pAdaptation_t, ADAPT_DYNAMIC_TIME, ADAPT_STATIC, getAdaptationType
       use pAdaptationClassTE              , only: pAdaptationTE_t 
@@ -467,9 +468,11 @@
       type(RosenbrockIntegrator_t)  :: RosenbrockSolver
 
       logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, saveLES, saveOrders, saveUTauWithSign
-      character(len=*), parameter   :: saveTriggerFile = "SAVE_SOLUTION"   ! File that, when created with touch, requests a solution save
+      character(len=*), parameter   :: saveTriggerName = "SAVE_SOLUTION"   ! File that, when created with touch, requests a solution save
+      character(len=LINE_LENGTH)    :: saveTriggerFile                     ! Trigger file, located in the directory of the control file
       integer, parameter            :: saveTriggerInterval = 50            ! Iterations between checks of the trigger file
       logical                       :: saveRequested, saveTriggerExists
+      integer                       :: lastSlash
       integer                       :: ierr, fUnit, fStat
       procedure(UserDefinedPeriodicOperation_f) :: UserDefinedPeriodicOperation
 !
@@ -481,6 +484,11 @@
       useTrip            = controlVariables % logicalValueForKey("use trip")
       ActuatorLineFlag   = controlVariables % logicalValueForKey("use actuatorline")
       saveOrders         = controlVariables % logicalValueForKey("save mesh order")
+!
+!     The trigger file is searched in the directory of the control file
+!     -----------------------------------------------------------------
+      lastSlash = index(trim(controlFileName), "/", back=.true.)
+      saveTriggerFile = controlFileName(1:lastSlash) // saveTriggerName
 
 !
 !     ---------------
@@ -808,11 +816,7 @@
             saveRequested = .false.
             if ( MPI_Process % isRoot ) then
                inquire(file=trim(saveTriggerFile), exist=saveTriggerExists)
-               if ( saveTriggerExists ) then
-                  saveRequested = .true.
-                  open(newunit=fUnit, file=trim(saveTriggerFile), status="old", iostat=fStat)
-                  if ( fStat .eq. 0 ) close(fUnit, status="delete")
-               end if
+               saveRequested = saveTriggerExists
             end if
 #ifdef _HAS_MPI_
             if ( MPI_Process % doMPIAction ) call MPI_Bcast(saveRequested, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr)
@@ -822,6 +826,13 @@
                call Stopwatch % Pause("Solver")
                call SaveRestart(sem,k+1,t,SolutionFileName, saveGradients, saveSensor, saveLES)
                call Stopwatch % Start("Solver")
+!
+!              Once saved, remove the trigger file
+!              -----------------------------------
+               if ( MPI_Process % isRoot ) then
+                  open(newunit=fUnit, file=trim(saveTriggerFile), status="old", iostat=fStat)
+                  if ( fStat .eq. 0 ) close(fUnit, status="delete")
+               end if
             end if
          end if
 !
