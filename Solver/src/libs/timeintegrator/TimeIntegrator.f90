@@ -469,8 +469,8 @@
       type(RosenbrockIntegrator_t)  :: RosenbrockSolver
 
       logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, saveLES, saveOrders, saveUTauWithSign
-      character(len=LINE_LENGTH)    :: saveTriggerFile                     ! File that, when created with touch, requests a solution save
-      integer                       :: saveTriggerInterval                 ! Iterations between checks of the trigger file
+      character(len=*), parameter   :: saveTriggerFile = "SAVE_SOLUTION"   ! File that, when created with touch, requests a solution save
+      integer, parameter            :: saveTriggerInterval = 50            ! Iterations between checks of the trigger file
       logical                       :: saveRequested, saveTriggerExists
       integer                       :: ierr, fUnit, fStat
       procedure(UserDefinedPeriodicOperation_f) :: UserDefinedPeriodicOperation
@@ -483,14 +483,6 @@
       useTrip            = controlVariables % logicalValueForKey("use trip")
       ActuatorLineFlag   = controlVariables % logicalValueForKey("use actuatorline")
       saveOrders         = controlVariables % logicalValueForKey("save mesh order")
-      saveTriggerFile    = "SAVE_SOLUTION"
-      if ( controlVariables % containsKey("save solution trigger file") ) then
-         saveTriggerFile = trim(controlVariables % StringValueForKey("save solution trigger file",LINE_LENGTH))
-      end if
-      saveTriggerInterval = 1
-      if ( controlVariables % containsKey("save solution trigger interval") ) then
-         saveTriggerInterval = max(1, controlVariables % integerValueForKey("save solution trigger interval"))
-      end if
 
 !
 !     ---------------
