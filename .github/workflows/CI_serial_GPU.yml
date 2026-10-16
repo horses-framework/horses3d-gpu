@@ -138,6 +138,23 @@ jobs:
         if: '!cancelled()'
 
 #
+# 1b) SAVE SOLUTION ON DEMAND (touch SAVE_SOLUTION)
+# -------------------------------------------------
+
+      - name: Build NSSaveSolutionTouch
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch/SETUP
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make clean || true
+          make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+
+      - name: Run NSSaveSolutionTouch
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSSaveSolutionTouch_Serial ./check_save_solution.sh ./horses3d.ns SaveSolutionTouch.control
+        if: '!cancelled()'
+
+#
 # 5) CYLINDER SMAGORINSKY
 # -----------------------
 
