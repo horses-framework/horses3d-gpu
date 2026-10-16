@@ -10,6 +10,9 @@
       MODULE TimeIntegratorClass
 
       USE SMConstants
+#ifdef _HAS_MPI_
+      use mpi
+#endif
       use FTValueDictionaryClass
       USE PolynomialInterpAndDerivsModule
       USE DGSEMClass
@@ -464,6 +467,10 @@
       type(RosenbrockIntegrator_t)  :: RosenbrockSolver
 
       logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, saveLES, saveOrders, saveUTauWithSign
+      character(len=*), parameter   :: saveTriggerFile = "SAVE_SOLUTION"   ! File that, when created with touch, requests a solution save
+      integer, parameter            :: saveTriggerInterval = 50            ! Iterations between checks of the trigger file
+      logical                       :: saveRequested, saveTriggerExists
+      integer                       :: ierr, fUnit, fStat
       procedure(UserDefinedPeriodicOperation_f) :: UserDefinedPeriodicOperation
 !
 !     ----------------------
@@ -793,6 +800,29 @@
                call sem % particles % ExportToVTK ( k+1, monitors % solution_file )
             end if
 #endif
+         end if
+!
+!        Save the solution on demand (touch <trigger file>)
+!        --------------------------------------------------
+         if ( mod(k+1, saveTriggerInterval) .eq. 0 ) then
+            saveRequested = .false.
+            if ( MPI_Process % isRoot ) then
+               inquire(file=trim(saveTriggerFile), exist=saveTriggerExists)
+               if ( saveTriggerExists ) then
+                  saveRequested = .true.
+                  open(newunit=fUnit, file=trim(saveTriggerFile), status="old", iostat=fStat)
+                  if ( fStat .eq. 0 ) close(fUnit, status="delete")
+               end if
+            end if
+#ifdef _HAS_MPI_
+            if ( MPI_Process % doMPIAction ) call MPI_Bcast(saveRequested, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr)
+#endif
+            if ( saveRequested ) then
+               if ( MPI_Process % isRoot ) write(STD_OUT,'(A,A,A,I0)') '*** Trigger file "',trim(saveTriggerFile),'" found: saving solution at iteration ',k+1
+               call Stopwatch % Pause("Solver")
+               call SaveRestart(sem,k+1,t,SolutionFileName, saveGradients, saveSensor, saveLES)
+               call Stopwatch % Start("Solver")
+            end if
          end if
 !
 !        Save surfaces solution
