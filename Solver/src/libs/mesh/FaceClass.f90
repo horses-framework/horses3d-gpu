@@ -85,6 +85,7 @@
             procedure   :: Print                         => PrintFace
             procedure   :: LinkWithElements              => Face_LinkWithElements
             procedure   :: AdaptSolutionToFace           => Face_AdaptSolutionToFace
+            procedure   :: AdaptQdotToFace               => Face_AdaptQdotToFace
             !procedure   :: AdaptGradientsToFace          => Face_AdaptGradientsToFace
             procedure   :: AdaptAviscFluxToFace          => Face_AdaptAviscFluxToFace
             !procedure   :: ProjectFluxToElements         => Face_ProjectFluxToElements
@@ -296,7 +297,7 @@
 !
 !///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 !
-   subroutine Face_AdaptSolutionToFace(self, nEqn, Nelx, Nely, Qe, side, QdotE, computeQdot)
+   subroutine Face_AdaptSolutionToFace(self, nEqn, Nelx, Nely, Qe, side)
       !$acc routine vector
       use MappedGeometryClass
       implicit none
@@ -305,24 +306,12 @@
       integer,       intent(in)                 :: Nelx, Nely
       real(kind=RP), intent(in)                 :: Qe(1:nEqn, 0:Nelx, 0:Nely)
       integer,       intent(in)                 :: side
-      real(kind=RP), intent(in), optional       :: QdotE(1:nEqn, 0:Nelx, 0:Nely)
-      logical,       intent(in), optional       :: computeQdot
 !
 !     ---------------
 !     Local variables
 !     ---------------
 !
-      integer       :: i, j, k, l, m, ii, jj
-      real(kind=RP) :: Qe_rot(1:nEqn, 0:self % NfRight(1), 0:self % NfRight(2))
-      ! real(kind=RP) :: QdotE_rot(1:nEqn, 0:self % NfRight(1), 0:self % NfRight(2))
-      logical :: prolongQdot
-
-      ! prolongQdot = present(QdotE)
-      if (present(computeQdot)) then
-          prolongQdot = computeQdot
-      else
-          prolongQdot = .FALSE.
-      end if
+      integer       :: i, j, ii, jj
 
       select case (side)
       case(1)
@@ -331,19 +320,54 @@
             !$acc loop vector collapse(2)
             do j = 0, self % NfRight(2)   ; do i = 0, self % NfRight(1)
                self % storage(1) % Q(:,i,j) = Qe(:,i,j)
-!               if (prolongQdot) self % storage(1) % Qdot(:,i,j) = QdotE(:,i,j)
             enddo ; enddo
          end select
       case(2)
          !$acc loop vector collapse(2)
          do j = 0, self % NfRight(2)   ; do i = 0, self % NfRight(1)
             call leftIndexes2Right(i,j,self % NfRight(1), self % NfRight(2), self % rotation, ii, jj)
-            self % storage(2) % Q(:,i,j) = Qe(:,ii,jj) 
+            self % storage(2) % Q(:,i,j) = Qe(:,ii,jj)
          end do                        ; end do
 
       end select
 
    end subroutine Face_AdaptSolutionToFace
+
+   subroutine Face_AdaptQdotToFace(self, nEqn, Nelx, Nely, Qe, side)
+      !$acc routine vector
+      use MappedGeometryClass
+      implicit none
+      class(Face),   intent(inout)              :: self
+      integer,       intent(in)                 :: nEqn
+      integer,       intent(in)                 :: Nelx, Nely
+      real(kind=RP), intent(in)                 :: Qe(1:nEqn, 0:Nelx, 0:Nely)
+      integer,       intent(in)                 :: side
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      integer       :: i, j, ii, jj
+
+      select case (side)
+      case(1)
+         select case ( self % projectionType(1) )
+         case (0)
+            !$acc loop vector collapse(2)
+            do j = 0, self % NfRight(2)   ; do i = 0, self % NfRight(1)
+               self % storage(1) % Qdot(:,i,j) = Qe(:,i,j)
+            enddo ; enddo
+         end select
+      case(2)
+         !$acc loop vector collapse(2)
+         do j = 0, self % NfRight(2)   ; do i = 0, self % NfRight(1)
+            call leftIndexes2Right(i,j,self % NfRight(1), self % NfRight(2), self % rotation, ii, jj)
+            self % storage(2) % Qdot(:,i,j) = Qe(:,ii,jj)
+         end do                        ; end do
+
+      end select
+
+   end subroutine Face_AdaptQdotToFace
    
    ! Simplified version of Face_AdaptSolutionToFace, which takes into account rotation
    ! but not projections. I.e., non-conforming (mortar) faces are not supported

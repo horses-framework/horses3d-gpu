@@ -5381,8 +5381,8 @@ subroutine HexMesh_pAdapt_MPI (self, NNew, controlVariables)
       do fID=1, 6
          if (associated(self % faces( e % faceIDs(fID) ) % geom)) then
             call self % faces( e % faceIDs(fID) ) % geom % destruct
-            deallocate(self % faces( e % faceIDs(fID) ) % geom)
-            nullify(self % faces( e % faceIDs(fID) ) % geom)
+            ! deallocate(self % faces( e % faceIDs(fID) ) % geom)
+            ! nullify(self % faces( e % faceIDs(fID) ) % geom)
          end if
       end do
    end do
@@ -5587,8 +5587,8 @@ end subroutine HexMesh_pAdapt_MPI
       do fID=1, size (facesArray)
          if (associated(self % faces (facesArray(fID)) % geom)) then
             call self % faces (facesArray(fID)) % geom % destruct
-            deallocate(self % faces (facesArray(fID)) % geom)
-            nullify(self % faces (facesArray(fID)) % geom)
+            ! deallocate(self % faces (facesArray(fID)) % geom)
+            ! nullify(self % faces (facesArray(fID)) % geom)
          end if
       end do
 
