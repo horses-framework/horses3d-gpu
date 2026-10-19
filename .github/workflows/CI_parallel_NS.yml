@@ -75,6 +75,13 @@ jobs:
           mpifort --showme
           gcc --version
 
+      # Install gmsh (used to generate test meshes from their .geo sources)
+      - name: Install gmsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gmsh
+          gmsh --version
+
       # # Install parallel HDF5 (OpenMPI version)
       # - name: Install HDF5 (parallel, OpenMPI)
       #   if: (matrix.compiler == 'gfortran')
@@ -1352,6 +1359,24 @@ jobs:
         run: |
           # source /opt/intel/oneapi/setvars.sh || true
           mpiexec --oversubscribe -n 8 ./horses3d.ns LimiterTest.control
+        if: '!cancelled()'
+
+#
+# 51) Translating Isentropic Vortex
+# ---------------------------------
+      - name: Build IsentropicVortex
+        working-directory: ./Solver/test/Euler/IsentropicVortex
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          (cd MESH && gmsh -3 isentropicvortex2D.geo -o isentropicvortex2D.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}")
+        if: '!cancelled()'
+
+      - name: Run IsentropicVortex
+        working-directory: ./Solver/test/Euler/IsentropicVortex
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns IsentropicVortex.control
         if: '!cancelled()'
 
 #
