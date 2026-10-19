@@ -4473,7 +4473,6 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % elements(eID) % geom % InvJacobian)
          !$acc enter data copyin(self % elements(eID) % geom % dWall)
          !$acc enter data copyin(self % elements(eID) % geom % Volume)
-         !$acc enter data copyin(self % elements(eID) % geom % x)
          !$acc enter data copyin(self % elements(eID) % geom % normal)
 
          !$acc enter data copyin(self % elements(eID) % faceIDs)
@@ -4593,10 +4592,16 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % zones(zoneID) % toBeDeleted)     
       enddo
 
-      DO i = 0, self % Nx(1) !it should be the maximum nX
-         !$acc enter data copyin(NodalStorage(i))
+!     Copy the whole NodalStorage array, then attach each constructed order's matrices.
+!     Copying one element at a time leaves the device pointer NodalStorage attached to a
+!     single element, so kernels could only index one order.
+      !$acc enter data copyin(NodalStorage)
+      DO i = lbound(NodalStorage,1), ubound(NodalStorage,1)
+         if (.not. NodalStorage(i) % Constructed) cycle
          !$acc enter data copyin(NodalStorage(i) % hatD)
-         !$acc enter data copyin(NodalStorage(i) % sharpD)
+         if (allocated(NodalStorage(i) % sharpD)) then
+            !$acc enter data copyin(NodalStorage(i) % sharpD)
+         end if
          !$acc enter data copyin(NodalStorage(i) % D)
          !$acc enter data copyin(NodalStorage(i) % b)
          !$acc enter data copyin(NodalStorage(i) % v)
@@ -4640,6 +4645,11 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % storage % U_z)
          !$acc exit data delete(self % elements(eID) % storage % mu_ns)
          !$acc exit data delete(self % elements(eID) % storage % mu_turb_NS)
+         !$acc exit data delete(self % elements(eID) % storage % S_NS)
+         if (allocated(self % elements(eID) % storage % stats % data)) then
+            !$acc exit data delete(self % elements(eID) % storage % stats % data)
+            !$acc exit data delete(self % elements(eID) % storage % stats)
+         end if
          !$acc exit data delete(self % elements(eID) % geom % jGradXi)
          !$acc exit data delete(self % elements(eID) % geom % jGradEta)
          !$acc exit data delete(self % elements(eID) % geom % jGradZeta)
@@ -4647,6 +4657,10 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % geom % InvJacobian)
          !$acc exit data delete(self % elements(eID) % geom % dWall)
          !$acc exit data delete(self % elements(eID) % geom % Volume)
+         !$acc exit data delete(self % elements(eID) % geom % x)
+         !$acc exit data delete(self % elements(eID) % geom % normal)
+         !$acc exit data delete(self % elements(eID) % isInsideBody)
+         !$acc exit data delete(self % elements(eID) % STL)
          !$acc exit data delete(self % elements(eID) % faceIDs)
          !$acc exit data delete(self % elements(eID) % faceSide)
          !$acc exit data delete(self % elements(eID) % storage)
@@ -4676,6 +4690,7 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID))
 
       ENDDO
+      !$acc exit data delete(self%no_of_elements)
 
       do iFace = 1, size(self % faces)
          !$acc exit data delete(self % faces(iFace) % Nf)
@@ -4700,7 +4715,11 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % faces(iFace) % storage(1) % unStar)
          !$acc exit data delete(self % faces(iFace) % storage(2) % fStar)
          !$acc exit data delete(self % faces(iFace) % storage(2) % unStar)
+         !$acc exit data delete(self % faces(iFace) % storage(1) % rho)
+         !$acc exit data delete(self % faces(iFace) % storage(2) % rho)
          !$acc exit data delete(self % faces(iFace) % storage)
+         !$acc exit data delete(self % faces(iFace) % geom % x)
+         !$acc exit data delete(self % faces(iFace) % geom % h)
          !$acc exit data delete(self % faces(iFace) % geom % normal)
          !$acc exit data delete(self % faces(iFace) % geom % t1)
          !$acc exit data delete(self % faces(iFace) % geom % t2)
@@ -4745,16 +4764,22 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete (self % zones(zoneID) % assocPeriodZone)
          !$acc exit data delete (self % zones(zoneID) % marker)
          !$acc exit data delete (self % zones(zoneID) % toBeDeleted)     
+         !$acc exit data delete (self % zones(zoneID))
       enddo
 
-      DO i = 0, self % Nx(1) !it should be the maximum nX
+      DO i = lbound(NodalStorage,1), ubound(NodalStorage,1)
+         if (.not. NodalStorage(i) % Constructed) cycle
          !$acc exit data delete (NodalStorage(i) % hatD)
-         !$acc exit data delete (NodalStorage(i) % sharpD)
+         if (allocated(NodalStorage(i) % sharpD)) then
+            !$acc exit data delete (NodalStorage(i) % sharpD)
+         end if
          !$acc exit data delete (NodalStorage(i) % D)
          !$acc exit data delete (NodalStorage(i) % b)
          !$acc exit data delete (NodalStorage(i) % v)
-         !$acc exit data delete (NodalStorage(i))
+         !$acc exit data delete (NodalStorage(i) % w)
+         !$acc exit data delete (NodalStorage(i) % x)
       END DO
+      !$acc exit data delete (NodalStorage)
 
 #ifdef _HAS_MPI_
       !$acc exit data delete (self % faces_mpi)

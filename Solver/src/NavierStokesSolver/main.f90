@@ -209,6 +209,8 @@
 !
 #ifdef _OPENACC
       call sem % mesh % ExitDeviceData()
+!     Balance the 'enter data copyin(sem)' done before the construction
+      !$acc exit data delete(sem)
       print*, "I delete the data from the GPU"
 #endif
 

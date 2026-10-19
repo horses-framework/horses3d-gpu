@@ -184,6 +184,16 @@
 !     Finish up
 !     ---------
 !
+!     ----------------------------
+!     Delete the data from the GPU
+!     ----------------------------
+!
+#ifdef _OPENACC
+      call sem % mesh % ExitDeviceData()
+!     Balance the 'enter data copyin(sem)' done before the construction
+      !$acc exit data delete(sem)
+#endif
+
       call Stopwatch % destruct
       CALL timeIntegrator % destruct()
       CALL sem % destruct()
