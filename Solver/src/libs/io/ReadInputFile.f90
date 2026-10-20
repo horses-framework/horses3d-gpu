@@ -231,6 +231,7 @@ end module FileReaders
          write(fid,'(A40,A,A)') "Final time", " = ", "1.0"
          write(fid,'(A40,A,A)') "Autosave mode", " = ", "Iteration  ! Time"
          write(fid,'(A40,A,A)') "Autosave interval", " = ", "100   ! 1.0"
+         write(fid,'(A40,A,A)') "Save solution check interval", " = ", "50    ! iterations between checks of the SAVE_SOLUTION file"
 
 
          write(fid,'(/,A)') "!-------------------- Boundary conditions:-"
