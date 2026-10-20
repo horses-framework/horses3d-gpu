@@ -103,7 +103,8 @@ def main():
     for i, d in enumerate(fp_data):
         u_fp = d[:, 2]  # column 2 is 'u' (same variables= u v w rho pressure mach k velocity)
         max_diff = np.max(np.abs(u_fp - u_inline))
-        if max_diff > tol:
+        # NaN compares false against tol, so reject non-finite differences explicitly
+        if not np.isfinite(max_diff) or max_diff > tol:
             errors.append(
                 f"probe_{i+2} 'u' differs from inline probe by {max_diff:.3e} (tol {tol:.0e})"
             )

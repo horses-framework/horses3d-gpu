@@ -169,7 +169,8 @@ def main():
         tol = 1.0e-10
         for i in range(n_same):
             max_diff = np.max(np.abs(u_h5[:, i] - u_inline))
-            if max_diff > tol:
+            # NaN compares false against tol, so reject non-finite differences explicitly
+            if not np.isfinite(max_diff) or max_diff > tol:
                 errors.append(
                     f"HDF5 probe {i} 'u' differs from inline by {max_diff:.3e} "
                     f"(tol {tol:.0e})"
