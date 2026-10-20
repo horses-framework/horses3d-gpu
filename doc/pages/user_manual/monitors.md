@@ -85,8 +85,108 @@ Real-time keywords may not work in parallel MPI computations. It depends on how 
 | Keyword   | Description                                                 | Default value       |
 |-----------|-------------------------------------------------------------|---------------------|
 | name      | *CHARACTER*: Name of the monitor.                           | **Mandatory Keyword** |
-| variable  | *CHARACTER*: Variable to be monitored. Implemented options are: pressure, velocity, u, v, w, mach, k. | **Mandatory Keyword** |
+| variable  | *CHARACTER*: Variable to be monitored. Implemented options are: pressure, velocity, u, v, w, mach, k, rho. | **Mandatory Keyword** |
 | position  | *REAL(3)*: Coordinates of the point to be monitored.        | **Mandatory Keyword** |
+
+Each probe writes its results to a dedicated `.probe` file, whose header reports the
+monitor name and its `x, y, z` coordinates on a single line:
+
+```
+ Monitor name:      probe_1
+      x, y, z coordinates:         5.0000000000E-01    0.0000000000E+00    0.0000000000E+00
+```
+
+### Probes from a file
+
+Instead of (or in addition to) defining probes one-by-one with `#define probe` blocks,
+a set of probes can be defined in bulk through a plain text `.dat` file, each line
+holding the coordinates of a point. The same list of variables is sampled at every
+probe in the file, and the probes-file block is defined like any other monitor block:
+
+```markdown
+#define probe file
+   file                = MyProbes.dat
+   variables           = pressure u v
+   probe save timestep = 1.4285714E-03
+   output format       = ASCII
+   resume              = .false.
+#end
+```
+
+| Keyword             | Description                                                          | Default value          |
+|---------------------|-----------------------------------------------------------------------|-------------------------|
+| file                | *CHARACTER*: Path to the `.dat` file defining the probes' coordinates. May optionally be wrapped in quotes (`"..."` or `'...'`); case is preserved. | **Mandatory Keyword** |
+| variables           | *CHARACTER*: Whitespace-separated list of variables to sample at every probe in the file. | **Mandatory Keyword** |
+| probe save timestep | *REAL*: Minimum physical-time interval between consecutive writes. If omitted or set to zero, data is written every iteration. | 0 (every iteration) |
+| output format       | *CHARACTER*: Output format for the probe data. `ASCII` writes one `.probe` text file per probe. `HDF5` writes a single `<solution>.probes.h5` file containing all probes (requires compilation with `HAS_HDF5`). | `ASCII` |
+| resume              | *LOGICAL*: Only for `output format = HDF5`. If `.true.` and the `<solution>.probes.h5` file already exists, it is opened and extended instead of overwritten; see [Resuming a simulation](#resuming-a-simulation). | `.false.` |
+
+For Navier-Stokes, the variables that can be sampled are `pressure`, `velocity`, `u`,
+`v`, `w`, `rho`, `mach`, `k` and the Cartesian gradients
+`u_x u_y u_z v_x v_y v_z w_x w_y w_z p_x p_y p_z rho_x rho_y rho_z`.
+
+```
+# x       y      z
+0.5d0     0.d0   0.d0
+1.0d0     0.d0   0.d0
+2.0d0     1.d0   0.d0
+```
+
+Lines that are empty or start with `#` are ignored; every remaining line holds the
+`x y z` coordinates of one probe. For each of these probes a dedicated output file
+`<solution_file>.probe_N.probe` is created (`N` being the probe's position in the
+file), with one column per variable (as listed in `variables`) and one row per saved
+time step (in addition to the `Iteration` and `Time` columns).
+
+To keep the per-iteration screen log readable when many probes are defined this way,
+file-based probes are excluded from it; their output files are still written normally.
+Instead, a summary of the probes-file monitor (file path, number of probes, sampled
+variables, and output format) is printed once in the startup log, right after the
+"Time integrator" section.
+
+### ASCII output (default)
+
+Each probe writes to a dedicated `<solution_file>.probe_N.probe` text file, one row
+per saved time step, with `Iteration`, `Time`, and one column per variable.
+
+### HDF5 output
+
+When `output format = HDF5` is set (requires `HAS_HDF5` at compile time), all probes
+are written to a single `<solution_file>.probes.h5` file with the following structure:
+
+| Dataset        | Shape                    | Description                            |
+|----------------|--------------------------|----------------------------------------|
+| `coordinates`  | `(3, nProbes)`           | x, y, z of each probe (fixed at init)  |
+| `time`         | `(nTimesteps,)`          | Physical time of each saved step       |
+| `iteration`    | `(nTimesteps,)`          | Iteration number of each saved step    |
+| `<varname>`    | `(nProbes, nTimesteps)`  | One dataset per sampled variable       |
+
+All variable datasets are extendible — data is appended every time the monitor buffer
+is flushed. This format is recommended for large probe sets (thousands or more) because
+it avoids the overhead of opening and closing a separate file for every probe.
+
+### Resuming a simulation
+
+A restarted simulation normally goes back to a time earlier than the last step stored
+in the probe file. With `resume = .true.` (HDF5 output only) the existing
+`<solution>.probes.h5` is kept and extended as follows:
+
+1. The file is opened in read/write mode; `coordinates` and the existing datasets are
+   not recreated.
+2. Once the restart file has been read, every stored step with `time > t_restart` is
+   removed from `time`, `iteration` and all the variable datasets; these steps are
+   recomputed by the new run. The steps up to `t_restart` are kept. A line in the
+   startup log reports how many steps were kept.
+3. No sample is saved at `t_restart` itself, and the `probe save timestep` filter
+   continues from the last kept step. The sampling grid is therefore the same as in an
+   uninterrupted run, and the file never contains duplicated or out-of-order steps.
+4. New steps are appended after the last kept one.
+
+If the file does not exist, or cannot be opened, it is created from scratch. The probes
+file (coordinates and variables) must be the same as in the previous run. Without a
+restart (`restart = .false.`) the initial time is zero, so `resume = .true.` empties
+the datasets: use it only together with `restart = .true.`. With `output format = ASCII`
+the keyword has no effect.
 
 
 ## Surface Monitors
