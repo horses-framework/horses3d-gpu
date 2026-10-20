@@ -470,7 +470,7 @@
 
       logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, saveLES, saveOrders, saveUTauWithSign
       character(len=*), parameter   :: saveTriggerFile = "SAVE_SOLUTION"   ! File that, when created with touch in the working directory, requests a solution save
-      integer, parameter            :: saveTriggerInterval = 50            ! Iterations between checks of the trigger file
+      integer                       :: saveTriggerInterval                 ! Iterations between checks of the trigger file
       logical                       :: saveRequested, saveTriggerExists
       integer                       :: ierr, fUnit, fStat
       procedure(UserDefinedPeriodicOperation_f) :: UserDefinedPeriodicOperation
@@ -483,6 +483,10 @@
       useTrip            = controlVariables % logicalValueForKey("use trip")
       ActuatorLineFlag   = controlVariables % logicalValueForKey("use actuatorline")
       saveOrders         = controlVariables % logicalValueForKey("save mesh order")
+      saveTriggerInterval = 50
+      if ( controlVariables % containsKey("save solution check interval") ) then
+         saveTriggerInterval = max(1, controlVariables % integerValueForKey("save solution check interval"))
+      end if
 
 !
 !     ---------------
