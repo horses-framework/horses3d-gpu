@@ -2241,7 +2241,7 @@ end subroutine getNoOfMonitors
       prev_eID_local = -1
       do i = 1, nFound
          foundLocal(i) = mesh % FindPointWithCoords(allX(:,i), eID_local(i), &
-                                                      xi_local(:,i))
+                                                      xi_local(:,i), eID_hint=prev_eID_local)
          if ( foundLocal(i) ) then
             prev_eID_local = eID_local(i)
             ! Accepted points may sit up to INSIDE_TOL outside [-1,1]; high-order
