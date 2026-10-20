@@ -64,6 +64,8 @@ MODULE HexMeshClass
          integer :: ncx, ncy, ncz
          real(kind=RP) :: xmin(3), dx(3)
          type(MeshSGCell_t), allocatable :: cells(:,:,:)
+!        Per-element rejection box used before Newton solves (see HexMesh_BuildSpatialGrid)
+         real(kind=RP), allocatable :: boxLo(:,:), boxHi(:,:)
       end type MeshSpatialGrid_t
 
 !     ---------------
@@ -4244,6 +4246,33 @@ slavecoord:             DO l = 1, 4
             end do ; end do ; end do
          end do
 
+!
+!        Per-element rejection box for the neighbour search. It spans the corner
+!        nodes and every geometry node geom%x (the points that define the mapping
+!        the Newton solve inverts, curved interiors included), enlarged by one
+!        element size in each direction to cover the overshoot of the interpolating
+!        polynomial between nodes. A point outside the box cannot be inside the
+!        element, so the Newton solve is skipped.
+!        -------------------------------------------------------------------------
+         allocate( self % sgrid % boxLo(3, self % no_of_elements), &
+                   self % sgrid % boxHi(3, self % no_of_elements) )
+         do eID = 1, self % no_of_elements
+            xlo =  huge(1.0_RP)
+            xhi = -huge(1.0_RP)
+            do i = 1, 8
+               xlo = min(xlo, self % nodes(self % elements(eID) % nodeIDs(i)) % x)
+               xhi = max(xhi, self % nodes(self % elements(eID) % nodeIDs(i)) % x)
+            end do
+            if ( allocated(self % elements(eID) % geom % x) ) then
+               do i = 1, 3
+                  xlo(i) = min(xlo(i), minval(self % elements(eID) % geom % x(i,:,:,:)))
+                  xhi(i) = max(xhi(i), maxval(self % elements(eID) % geom % x(i,:,:,:)))
+               end do
+            end if
+            self % sgrid % boxLo(:,eID) = xlo - (xhi - xlo)
+            self % sgrid % boxHi(:,eID) = xhi + (xhi - xlo)
+         end do
+
          self % sgrid % built = .true.
 
       end subroutine HexMesh_BuildSpatialGrid
@@ -4265,26 +4294,21 @@ slavecoord:             DO l = 1, 4
          integer       , intent(in)     :: depth
          !-local-variables--------------------------------------------
          logical :: success, mayContain
-         integer :: fID, nID, new_eID, i
-         real(kind=RP) :: xlo(NDIM), xhi(NDIM), xn(NDIM), margin(NDIM)
+         integer :: fID, nID, new_eID
          !------------------------------------------------------------
 
          HexMesh_FindPointWithCoordsInNeighbors = .FALSE.
 !
-!        Cheap rejection before the Newton solve: the point must lie inside the
-!        element's corner bounding box enlarged by half its size (covers curved
-!        faces). Without it every failed lookup costs a Newton solve per visited
-!        neighbour, which dominates the file-probe preprocessing time.
+!        Cheap rejection before the Newton solve (box built in BuildSpatialGrid):
+!        without it every failed lookup costs a Newton solve per visited neighbour,
+!        which dominates the file-probe preprocessing time.
 !        -----------------------------------------------------------------------
-         xlo =  huge(1.0_RP)
-         xhi = -huge(1.0_RP)
-         do i = 1, 8
-            xn  = self % nodes(self % elements(eID) % nodeIDs(i)) % x
-            xlo = min(xlo, xn)
-            xhi = max(xhi, xn)
-         end do
-         margin     = 0.5_RP * (xhi - xlo)
-         mayContain = all( x .ge. xlo - margin ) .and. all( x .le. xhi + margin )
+         if ( allocated(self % sgrid % boxLo) ) then
+            mayContain = all( x .ge. self % sgrid % boxLo(:,eID) ) .and. &
+                         all( x .le. self % sgrid % boxHi(:,eID) )
+         else
+            mayContain = .true.
+         end if
 
          if ( mayContain ) then
             success = self % elements(eID) % FindPointWithCoords(x, self % dir2D_ctrl, xi)
