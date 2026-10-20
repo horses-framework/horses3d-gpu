@@ -29,7 +29,6 @@
       use ParticlesClass
       use Utilities                       , only: ToLower, AlmostEqual
       use FileReadingUtilities            , only: getFileName
-      use FileReaders                     , only: controlFileName
       use ProblemFileFunctions            , only: UserDefinedPeriodicOperation_f
       use pAdaptationClass                , only: pAdaptation_t, ADAPT_DYNAMIC_TIME, ADAPT_STATIC, getAdaptationType
       use pAdaptationClassTE              , only: pAdaptationTE_t 
@@ -470,11 +469,9 @@
       type(RosenbrockIntegrator_t)  :: RosenbrockSolver
 
       logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, saveLES, saveOrders, saveUTauWithSign
-      character(len=*), parameter   :: saveTriggerName = "SAVE_SOLUTION"   ! File that, when created with touch, requests a solution save
-      character(len=LINE_LENGTH)    :: saveTriggerFile                     ! Trigger file, located in the directory of the control file
+      character(len=*), parameter   :: saveTriggerFile = "SAVE_SOLUTION"   ! File that, when created with touch in the working directory, requests a solution save
       integer, parameter            :: saveTriggerInterval = 50            ! Iterations between checks of the trigger file
       logical                       :: saveRequested, saveTriggerExists
-      integer                       :: lastSlash
       integer                       :: ierr, fUnit, fStat
       procedure(UserDefinedPeriodicOperation_f) :: UserDefinedPeriodicOperation
 !
@@ -486,11 +483,6 @@
       useTrip            = controlVariables % logicalValueForKey("use trip")
       ActuatorLineFlag   = controlVariables % logicalValueForKey("use actuatorline")
       saveOrders         = controlVariables % logicalValueForKey("save mesh order")
-!
-!     The trigger file is searched in the directory of the control file
-!     -----------------------------------------------------------------
-      lastSlash = index(trim(controlFileName), "/", back=.true.)
-      saveTriggerFile = controlFileName(1:lastSlash) // saveTriggerName
 
 !
 !     ---------------
@@ -825,9 +817,14 @@
 #endif
             if ( saveRequested ) then
                if ( MPI_Process % isRoot ) write(STD_OUT,'(A,A,A,I0)') '*** Trigger file "',trim(saveTriggerFile),'" found: saving solution at iteration ',k+1
-               call Stopwatch % Pause("Solver")
-               call SaveRestart(sem,k+1,t,SolutionFileName, saveGradients, saveSensor, saveLES)
-               call Stopwatch % Start("Solver")
+!
+!              Skip the save if the autosave already wrote this iteration
+!              ----------------------------------------------------------
+               if ( .not. self % autosave % Autosave(k+1) ) then
+                  call Stopwatch % Pause("Solver")
+                  call SaveRestart(sem,k+1,t,SolutionFileName, saveGradients, saveSensor, saveLES)
+                  call Stopwatch % Start("Solver")
+               end if
 !
 !              Once saved, remove the trigger file
 !              -----------------------------------
