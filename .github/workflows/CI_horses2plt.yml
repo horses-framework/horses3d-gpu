@@ -224,6 +224,28 @@ jobs:
           python3 check_wall_shear.py RESULTS/surfaces/Cylinder_bc001_0000000020.surf.tec 1.0e-4
         if: '!cancelled()'
 
+      # Signed wall shear stress ("save u_tau with sign"): tau is the component of tau_vector along the
+      # free stream direction, tau = tau_vector . t3. The wall normal needed by t3 is rebuilt from the
+      # nodes of the surface file (spectral derivative of x, y, z), so no normal needs to be exported.
+      - name: Run NS Cylinder - signed u_tau
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          ./horses3d.ns CylinderSign.control
+          [ -s RESULTS/surfaces/CylinderSign_bc001_0000000020.surf.hsol ] || { echo "Missing surf.hsol"; exit 1; }
+        if: '!cancelled()'
+
+      - name: Surface - signed wall shear stress, tau = tau_vector . t3 with the normal from the surface mesh
+        working-directory: ./Solver/test/AddOns/horses2plt
+        run: |
+          rm -f RESULTS/surfaces/CylinderSign_bc001_0000000020.surf.tec
+          ./horses2plt convert/surface_wall_vector_sign.convert
+          ./check_tec.sh RESULTS/surfaces/CylinderSign_bc001_0000000020.surf.tec QUADRILATERAL \
+                         +u_tau u_tau_x u_tau_y u_tau_z +tau tau_x tau_y tau_z +rho
+          # Polynomial order 3 and AOA theta = 0, AOA phi = 90 as in CylinderSign.control
+          python3 check_wall_shear.py RESULTS/surfaces/CylinderSign_bc001_0000000020.surf.tec 1.0e-4 \
+                                      --signed --order 3 --aoa 0 90
+        if: '!cancelled()'
+
       # TODO: known failures, enable once fixed
       #  * Gauss basis with a fixed order different from the solution order segfaults:
       #      ./horses2plt MESH/Cylinder_0000000000.hmesh RESULTS/Cylinder_0000000020.hsol --output-order=4 --output-basis=Gauss
