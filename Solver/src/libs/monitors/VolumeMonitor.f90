@@ -179,6 +179,7 @@ module VolumeMonitorClass
          select case ( trim ( self % variable ) )
          case ("entropy rate")
          case ("entropy balance")
+         case ("source")            ; self % num_of_vars = NCONS
          case ("phase2-area")
          case ("phase2-xcog")
          case ("phase2-xvel")
@@ -191,6 +192,7 @@ module VolumeMonitorClass
                print*, "Options available are:"
                print*, "   * Entropy rate"
                print*, "   * Entropy balance"
+               print*, "   * source"
                print*, "   * Phase2-Area"
                print*, "   * Phase2-xCoG"
                print*, "   * Phase2-xVel"
@@ -359,6 +361,9 @@ module VolumeMonitorClass
 
          case ("entropy balance")
             self % values(1,bufferPosition) = ScalarVolumeIntegral(mesh, ENTROPY_BALANCE)
+
+         case ("source")
+            self % values(:,bufferPosition) = VectorVolumeIntegral(mesh, SOURCE, self % num_of_vars) / ScalarVolumeIntegral(mesh, VOLUME)
 
          case ("phase2-xcog")
             self % values(1,bufferPosition) = ScalarVolumeIntegral(mesh, PHASE2_XCOG)
