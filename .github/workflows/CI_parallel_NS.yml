@@ -646,18 +646,19 @@ jobs:
 # 12) CYLINDER FAS
 # ---------------
 
-  #GPU
-      # - name: Build NSCylinderFAS
-      #   working-directory: ./Solver/test/NavierStokes/CylinderFAS/SETUP
-      #   run: |
-      #     # source /opt/intel/oneapi/setvars.sh || true
-      #     make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES
+      - name: Build NSCylinderFAS
+        working-directory: ./Solver/test/NavierStokes/CylinderFAS/SETUP
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
 
-      # - name: Run NSCylinderFAS
-      #   working-directory: ./Solver/test/NavierStokes/CylinderFAS
-      #   run: |
-      #     # source /opt/intel/oneapi/setvars.sh || true
-      #     mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderFAS.control
+      - name: Run NSCylinderFAS
+        working-directory: ./Solver/test/NavierStokes/CylinderFAS
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderFAS.control
+        if: '!cancelled()'
 
 #
 # 13) CYLINDER IP+BDF2
