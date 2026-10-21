@@ -237,7 +237,12 @@ MODULE HexMeshClass
          safedeallocate(self % HO_FacesBoundary)
          safedeallocate(self % HO_ElementsMPI)
          safedeallocate(self % HO_ElementsSequential)
-
+!
+!        ---------
+!        MPI faces
+!        ---------
+!
+         call DestructMPIFaces(self % MPIfaces)
 !
 !        ----------------
 !        IBM storage
@@ -5531,7 +5536,12 @@ end subroutine HexMesh_pAdapt_MPI
       end do
 !$omp end parallel do
 
+!
+!     The copied request handles belong to "from": the copy must not wait on them
+!
+      call MPIFaces_WaitForSends(to % MPIfaces)
       to % MPIfaces = from % MPIfaces
+      call MPIFaces_ResetRequests(to % MPIfaces)
 
       safedeallocate (to % zones)
       allocate ( to % zones ( size(from % zones) ) )
