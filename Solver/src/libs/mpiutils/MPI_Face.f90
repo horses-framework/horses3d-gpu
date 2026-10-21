@@ -15,6 +15,7 @@ module MPI_Face_Class
 
    public  ConstructMPIFaces, DestructMPIFaces
    public  ConstructMPIFacesStorage, MPIFaces_CreateMPIFacesStorage, MPIFaces_ExitMPIFacesStorage
+   public  MPIFaces_WaitForSends, MPIFaces_ResetRequests
 
    type MPI_Face_t
       integer                    :: nDOFs
@@ -121,6 +122,10 @@ module MPI_Face_Class
 !        ---------------
 !
          integer  :: domain
+!
+!        The send buffers are reallocated below (e.g. after p-adaptation): complete pending sends first
+!
+         call MPIFaces_WaitForSends(facesSet)
 
          do domain = 1, MPI_Process % nProcs
             facesSet % faces(domain) % nDOFs         = NDOFS(domain)
@@ -466,6 +471,12 @@ module MPI_Face_Class
          integer  :: domain
 
          if ( MPI_Process % doMPIAction ) then
+            if ( .not. allocated(facesSet % faces) ) return
+!
+!           Complete pending sends before their buffers are deallocated
+!
+            call MPIFaces_WaitForSends(facesSet)
+
             do domain = 1, MPI_Process % nProcs
                call facesSet % faces(domain) % Destruct()
             end do
@@ -473,6 +484,79 @@ module MPI_Face_Class
          end if
 
       end subroutine DestructMPIFaces
+!
+!///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+!
+      subroutine MPIFaces_WaitForSends(facesSet)
+!
+!        ***************************************************************
+!           Completes the sends still in flight after the last exchange,
+!           so that the send buffers can be freed or reallocated.
+!        ***************************************************************
+!
+         implicit none
+         type(MPI_FacesSet_t)    :: facesSet
+#ifdef _HAS_MPI_
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer  :: domain, ierr
+         integer  :: reqs(4)
+
+         if ( .not. MPI_Process % doMPIAction ) return
+         if ( .not. allocated(facesSet % faces) ) return
+
+         do domain = 1, MPI_Process % nProcs
+            associate ( f => facesSet % faces(domain) )
+            reqs = [f % Nsend_req, f % Qsend_req, f % gradQsend_req, f % AviscFluxSend_req]
+            call mpi_waitall(4, reqs, MPI_STATUSES_IGNORE, ierr)
+            f % Nsend_req         = MPI_REQUEST_NULL
+            f % Qsend_req         = MPI_REQUEST_NULL
+            f % gradQsend_req     = MPI_REQUEST_NULL
+            f % AviscFluxSend_req = MPI_REQUEST_NULL
+            end associate
+         end do
+#endif
+
+      end subroutine MPIFaces_WaitForSends
+!
+!///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+!
+      subroutine MPIFaces_ResetRequests(facesSet)
+!
+!        ***************************************************************
+!           Sets all request handles to MPI_REQUEST_NULL. Used on a copy
+!           of an MPI_FacesSet_t: the requests belong to the source, and
+!           the copy must not wait on (and thereby release) them.
+!        ***************************************************************
+!
+         implicit none
+         type(MPI_FacesSet_t)    :: facesSet
+#ifdef _HAS_MPI_
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer  :: domain
+
+         if ( .not. allocated(facesSet % faces) ) return
+
+         do domain = 1, size(facesSet % faces)
+            facesSet % faces(domain) % Nrecv_req          = MPI_REQUEST_NULL
+            facesSet % faces(domain) % Qrecv_req          = MPI_REQUEST_NULL
+            facesSet % faces(domain) % gradQrecv_req      = MPI_REQUEST_NULL
+            facesSet % faces(domain) % AviscFluxRecv_req  = MPI_REQUEST_NULL
+            facesSet % faces(domain) % Nsend_req          = MPI_REQUEST_NULL
+            facesSet % faces(domain) % Qsend_req          = MPI_REQUEST_NULL
+            facesSet % faces(domain) % gradQsend_req      = MPI_REQUEST_NULL
+            facesSet % faces(domain) % AviscFluxSend_req  = MPI_REQUEST_NULL
+         end do
+#endif
+
+      end subroutine MPIFaces_ResetRequests
 
       type(MPI_Face_t) function Construct_MPI_Face()
          implicit none
@@ -547,6 +631,10 @@ module MPI_Face_Class
          integer  :: domain
 
          if ( MPI_Process % doMPIAction ) then
+!
+!           Pending sends may still read the device buffers: complete them before deleting
+!
+            call MPIFaces_WaitForSends(facesSet)
 
             do domain = 1, MPI_Process % nProcs
                if ( facesSet % faces(domain) % nDOFs .gt. 0 ) then
