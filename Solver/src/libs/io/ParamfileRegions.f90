@@ -128,15 +128,22 @@ module ParamfileRegions
          character(len=*), intent(in) :: out_label
          character(len=STR_LEN_PARAM) :: auxstr
          integer                      :: io
+         integer                      :: val
 
          call readCharacterValueInRegion(fileName , label, auxstr , in_label , out_label)
 
          auxstr = trim(adjustl(auxstr))
          
-         if( .not. allocated(var)) allocate(var)
-         read(auxstr,*,iostat=io) var
+!        Read into a local: allocating var and then deallocating it when the key is missing segfaults with nvfortran 26.3
+         read(auxstr,*,iostat=io) val
          if (io .lt. 0) then
-            deallocate(var)
+            if (allocated(var)) deallocate(var)
+         else if (io .eq. 0) then
+            if (.not. allocated(var)) allocate(var)
+            var = val
+         else
+            print*, 'Could not read the integer value of "', trim(label), '" in ', trim(fileName)
+            error stop "Stopped."
          end if
  
 
@@ -151,15 +158,22 @@ module ParamfileRegions
          character(len=*), intent(in) :: out_label
          character(len=STR_LEN_PARAM) :: auxstr
          integer                      :: io
+         real(kind=RP)                :: val
       
          call readCharacterValueInRegion(fileName , label, auxstr , in_label , out_label)
 
          auxstr = trim(adjustl(auxstr))
          
-         if( .not. allocated(var)) allocate(var)
-         read(auxstr,*,iostat=io) var
+!        Read into a local: allocating var and then deallocating it when the key is missing segfaults with nvfortran 26.3
+         read(auxstr,*,iostat=io) val
          if (io .lt. 0) then
-            deallocate(var)
+            if (allocated(var)) deallocate(var)
+         else if (io .eq. 0) then
+            if (.not. allocated(var)) allocate(var)
+            var = val
+         else
+            print*, 'Could not read the real value of "', trim(label), '" in ', trim(fileName)
+            error stop "Stopped."
          end if
       
       end subroutine readRealValueInRegion
@@ -173,15 +187,22 @@ module ParamfileRegions
          character(len=*), intent(in) :: out_label
          character(len=STR_LEN_PARAM) :: auxstr
          integer                      :: io
+         logical                      :: val
       
          call readCharacterValueInRegion(fileName , label, auxstr , in_label , out_label)
 
          auxstr = trim(adjustl(auxstr))
 
-         if( .not. allocated(var)) allocate(var)
-         read(auxstr,*,iostat=io) var
+!        Read into a local: allocating var and then deallocating it when the key is missing segfaults with nvfortran 26.3
+         read(auxstr,*,iostat=io) val
          if (io .lt. 0) then
-            deallocate(var)
+            if (allocated(var)) deallocate(var)
+         else if (io .eq. 0) then
+            if (.not. allocated(var)) allocate(var)
+            var = val
+         else
+            print*, 'Could not read the logical value of "', trim(label), '" in ', trim(fileName)
+            error stop "Stopped."
          end if
 
       end subroutine readLogicalValueInRegion
