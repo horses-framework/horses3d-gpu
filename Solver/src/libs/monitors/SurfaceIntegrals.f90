@@ -28,6 +28,11 @@ module SurfaceIntegrals
    integer, parameter   :: USER_DEFINED = 99
    !$acc declare copyin(SURFACE, TOTAL_FORCE, PRESSURE_FORCE, VISCOUS_FORCE, MASS_FLOW, FLOW_RATE, PRESSURE_DISTRIBUTION, USER_DEFINED)
 !
+!  Pressure subtracted in all pressure integrals (0 = absolute pressure by default).
+!  Set by a logical flag in the constrol file. Value har set inside SurfaceMonitor_Initialization
+   real(kind=RP), public :: pGauge = 0.0_RP
+   !$acc declare create(pGauge)
+!
 !  ========
    contains
 !  ========
@@ -204,7 +209,7 @@ module SurfaceIntegrals
 !
 !           ***********************************
 !           Computes the pressure integral
-!              val = \int pdS
+!              val = \int (p - pGauge) dS
 !           ***********************************
 !
             !$acc loop vector collapse(2) reduction(+:val)
@@ -212,7 +217,7 @@ module SurfaceIntegrals
 !
 !              Compute the integral
 !              --------------------
-               p = Pressure(f % storage(1) % Q(:,i,j))
+               p = Pressure(f % storage(1) % Q(:,i,j)) - pGauge
                val = val + p * NodalStorage(f % Nf(1)) % w(i) &
                              * NodalStorage(f % Nf(2)) % w(j) &
                              * f % geom % jacobian(i,j)
@@ -326,7 +331,7 @@ module SurfaceIntegrals
             !
             !           ************************************************
             !           Computes the total force experienced by the zone
-            !              F = \int p \vec{n}ds - \int tau'·\vec{n}ds
+            !              F = \int (p - pGauge) \vec{n}ds - \int tau'·\vec{n}ds
             !           ************************************************
             !
                         !$acc loop vector collapse(2) reduction(+:localx, localy, localz) private(tau, localval)
@@ -334,7 +339,7 @@ module SurfaceIntegrals
             !
             !              Compute the integral
             !              --------------------
-                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j))
+                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j)) - pGauge
                            call getStressTensor(mesh % faces(fid) % storage(1) % Q(:,i,j),  mesh % faces(fid) % storage(1) % U_x(:,i,j),&
                                                 mesh % faces(fid) % storage(1) % U_y(:,i,j),mesh % faces(fid) % storage(1) % U_z(:,i,j), tau)
             
@@ -371,7 +376,7 @@ module SurfaceIntegrals
             !
             !           ****************************************************
             !           Computes the pressure forces experienced by the zone
-            !              F = \int p \vec{n}ds
+            !              F = \int (p - pGauge) \vec{n}ds
             !           ****************************************************
             !           
                         !$acc loop vector collapse(2) reduction(+:localx, localy, localz) private(val)
@@ -379,7 +384,7 @@ module SurfaceIntegrals
             !
             !              Compute the integral
             !              --------------------
-                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j))
+                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j)) - pGauge
             
                            val = ( p * mesh % faces(fid) % geom % normal(:,i,j) ) * mesh % faces(fid) % geom % jacobian(i,j) &
                                      * NodalStorage(mesh % faces(fid) % Nf(1)) % w(i) &
@@ -898,7 +903,7 @@ module SurfaceIntegrals
                viscStress = matmul(tau,normal)
             end if
             
-            outvalue = -P * normal + viscStress   
+            outvalue = -(P - pGauge) * normal + viscStress   
                   
          case( PRESSURE_FORCE )
 
@@ -908,7 +913,7 @@ module SurfaceIntegrals
 
             P = pressure(Qi)
             
-            outvalue = -P * normal
+            outvalue = -(P - pGauge) * normal
             
          case( VISCOUS_FORCE )
 
