@@ -46,6 +46,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/Convergence_energy \
             ./NavierStokes/Convergence_entropy \
             ./NavierStokes/Cylinder \
+            ./NavierStokes/SaveSolutionTouch \
             ./NavierStokes/CylinderFAS \
             ./NavierStokes/CylinderAnisFAS \
             ./NavierStokes/CylinderBR2 \
