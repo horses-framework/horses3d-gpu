@@ -52,6 +52,7 @@ module SolutionFile
    public      :: getSolutionFileArrayDimensions, getSolutionFileReferenceValues
    public      :: getSolutionFileNodeType, getSolutionFileTimeAndIteration
    public      :: putSolutionFileInReadDataMode, putSolutionFileInWriteDataMode
+   public      :: getStatsFileLayout
    
    public      :: POS_FILETYPE
 !
@@ -596,7 +597,7 @@ module SolutionFile
          implicit none
          integer, intent(in)           :: fid
          integer, intent(out)          :: N(:)
-         integer, intent(in), optional :: pos
+         integer(kind=AddrInt), intent(in), optional :: pos
 !
 !        ---------------
 !        Local variables
@@ -622,5 +623,88 @@ module SolutionFile
          read(fid) N
 
       end subroutine getSolutionFileArrayDimensions
+!
+!//////////////////////////////////////////////////////////////////////////////////////////////////////
+!
+      subroutine getStatsFileLayout(fileName, nReynolds, nCons, nFavre, nGrad, hasReynolds, hasFavre, hasGradients)
+!
+!        **********************************************************************
+!        Detect which blocks a statistics file stores for each element:
+!           [Reynolds (nReynolds)] [Q (nCons)] [Favre (nFavre)] [3 x gradients (nGrad)]
+!        Only Q is always present. The first array of each element carries the
+!        array header, so its leading dimension tells whether the Reynolds block
+!        is there. The optional trailing blocks are found from the position of
+!        the second element header (or from the file size for one element).
+!        **********************************************************************
+!
+         implicit none
+         character(len=*), intent(in)  :: fileName
+         integer,          intent(in)  :: nReynolds, nCons, nFavre, nGrad
+         logical,          intent(out) :: hasReynolds, hasFavre, hasGradients
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer                :: fid, no_of_elements, i, ndim
+         integer                :: N(4), Nnext(4)
+         integer                :: nExtra(4)
+         logical                :: extraFavre(4), extraGrads(4), found
+         integer(kind=AddrInt)  :: Npts, posAfterQ, posNext, fsize, remaining
+
+         no_of_elements = getSolutionFileNoOfElements(fileName)
+         fid = putSolutionFileInReadDataMode(fileName)
+         call getSolutionFileArrayDimensions(fid, N, pos=int(POS_INIT_DATA, kind=AddrInt))
+
+         if ( N(1) .eq. nReynolds ) then
+            hasReynolds = .true.
+         else if ( N(1) .eq. nCons ) then
+            hasReynolds = .false.
+         else
+            write(STD_OUT,'(A,I0,A)') "Statistics file: unexpected number of variables in the first array (", N(1), ")."
+            errorMessage(STD_OUT)
+            error stop
+         end if
+
+         Npts = int(N(2),AddrInt) * int(N(3),AddrInt) * int(N(4),AddrInt)
+         posAfterQ = POS_INIT_DATA + 5_AddrInt*SIZEOF_INT &
+                   + (merge(nReynolds, 0, hasReynolds) + nCons) * Npts * SIZEOF_RP
+
+         nExtra     = [0, nFavre, 3*nGrad, nFavre + 3*nGrad]
+         extraFavre = [.false., .true., .false., .true.]
+         extraGrads = [.false., .false., .true., .true.]
+
+         inquire(unit=fid, size=fsize)
+!        Data after Q up to the end-of-file terminator written by SealSolutionFile (one-element files)
+         remaining = fsize - SIZEOF_INT - (posAfterQ - 1_AddrInt)
+
+         found = .false.
+         do i = 1, size(nExtra)
+            if ( no_of_elements .eq. 1 ) then
+               found = ( remaining .eq. nExtra(i) * Npts * SIZEOF_RP )
+            else
+!              The next element header must be [4, nvars, Nx+1, Ny+1, Nz+1], with the same number of variables
+               posNext = posAfterQ + nExtra(i) * Npts * SIZEOF_RP
+               if ( posNext + 5_AddrInt*SIZEOF_INT - 1_AddrInt .gt. fsize ) cycle
+               read(fid, pos=posNext) ndim
+               if ( ndim .ne. 4 ) cycle
+               read(fid) Nnext
+               found = ( Nnext(1) .eq. N(1) ) .and. all( Nnext(2:4) .ge. 1 )
+            end if
+            if ( found ) then
+               hasFavre     = extraFavre(i)
+               hasGradients = extraGrads(i)
+               exit
+            end if
+         end do
+         close(fid)
+
+         if ( .not. found ) then
+            write(STD_OUT,'(A,A,A)') 'Could not determine the layout of the statistics file "', trim(fileName), '".'
+            errorMessage(STD_OUT)
+            error stop
+         end if
+
+      end subroutine getStatsFileLayout
 
 end module SolutionFile

@@ -145,7 +145,7 @@ jobs:
         run: |
           rm -f RESULTS/Cylinder.stats.tec
           ./horses2plt convert/stats.convert
-          ./check_tec.sh RESULTS/Cylinder.stats.tec ORDERED rho rhoe
+          ./check_tec.sh RESULTS/Cylinder.stats.tec ORDERED Umean Vmean Wmean Rxx Ryy Rzz Rxy Rxz Ryz rho rhoe
         if: '!cancelled()'
 
       - name: Statistics - statistics variables, FE (control file)
@@ -153,7 +153,7 @@ jobs:
         run: |
           rm -f RESULTS/Cylinder.stats.tec
           ./horses2plt convert/stats_variables.convert
-          ./check_tec.sh RESULTS/Cylinder.stats.tec BRICK umean vmean wmean Sxx Syy Szz Sxy Sxz Syz rho p
+          ./check_tec.sh RESULTS/Cylinder.stats.tec BRICK Umean Vmean Wmean Rxx Ryy Rzz Rxy Rxz Ryz rho rhoe
         if: '!cancelled()'
 
       - name: Statistics legacy - "legacy stats = .true." must match the current format (control file)
@@ -163,7 +163,7 @@ jobs:
           rm -f RESULTS/Legacy.stats.hsol RESULTS/Legacy.stats.tec RESULTS/Cylinder.stats.tec
           ./make_legacy_stats.py RESULTS/Cylinder.stats.hsol RESULTS/Legacy.stats.hsol
           ./horses2plt convert/stats_legacy.convert
-          ./check_tec.sh RESULTS/Legacy.stats.tec ORDERED Umean Vmean Wmean Sxx Syy Szz Sxy Sxz Syz
+          ./check_tec.sh RESULTS/Legacy.stats.tec ORDERED Umean Vmean Wmean Rxx Ryy Rzz Rxy Rxz Ryz
           # Same quantities from the current file (Stats2Plt output is dimensionless).
           # The legacy writer prints 5 significant digits, hence the tolerance.
           ./horses2plt convert/stats_dimensionless.convert

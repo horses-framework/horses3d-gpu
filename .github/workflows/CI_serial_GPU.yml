@@ -202,6 +202,33 @@ jobs:
       #   if: '!cancelled()'
 
 #
+# 1b) FAVRE STATISTICS (statistics monitor: Reynolds and Favre averaging)
+# -----------------------------------------------------------------------
+
+      - name: Build NSFavreStatistics
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics/SETUP
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make clean || true
+          make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSFavreStatistics ./horses3d.ns FavreStatistics.control
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics (Favre only)
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSFavreStatistics_FavreOnly ./horses3d.ns FavreStatistics_FavreOnly.control
+        if: '!cancelled()'
+
+      - name: Run NSFavreStatistics (periodic signal)
+        working-directory: ./Solver/test/NavierStokes/FavreStatistics
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSFavreStatistics_Sine ./horses3d.ns FavreStatistics_Sine.control
+        if: '!cancelled()'
+
+#
 # 6) CYLINDER WALE
 # ------------------
 
