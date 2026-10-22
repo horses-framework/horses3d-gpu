@@ -16,6 +16,8 @@ module SpatialDiscretization
       use DGSEMClass
       use ParticlesClass
       use FluidData
+      use RotationData
+      use RotaryFaceRotations
       use VariableConversion, only: NSGradientVariables_STATE, GetNSViscosity, NSGradientVariables_ENTROPY, &
                                     GetGradientValues_f, NSGradientVariables_ENERGY, get_laminar_mu_kappa, &
                                     set_getVelocityGradients
@@ -76,6 +78,8 @@ module SpatialDiscretization
                write(STD_OUT,'(30X,A,A30,1pG10.3)') "->", "Maximum h/N: ", hnmax
                write(STD_OUT,'(/)')
             end if
+
+            call DescribeRotation(CountRotaryFaces(sem % mesh))
    !
    !        Initialize inviscid discretization
    !        ----------------------------------
@@ -260,6 +264,7 @@ module SpatialDiscretization
 !
 !$omp parallel shared(mesh, time)
          call HexMesh_ProlongSolToFaces(mesh, NCONS)
+         call RotateRotaryFacesSolution(mesh)
 !        ----------------
 !        Update MPI Faces
 !        ----------------
@@ -490,6 +495,8 @@ module SpatialDiscretization
 !$acc end parallel loop
 !$omp end do nowait
 
+         call RotateBackRotaryFacesFlux(mesh, size(mesh % faces_interior), mesh % faces_interior)
+
          call computeBoundaryFlux(mesh, t)
 !
 !        ***************************************************************
@@ -518,6 +525,11 @@ module SpatialDiscretization
                call HexMesh_GatherMPIFacesSolution(mesh, NCONS)
             end if
 !$omp end single
+            if ( flowIsNavierStokes ) then
+               call RotateRotaryMPIFacesGradients(mesh)
+            else
+               call RotateRotaryMPIFacesSolution(mesh)
+            end if
 !
 !           Compute viscosity at MPI faces
 !           ------------------------------
@@ -811,6 +823,8 @@ module SpatialDiscretization
       end do
 !$omp end do nowait
 
+      call RotateBackRotaryFacesFlux(mesh, size(mesh % HO_FacesInterior), mesh % HO_FacesInterior)
+
          call computeBoundaryFlux(mesh, t)
 !
 !        ***************************************************************
@@ -843,6 +857,11 @@ module SpatialDiscretization
                call HexMesh_GatherMPIFacesSolution(mesh, NCONS)
             end if
 !$omp end single
+            if ( flowIsNavierStokes ) then
+               call RotateRotaryMPIFacesGradients(mesh)
+            else
+               call RotateRotaryMPIFacesSolution(mesh)
+            end if
 !
 !           Compute viscosity at MPI faces
 !           ------------------------------

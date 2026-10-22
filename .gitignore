@@ -11,6 +11,7 @@ make.inc
 *.bmesh
 *.pmesh
 *.hsol
+*.partitioning
 RESULTS
 
 # osx noise
