@@ -236,6 +236,7 @@ module MeshPartitioning
             allocate(partitions(domain) % mpiface_rotation(nFaces))
             allocate(partitions(domain) % mpiface_elementSide(nFaces))
             allocate(partitions(domain) % mpiface_sharedDomain(nFaces))
+            allocate(partitions(domain) % mpiface_isRotaryPeriodic(nFaces))
             end associate
          end do
 !
@@ -299,6 +300,16 @@ module MeshPartitioning
 !           ---------------------
             partitions(dL) % mpiface_sharedDomain(bfaceID(dL)) = dR
             partitions(dR) % mpiface_sharedDomain(bfaceID(dR)) = dL
+!
+!           Get the rotary periodic flag (true or false)
+!           ---------------------------------------------
+            if (f % isRotaryPeriodic) then
+               partitions(dL) % mpiface_isRotaryPeriodic(bfaceID(dL)) = .true.
+               partitions(dR) % mpiface_isRotaryPeriodic(bfaceID(dR)) = .true.
+            else
+               partitions(dL) % mpiface_isRotaryPeriodic(bfaceID(dL)) = .false.
+               partitions(dR) % mpiface_isRotaryPeriodic(bfaceID(dR)) = .false.
+            end if
 
             end associate
             end associate
@@ -488,6 +499,11 @@ module MeshPartitioning
             do fID = 1, partitions(pID) % no_of_mpifaces
                write(fileID,*) partitions(pID) % mpiface_sharedDomain(fID)
             end do
+
+            ! Write mpiface_isRotaryPeriodic
+            do fID = 1, partitions(pID) % no_of_mpifaces
+               write(fileID,*) partitions(pID) % mpiface_isRotaryPeriodic(fID)
+            end do
             
             write(fileID,*) "meshIsHOPR", meshIsHOPR
 
@@ -554,6 +570,7 @@ module MeshPartitioning
          allocate(mpi_partition % mpiface_rotation          (mpi_partition % no_of_mpifaces))
          allocate(mpi_partition % mpiface_elementSide       (mpi_partition % no_of_mpifaces))
          allocate(mpi_partition % mpiface_sharedDomain      (mpi_partition % no_of_mpifaces))
+         allocate(mpi_partition % mpiface_isRotaryPeriodic  (mpi_partition % no_of_mpifaces))
 
          ! Read nodeIDs
          do nID = 1, mpi_partition % no_of_nodes
@@ -590,6 +607,11 @@ module MeshPartitioning
          ! Read mpiface_sharedDomain
          do fID = 1, mpi_partition % no_of_mpifaces
             read(fileID,*) mpi_partition % mpiface_sharedDomain(fID)
+         end do
+
+         ! Read mpiface_isRotaryPeriodic
+         do fID = 1, mpi_partition % no_of_mpifaces
+            read(fileID,*) mpi_partition % mpiface_isRotaryPeriodic(fID)
          end do
          
          ! Read HOPR part
