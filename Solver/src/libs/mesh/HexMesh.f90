@@ -237,7 +237,12 @@ MODULE HexMeshClass
          safedeallocate(self % HO_FacesBoundary)
          safedeallocate(self % HO_ElementsMPI)
          safedeallocate(self % HO_ElementsSequential)
-
+!
+!        ---------
+!        MPI faces
+!        ---------
+!
+         call DestructMPIFaces(self % MPIfaces)
 !
 !        ----------------
 !        IBM storage
@@ -1195,6 +1200,8 @@ slavecoord:             DO l = 1, 4
 !           ---------------
 !
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
+!           Wait until the neighbour has received the previous Qsend before refilling it
+            call mpi_wait(self % MPIfaces % faces(domain) % Qsend_req, MPI_STATUS_IGNORE, ierr)
             !$acc parallel loop gang present(self) copyin(nEqn) private(fID,thisSide,faceSize) wait(1)
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
@@ -1250,7 +1257,8 @@ slavecoord:             DO l = 1, 4
 !
          do domain = 1, MPI_Process % nProcs
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
-
+!           Wait until the neighbour has received the previous U_xyzsend before refilling it
+            call mpi_wait(self % MPIfaces % faces(domain) % gradQsend_req, MPI_STATUS_IGNORE, ierr)
             !$acc parallel loop gang present(self) copyin(nEqn) wait(1)
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
@@ -1299,6 +1307,7 @@ slavecoord:             DO l = 1, 4
 !
          integer            :: mpifID, fID, thisSide, domain
          integer            :: i, j, counter
+         integer            :: ierr
          integer, parameter :: otherSide(2) = (/2,1/)
 
          if ( .not. MPI_Process % doMPIAction ) return
@@ -1323,6 +1332,8 @@ slavecoord:             DO l = 1, 4
 !
             counter = 1
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
+!           Wait until the neighbour has received the previous AviscFluxSend before refilling it
+            call mpi_wait(self % MPIfaces % faces(domain) % AviscFluxSend_req, MPI_STATUS_IGNORE, ierr)
 
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
@@ -1361,6 +1372,7 @@ slavecoord:             DO l = 1, 4
 !
          integer            :: mpifID, fID, thisSide, domain
          integer            :: i, j, counter
+         integer            :: ierr
          integer, parameter :: otherSide(2) = (/2,1/)
 
          if ( .not. MPI_Process % doMPIAction ) return
@@ -1385,6 +1397,8 @@ slavecoord:             DO l = 1, 4
 !
             counter = 1
             if ( self % MPIfaces % faces(domain) % no_of_faces .eq. 0 ) cycle
+!           Qsend is shared with the solution exchange: wait before refilling it
+            call mpi_wait(self % MPIfaces % faces(domain) % Qsend_req, MPI_STATUS_IGNORE, ierr)
 
             do mpifID = 1, self % MPIfaces % faces(domain) % no_of_faces
                fID = self % MPIfaces % faces(domain) % faceIDs(mpifID)
@@ -5547,7 +5561,12 @@ end subroutine HexMesh_pAdapt_MPI
       end do
 !$omp end parallel do
 
+!
+!     The copied request handles belong to "from": the copy must not wait on them
+!
+      call MPIFaces_WaitForSends(to % MPIfaces)
       to % MPIfaces = from % MPIfaces
+      call MPIFaces_ResetRequests(to % MPIfaces)
 
       safedeallocate (to % zones)
       allocate ( to % zones ( size(from % zones) ) )
