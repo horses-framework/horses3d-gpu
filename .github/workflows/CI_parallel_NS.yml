@@ -5,12 +5,11 @@ name: CI PARALLEL (MPI) NS
 ########################################################################
 # Controls when the action will run.
 on:
-  # Triggers the workflow on push or pull request events but only for the master branch
+  # Triggers the workflow on pushes to main/develop and on pull requests into any branch
   # Comment lines 10-13 to deactivate automatic running until Metis webpage is online again.
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -60,6 +59,7 @@ jobs:
       - name: Install OpenMPI
         if: (matrix.compiler == 'gfortran')
         run: |
+          sudo apt-get update
           sudo apt-get install -y openmpi-bin libopenmpi-dev
           export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
           mpif90 --version
@@ -73,6 +73,13 @@ jobs:
           mpifort --version
           mpifort --showme
           gcc --version
+
+      # Install gmsh (used to generate test meshes from their .geo sources)
+      - name: Install gmsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gmsh
+          gmsh --version
 
       # # Install parallel HDF5 (OpenMPI version)
       # - name: Install HDF5 (parallel, OpenMPI)
@@ -192,6 +199,24 @@ jobs:
          cp -r $HDF5_ROOT/lib/* lib/ # Copy hdf5 libraty files to local lib
          ldd ./bin/horses3d.ns
 
+
+#
+# UNIT TESTS: WALL SHEAR STRESS (|tau_vector| vs. tau, |u_tau_vector| vs. u_tau)
+# -----------------------------------------------------------------------------
+
+      - name: Build unit test WallShearStress
+        working-directory: ./Solver/test/Components/WallShearStress
+        run: |
+         export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
+         make unittest MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run unit test WallShearStress
+        working-directory: ./Solver/test/Components/WallShearStress
+        run: |
+         export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
+         make run-unittest MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
 
 # GRC 30/10/2025 - DEACTIVATE EULER TEST CASES - NOT WORKING IN GPU         
 # ########################################################################
@@ -639,18 +664,19 @@ jobs:
 # 12) CYLINDER FAS
 # ---------------
 
-  #GPU
-      # - name: Build NSCylinderFAS
-      #   working-directory: ./Solver/test/NavierStokes/CylinderFAS/SETUP
-      #   run: |
-      #     # source /opt/intel/oneapi/setvars.sh || true
-      #     make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES
+      - name: Build NSCylinderFAS
+        working-directory: ./Solver/test/NavierStokes/CylinderFAS/SETUP
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
 
-      # - name: Run NSCylinderFAS
-      #   working-directory: ./Solver/test/NavierStokes/CylinderFAS
-      #   run: |
-      #     # source /opt/intel/oneapi/setvars.sh || true
-      #     mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderFAS.control
+      - name: Run NSCylinderFAS
+        working-directory: ./Solver/test/NavierStokes/CylinderFAS
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns CylinderFAS.control
+        if: '!cancelled()'
 
 #
 # 13) CYLINDER IP+BDF2
@@ -1351,6 +1377,24 @@ jobs:
         run: |
           # source /opt/intel/oneapi/setvars.sh || true
           mpiexec --oversubscribe -n 8 ./horses3d.ns LimiterTest.control
+        if: '!cancelled()'
+
+#
+# 51) Translating Isentropic Vortex
+# ---------------------------------
+      - name: Build IsentropicVortex
+        working-directory: ./Solver/test/Euler/IsentropicVortex
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          (cd MESH && gmsh -3 isentropicvortex2D.geo -o isentropicvortex2D.msh)
+          (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}")
+        if: '!cancelled()'
+
+      - name: Run IsentropicVortex
+        working-directory: ./Solver/test/Euler/IsentropicVortex
+        run: |
+          # source /opt/intel/oneapi/setvars.sh || true
+          mpiexec --oversubscribe -n 8 ./horses3d.ns IsentropicVortex.control
         if: '!cancelled()'
 
 #
