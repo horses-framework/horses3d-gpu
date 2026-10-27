@@ -576,6 +576,11 @@ Module DGSEMClass
             END IF 
          END IF
 
+!
+!        Drop file-probe steps (HDF5, resume) that will be recomputed from initial_time
+!        ------------------------------------------------------------------------------
+         call self % monitors % ResumeFileProbes(initial_time)
+
          IF(controlVariables % stringValueForKey(solutionFileNameKey,LINE_LENGTH) /= "none")     THEN
             write(solutionName,'(A,A,I10.10)') trim(solutionName), "_", initial_iteration
             call self % mesh % Export( trim(solutionName) )

@@ -582,7 +582,7 @@ end module ProblemFileFunctions
                                msg           = "Number of time steps to tolerance")
 
             CALL FTAssertEqual(expectedValue = wake_u + 1.0_RP, &
-                               actualValue   = monitors % probes(1) % values(1) + 1.0_RP, &
+                               actualValue   = monitors % probes(1) % values(1,1) + 1.0_RP, &
                                tol           = 1.d-11, &
                                msg           = "Wake final x-velocity at the point [0,2.0,4.0]")
 
