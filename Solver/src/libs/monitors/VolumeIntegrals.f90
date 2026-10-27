@@ -731,7 +731,8 @@ module VolumeIntegrals
                 ! num_of_vars is equal to NCONS
 
 !$acc parallel loop gang present(mesh) num_gangs(9700) reduction(+:val1,val2,val3,val4,val5)
-!$omp parallel do reduction(+:val1,val2,val3,val4,val5) private(val,local1,local2,local3,local4,local5) schedule(guided)
+!$omp parallel do reduction(+:val1,val2,val3,val4,val5) &
+!$omp private(val,local1,local2,local3,local4,local5) schedule(guided)
          do eID = 1, mesh % no_of_elements
 !
             local1 = 0.0_RP
