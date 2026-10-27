@@ -5,12 +5,11 @@ name: CI SERIAL MU
 ########################################################################
 # Controls when the action will run.
 on:
-  # Triggers the workflow on push or pull request events but only for the master branch
+  # Triggers the workflow on pushes to main/develop and on pull requests into any branch
   # Comment lines 10-13 to deactivate automatic running until Metis webpage is online again.
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
