@@ -1272,7 +1272,7 @@ module SpatialDiscretization
 !
 !           Compute sharp fluxes for skew-symmetric approximations
 !           ------------------------------------------------------
-            !call HyperbolicDiscretization % ComputeSplitFormFluxes(e, inviscidContravariantFlux, fSharp, gSharp, hSharp)
+            call SplitDG_ComputeSplitFormFluxes(e, inviscidContravariantFlux, fSharp, gSharp, hSharp)
 !
 !           Perform the Weak volume green integral
 !           --------------------------------------
