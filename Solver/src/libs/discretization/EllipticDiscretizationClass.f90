@@ -20,7 +20,8 @@ module EllipticDiscretizationClass
       contains
          procedure      :: Construct                 => BaseClass_Construct
          procedure      :: ComputeGradient           => BaseClass_ComputeGradient
-         procedure      :: ComputeLocalGradients     => BaseClass_ComputeGradient
+         procedure      :: ComputeLocalGradients     => BaseClass_ComputeLocalGradients
+         procedure      :: GradientVariables         => BaseClass_GradientVariables
          procedure      :: LiftGradients             => BaseClass_LiftGradients
          procedure      :: ComputeInnerFluxes        => BaseClass_ComputeInnerFluxes
          procedure      :: RiemannSolver             => BaseClass_RiemannSolver
@@ -146,32 +147,48 @@ module EllipticDiscretizationClass
          real(kind=RP),        intent(in) :: time
          procedure(GetGradientValues_f)   :: GetGradients
          logical, intent(in), optional    :: HO_Elements
-!
-!        ---------------
-!        Local variables
-!        ---------------
-!
-         integer  :: eID
-         logical  :: set_mu
 
-#ifdef MULTIPHASE
-         select case (self % eqName)
-         case(ELLIPTIC_MU)
-            set_mu = .true.
-         case default
-            set_mu = .false.
-         end select
-#else
-         set_mu = .false.
-#endif
-
-!$omp do schedule(runtime)
-         do eID = 1 , size(mesh % elements)
-         !   call mesh % elements(eID) % ComputeLocalGradient(nEqn, nGradEqn, set_mu)
-         end do
-!$omp end do nowait
+         call self % ComputeLocalGradients(nEqn, nGradEqn, mesh)
 
       end subroutine BaseClass_ComputeGradient
+
+      subroutine BaseClass_ComputeLocalGradients(self, nEqn, nGradEqn, mesh)
+!
+!        *******************************************************************
+!           Computes the local (element-wise) gradients of the gradient
+!           variables of this equation, using the DG differentiation matrix
+!        *******************************************************************
+!
+         use HexMeshClass
+         implicit none
+         class(EllipticDiscretization_t), intent(in)    :: self
+         integer,                         intent(in)    :: nEqn, nGradEqn
+         type(HexMesh),                   intent(inout) :: mesh
+
+         call HexMesh_ComputeLocalGradient(mesh, nEqn, nGradEqn, self % GradientVariables())
+
+      end subroutine BaseClass_ComputeLocalGradients
+
+      integer function BaseClass_GradientVariables(self) result(gradVars)
+!
+!        *******************************************************************
+!           Returns the set of gradient variables used by this equation.
+!           The flow equations use the gradient variables set by the
+!           physics (grad_vars), the Cahn-Hilliard equation always uses the
+!           state (concentration and chemical potential).
+!        *******************************************************************
+!
+         implicit none
+         class(EllipticDiscretization_t), intent(in) :: self
+
+         select case (self % eqName)
+         case (ELLIPTIC_CH)
+            gradVars = GRADVARS_STATE
+         case default
+            gradVars = grad_vars
+         end select
+
+      end function BaseClass_GradientVariables
 
       subroutine BaseClass_LiftGradients(self, nEqn, nGradEqn, mesh, time, GetGradients)
 !
