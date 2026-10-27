@@ -364,20 +364,6 @@ module SpatialDiscretization
          real(kind=RP)  :: mu_smag, delta
          integer :: zoneID, zonefID
 !
-!        ****************
-!        Volume integrals
-!        ****************
-!
-
-
-         select type ( HyperbolicDiscretization )
-         type is (StandardDG_t)
-            call TimeDerivative_VolumetricContribution(mesh)         
-         type is (SplitDG_t)
-               call TimeDerivative_VolumetricContribution_Split(mesh)
-         end select        
-
-
          if ( LESModel % active) then
             !$omp do schedule(runtime) private(i,j,k,delta,mu_smag)
                         !$acc parallel loop gang present(mesh, LESModel) async(1)
@@ -392,19 +378,30 @@ module SpatialDiscretization
                                                                        mesh % elements(eID) % storage % U_z(:,i,j,k), &
                                                                        mesh % elements(eID) % storage % mu_turb_NS(i,j,k) )
                                            
-                               mesh % elements(eID) % storage % mu_NS(1,i,j,k) = mesh % elements(eID) % storage % mu_NS(1,i,j,k) + &
-                                                                                 mesh % elements(eID) % storage % mu_turb_NS(i,j,k)
+                               mesh % elements(eID) % storage % mu_NS(1,i,j,k) = mesh % elements(eID) % storage % mu_turb_NS(i,j,k)
                             end do                ; end do                ; end do
                         end do
                         !$acc end parallel loop
             !$omp end do
          end if
-
 !
 !        Compute viscosity at interior and boundary faces
 !        ------------------------------------------------
          call compute_viscosity_at_faces(size(mesh % faces_interior), 2, mesh % faces_interior, mesh)
          call compute_viscosity_at_faces(size(mesh % faces_boundary), 1, mesh % faces_boundary, mesh)
+!
+!        ****************
+!        Volume integrals
+!        ****************
+!
+
+
+         select type ( HyperbolicDiscretization )
+         type is (StandardDG_t)
+            call TimeDerivative_VolumetricContribution(mesh)         
+         type is (SplitDG_t)
+               call TimeDerivative_VolumetricContribution_Split(mesh)
+         end select        
 !
 !        ******************************************
 !        Compute Riemann solver of non-shared faces
@@ -688,6 +685,7 @@ module SpatialDiscretization
             call iEulerFlux(mesh % elements(eID) % storage % Q(:,i,j,k), inviscidFlux, mesh % elements(eID) % storage % rho(i,j,k))
 
             call GetViscosity_selector(mesh % elements(eID) % storage % Q(INSRHO,i,j,k), mu)
+            mu = mu + mesh % elements(eID) % storage % mu_NS(1,i,j,k)   ! Add subgrid viscosity
 
             call iViscousFlux( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
                                     mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, keppa, viscousFlux)
@@ -759,6 +757,7 @@ module SpatialDiscretization
          do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
                   
             call GetViscosity_selector(mesh % elements(eID) % storage % Q(INSRHO,i,j,k), mu)
+            mu = mu + mesh % elements(eID) % storage % mu_NS(1,i,j,k)   ! Add subgrid viscosity
 
             call iViscousFlux( NCONS, NGRAD, mesh % elements(eID) % storage % Q(:,i,j,k) , mesh % elements(eID) % storage % U_x(:,i,j,k) , & 
                                     mesh % elements(eID) % storage % U_y(:,i,j,k) , mesh % elements(eID) % storage % U_z(:,i,j,k), mu, beta, keppa, Flux)
@@ -843,7 +842,7 @@ module SpatialDiscretization
                                                              mesh % faces(face_ids(iFace)) % storage(side) % U_z(:,i,j), &
                                                                                     mu_smag)
 
-                     mesh % faces(face_ids(iFace)) % storage(side) % mu_NS(1,i,j) = mesh % faces(face_ids(iFace)) % storage(side) % mu_NS(1,i,j) + mu_smag
+                     mesh % faces(face_ids(iFace)) % storage(side) % mu_NS(1,i,j) = mu_smag
                      !mesh % faces(face_ids(iFace)) % storage(side) % mu_NS(2,i,j) = mesh % faces(face_ids(iFace)) % storage(side) % mu_NS(2,i,j) + mu_smag * dimensionless % mu_to_kappa
                   end do
                end do              ; end do
@@ -911,6 +910,8 @@ module SpatialDiscretization
 
                   call GetViscosity_selector(f % storage(1) % Q(INSRHO,i,j), muL)
                   call GetViscosity_selector(f % storage(2) % Q(INSRHO,i,j), muR)
+                  muL = muL + f % storage(1) % mu_NS(1,i,j)   ! Add subgrid viscosity
+                  muR = muR + f % storage(2) % mu_NS(1,i,j)   ! Add subgrid viscosity
                   !mu = 0.5_RP * (muL + muR)
 !        
 !                 --------------
@@ -968,7 +969,7 @@ module SpatialDiscretization
          TYPE(Face)   , INTENT(inout) :: f   
          integer       :: i, j, eq
          integer       :: Sidearray, maxId
-         real(kind=RP) :: mu
+         real(kind=RP) :: mu, muL, muR
 !
 !        --------------
 !        Invscid fluxes
@@ -982,13 +983,16 @@ module SpatialDiscretization
 !              Viscous fluxes
 !              --------------
 !      
-               call GetViscosity_selector(f % storage(1) % Q(INSRHO,i,j), mu)
+               call GetViscosity_selector(f % storage(1) % Q(INSRHO,i,j), muL)
+               call GetViscosity_selector(f % storage(2) % Q(INSRHO,i,j), muR)
+               muL = muL + f % storage(1) % mu_NS(1,i,j)   ! Add subgrid viscosity
+               muR = muR + f % storage(2) % mu_NS(1,i,j)   ! Add subgrid viscosity
 
                   call iViscousFlux( NCONS, NGRAD, f % storage(1) % Q(:,i,j) , f % storage(1) % U_x(:,i,j), & 
-                                    f % storage(1) % U_y(:,i,j) , f % storage(1) % U_z(:,i,j), mu, 0.0_RP, 0.0_RP, f % storage(1) % unStar(:,:,i,j))
+                                    f % storage(1) % U_y(:,i,j) , f % storage(1) % U_z(:,i,j), muL, 0.0_RP, 0.0_RP, f % storage(1) % unStar(:,:,i,j))
 
                   call iViscousFlux( NCONS, NGRAD, f % storage(2) % Q(:,i,j) , f % storage(2) % U_x(:,i,j), & 
-                                    f % storage(2) % U_y(:,i,j) , f % storage(2) % U_z(:,i,j), mu, 0.0_RP, 0.0_RP, f % storage(2) % unStar(:,:,i,j))
+                                    f % storage(2) % U_y(:,i,j) , f % storage(2) % U_z(:,i,j), muR, 0.0_RP, 0.0_RP, f % storage(2) % unStar(:,:,i,j))
 
             end do ; end do
 
@@ -1067,6 +1071,7 @@ module SpatialDiscretization
              do j = 0, mesh % faces(fID) % Nf(2) ;  do i = 0, mesh % faces(fID) % Nf(1)
 
                call GetViscosity_selector(mesh % faces(fID) % storage(1) % Q(INSRHO,i,j), mu)
+               mu = mu + mesh % faces(fID) % storage(1) % mu_NS(1,i,j)   ! Add subgrid viscosity
                 
                call iViscousFlux( NCONS, NGRAD, mesh % faces(fID) % storage(1) % Q(:,i,j) , &
                                                 mesh % faces(fID) % storage(1) % U_x(:,i,j), & 

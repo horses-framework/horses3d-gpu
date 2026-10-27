@@ -5,12 +5,11 @@ name: CI PARALLEL (MPI) MU
 ########################################################################
 # Controls when the action will run.
 on:
-  # Triggers the workflow on push or pull request events but only for the master branch
+  # Triggers the workflow on pushes to main/develop and on pull requests into any branch
   # Comment lines 10-13 to deactivate automatic running until Metis webpage is online again.
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -150,6 +149,24 @@ jobs:
          make allclean MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
          make mu MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
 
+
+#
+# UNIT TESTS: WALL SHEAR STRESS (|tau_vector| vs. tau, |u_tau_vector| vs. u_tau)
+# -----------------------------------------------------------------------------
+
+      - name: Build unit test WallShearStress
+        working-directory: ./Solver/test/Components/WallShearStress
+        run: |
+         source /opt/intel/oneapi/setvars.sh || true
+         make unittest MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run unit test WallShearStress
+        working-directory: ./Solver/test/Components/WallShearStress
+        run: |
+         source /opt/intel/oneapi/setvars.sh || true
+         make run-unittest MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
 
 # ########################################################################
 # #######                       MULTIPHASE                        ########
