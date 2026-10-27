@@ -1,0 +1,69 @@
+Flow equations        = "Euler"
+mesh file name        = "MESH/isentropicvortex2D.msh"
+restart file name     = "RESULTS/IsentropicVortex.hsol"
+solution file name    = "RESULTS/IsentropicVortex.hsol"
+restart               = .false.
+compute gradients = .true.
+!Polynomial order      = 3
+Polynomial order i = 4
+Polynomial order j = 4
+Polynomial order k = 4
+Number of time steps  = 100 
+Output Interval       = 10
+Number of plot points = 2
+Convergence tolerance = 1.d-10
+!cfl                   = 0.3
+dt = 1.0e-3   ! horses dt actual dt is dt/Vref
+inviscid discretization = split-form
+averaging             = Chandrasekar
+riemann solver        = central          !lax-friedrichs central
+mach number           = 0.3
+!Riemann solver        = Standard Roe
+!averaging             = Pirozzoli
+AOA theta             = 0.0
+AOA phi               = 0.0
+autosave mode         = "iteration"
+autosave interval     = 500
+compute time derivative after timestep = .true.
+
+
+#define boundary front
+  type = periodic
+  coupled boundary = back
+#end
+
+#define boundary bottom
+   type = periodic
+   coupled boundary = top
+#end
+
+#define boundary top
+   type = periodic
+   coupled boundary = bottom
+#end
+
+#define boundary back
+   type = periodic
+   coupled boundary = front
+#end
+
+#define boundary left
+   type = periodic
+   coupled boundary = right
+#end
+
+#define boundary right
+   type = periodic
+   coupled boundary = left
+#end
+
+#define volume monitor 1
+   Name = EntropRate
+   Variable = Entropy rate
+#end
+
+#define volume monitor 2
+   Name = EntropBalance
+   Variable = Entropy Balance
+#end
+
