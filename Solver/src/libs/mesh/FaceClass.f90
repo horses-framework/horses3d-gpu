@@ -1046,14 +1046,14 @@
          if (associated(from % geom)) then
             if (.not. associated(to % geom)) then
                allocate(to % geom)
-               to % geom => from % geom
             end if
+            to % geom = from % geom
          end if
          if (associated(from % storage)) then
             if (.not. associated(to % storage)) then
-               allocate(to % storage(2))
-               to % storage => from % storage
+               allocate(to % storage(size(from % storage)))
             end if
+            to % storage = from % storage
          end if
       end subroutine Face_Assign
 end Module FaceClass
