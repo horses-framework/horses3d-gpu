@@ -478,6 +478,22 @@ jobs:
         if: '!cancelled()'  
 
 #
+# 1b) SAVE SOLUTION ON DEMAND (touch SAVE_SOLUTION)
+# -------------------------------------------------
+
+      - name: Build NSSaveSolutionTouch
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch/SETUP
+        run: |
+          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+        if: '!cancelled()'
+
+      - name: Run NSSaveSolutionTouch
+        working-directory: ./Solver/test/NavierStokes/SaveSolutionTouch
+        run: |
+          ./check_save_solution.sh mpiexec --oversubscribe -n 8 ./horses3d.ns SaveSolutionTouch.control
+        if: '!cancelled()'
+
+#
 # 2) CYLINDER IP
 # --------------
 

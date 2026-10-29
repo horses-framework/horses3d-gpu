@@ -131,6 +131,37 @@ For periodic boundary conditions, the second boundary that must be used as a com
 
 ---
 
+# Saving the Solution on Demand
+
+The solution can be written at any moment of a running simulation, without stopping it, by creating a file named `SAVE_SOLUTION` in the working directory (the directory from which the solver was launched):
+
+```bash
+touch SAVE_SOLUTION
+```
+
+Every *save solution check interval* iterations the solver looks for this file. If it exists, the solution is written with the same format and naming as the autosave (the *solution file name* followed by the iteration number, e.g. `RESULTS/Cylinder_0000000150.hsol`) and, once saved, the `SAVE_SOLUTION` file is deleted. A new request can be made by creating the file again. If the autosave has already written the solution in that same iteration, it is not written twice, but the file is still deleted.
+
+In parallel runs only the root process looks for the file and the request is communicated to the rest of the processes, so all of them save the same iteration. The request is attended at the first check after the file is created, i.e. up to *save solution check interval* iterations later.
+
+| Keyword                       | Description                                                                                                                                  | Default value |
+|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|---------------|
+| save solution check interval  | *INTEGER*: Number of iterations between checks for the `SAVE_SOLUTION` file. Larger values reduce the cost of the check (a file system query and an MPI broadcast), at the price of a longer delay between the `touch` and the save. | 50            |
+
+Example of a SLURM job that requests a save after 23 hours, leaving margin before a 24 h wall time:
+
+```bash
+rm -f SAVE_SOLUTION
+( sleep 23h && touch SAVE_SOLUTION ) &
+TIMER_PID=$!
+
+srun $EXEC $SLURM_JOB_NAME
+
+kill $TIMER_PID 2>/dev/null
+rm -f SAVE_SOLUTION
+```
+
+---
+
 # Restarting a Case
 
 | Keyword              | Description                                                                                                                                                                                                                             | Default value        |
