@@ -13,10 +13,14 @@ Program main
 #ifdef _HAS_MPI_
       use mpi
 #endif
+#ifdef HAS_HDF5
+      use HDF5
+#endif
     Implicit None
 
     TYPE( FTValueDictionary)                :: controlVariables
     character(len=LINE_LENGTH)              :: toolType
+    integer                                 :: ierr
 
 !   -----------------------------------------
 !   Start measuring the total simulation time
@@ -34,6 +38,10 @@ Program main
         write(STD_OUT,'(A)') "HORSES additional tool cannot be run with MPI"
         call exit(99)
     end if
+    ! Initialize HDF5 predefined datatypes
+#ifdef HAS_HDF5
+    call h5open_f(ierr)
+#endif
 !
     call controlVariables % initWithSize(16)
     call ConstructSharedBCModule
@@ -77,6 +85,9 @@ Program main
 !
     call Stopwatch % destruct
     call destructSharedBCModule
+#ifdef HAS_HDF5
+    call h5close_f(ierr)
+#endif
 
     call MPI_Process % Close
    
