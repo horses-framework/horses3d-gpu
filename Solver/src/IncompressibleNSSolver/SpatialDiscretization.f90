@@ -245,12 +245,6 @@ module SpatialDiscretization
 !        Compute gradients
 !        -----------------
 !
-    
-         call HexMesh_ComputeLocalGradientiNS(mesh)
-
-         !$acc wait
-         
-         
          if ( computeGradients ) then
             CALL DGSpatial_ComputeGradient(mesh , time)
          end if

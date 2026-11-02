@@ -237,7 +237,6 @@ module SpatialDiscretization
          INTEGER                 :: k, eID, fID, i, j, iFace, ierr
          real(kind=RP)           :: sqrtRho, invMa2, jacobian
          class(Element), pointer :: e
-         logical                 :: set_mu   
          real(RP) :: cs_1, cs_2, Qclip
 
 !$omp parallel shared(mesh, time)
@@ -311,8 +310,6 @@ module SpatialDiscretization
 !        Get concentration (lifted) gradients (also prolong to faces)
 !        ------------------------------------------------------------
 !
-         set_mu = .false.
-         call HexMesh_ComputeLocalGradientCH(mesh, set_mu)
          ! This is chGradientVariables in master but it is not used here - dummy input
          call CHDiscretization % ComputeGradient(NCOMP, NCOMP, mesh, time, mGradientVariables) 
 !
@@ -447,9 +444,6 @@ module SpatialDiscretization
 !           Get concentration (lifted) gradients (also prolong to faces)
 !           ------------------------------------------------------------
 !
-            !set_mu is always false for CH
-            set_mu = .false.
-            call HexMesh_ComputeLocalGradientCH(mesh, set_mu)
             ! This is chGradientVariables in master but it is not used here - dummy input
             call CHDiscretization % ComputeGradient(NCOMP, NCOMP, mesh, time, mGradientVariables)
 !
@@ -601,9 +595,10 @@ endif
 !        Compute local entropy variables gradient
 !        ----------------------------------------
 !
-         !set_mu is always true for MU
-         set_mu = .true.
-         call HexMesh_ComputeLocalGradientMU(mesh, set_mu)
+!        The non-conservative terms below use the local (not lifted) gradients,
+!        so the local gradients and the lifting are computed separately here
+!        ----------------------------------------------------------------------
+         call ViscousDiscretization % ComputeLocalGradients(NCONS, NCONS, mesh)
 !
 !        --------------------
 !        Update MPI Gradients
@@ -716,9 +711,6 @@ endif
 !           Get concentration (lifted) gradients (also prolong to faces)
 !           ------------------------------------------------------------
 !
-            !set_mu is always false for CH
-            set_mu = .false.
-            call HexMesh_ComputeLocalGradientCH(mesh, set_mu)
             ! This is chGradientVariables in master but it is not used here - dummy input
             call CHDiscretization % ComputeGradient(NCOMP, NCOMP, mesh, time, mGradientVariables)
 !

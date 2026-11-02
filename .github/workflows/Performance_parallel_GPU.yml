@@ -18,6 +18,10 @@ name: PERFORMANCE PARALLEL (MPI) GPU
 on:
   workflow_dispatch:
   #manual trigger only 
+
+permissions:
+  contents: read
+
 jobs:
   parallel-gpu-performance:
     # Uses self-hosted runner on nibbler cluster with GPU access
