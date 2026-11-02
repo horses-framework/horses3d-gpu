@@ -1,0 +1,12 @@
+!
+!  horses2plt CI: surface solution (surf.hsol), wall shear stress vector
+!     u_tau, u_tau_x/y/z            -> need "surface save utau" and "surface save utau vector"
+!     tau, tau_x/y/z                -> need "surface save utau vector"
+!     Checked with check_wall_shear.py (python3)
+!
+hmesh file           = MESH/CylinderSign_bc001_0000000000.surf.hmesh
+hsol file            = RESULTS/surfaces/CylinderSign_bc001_0000000020.surf.hsol
+has gradients        = .true.
+additional variables = "[u_tau, u_tau_vector, turb]"
+output mode          = FE
+output variables     = u_tau,tau,tau_x,tau_y,tau_z,rho
