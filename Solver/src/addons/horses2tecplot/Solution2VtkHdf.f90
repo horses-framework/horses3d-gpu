@@ -416,6 +416,16 @@ module Solution2VtkHdfModule
          end do            ; end do            ; end do
       end if
 
+      if (hasUTauVec_NS) then
+         allocate( e % u_tau_vec_NSout(1:NDIM,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+         e % u_tau_vec_NSout = 0.0_RP
+         do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+            do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+               e % u_tau_vec_NSout(:,i,j,k) = e % u_tau_vec_NSout(:,i,j,k) + e % u_tau_vec_NS(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+            end do            ; end do            ; end do
+         end do            ; end do            ; end do
+      end if
+
       if (hasMu_NS) then
          allocate( e % mu_NSout(1,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
          e % mu_NSout = 0.0_RP
