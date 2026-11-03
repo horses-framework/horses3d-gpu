@@ -351,7 +351,7 @@ module SCsensorClass
       end do
 !$omp end parallel do
 
-!     pAdapt does not work with MPI (see HexMesh_pAdapt)
+!     If this is an MPI simulation, we have to call the `pAdapt` routine that is specialized for parallel
       if (MPI_Process % doMPIAction) then
          call sensor % TEestim % coarseSem % mesh % pAdapt_MPI(N, controlVariables)
       else
