@@ -576,23 +576,19 @@ module SpatialDiscretization
 !
 !           Add physical source term
 !           ************************
-!!$acc parallel loop gang present(mesh,thermodynamics,dimensionless,refValues) copyin(t)
-!!$omp do schedule(runtime) private(i,j,k)
-!            do eID = 1, mesh % no_of_elements
-!             ! the source term is reset to 0 each time Qdot is calculated to enable the possibility to add source terms to
-!              ! different contributions and not accumulate each call
-!               mesh % elements(eID) % storage % S_NS = 0.0_RP
-!!!$acc loop vector collapse(3)
-!               do k = 0, mesh % elements(eID) % Nxyz(1) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
-!
-!                  call UserDefinedSourceTermNS( mesh % elements(eID) % geom % x(:,i,j,k),  mesh % elements(eID) % storage % Q(:,i,j,k), t, &
-!                                                mesh % elements(eID) % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues)
-!                  call randomTrip % getTripSource( mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % storage % S_NS(:,i,j,k) )
-!                  call ForcesFarm(farm, mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % S_NS(:,i,j,k), t)
-!               end do                  ; end do                ; end do
-!            end do
-!!!$acc end parallel loop
-!!$omp end do
+!           The user source term is a host routine of the problem file library, so it is
+!           only called in CPU builds: with OpenACC the solution lives on the device.
+#ifndef _OPENACC
+            do eID = 1, mesh % no_of_elements
+               associate ( e => mesh % elements(eID) )
+               e % storage % S_NS = 0.0_RP
+               do k = 0, e % Nxyz(3) ; do j = 0, e % Nxyz(2) ; do i = 0, e % Nxyz(1)
+                  call UserDefinedSourceTermNS(e % geom % x(:,i,j,k), e % storage % Q(:,i,j,k), t, &
+                                               e % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues)
+               end do ; end do ; end do
+               end associate
+            end do
+#endif
             ! for the sponge, loops are in the internal subroutine as values are precalculated
 !            call sponge % addSource(mesh)
             call ForcesFarm(farm, mesh, t)

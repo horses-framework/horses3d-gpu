@@ -840,10 +840,6 @@ endif
                                                                               + sqrtRho * dimensionless % invFr2 * dimensionless % gravity_dir(2)
                mesh % elements(eID) % storage % QDot(IMSQRHOW,i,j,k) = mesh % elements(eID) % storage % QDot(IMSQRHOW,i,j,k) & 
                                                                               + sqrtRho * dimensionless % invFr2 * dimensionless % gravity_dir(3)
-!
-!            + Add user defined source terms
-             !  call UserDefinedSourceTermNS(e % geom % x(:,i,j,k), e % storage % Q(:,i,j,k), t, e % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues, multiphase)
-             !  e % storage % QDot(:,i,j,k) = e % storage % QDot(:,i,j,k) + e % storage % S_NS(:,i,j,k) / [1.0_RP,sqrtRho,sqrtRho,sqrtRho,1.0_RP]
 
             end do         ; end do          ; end do 
          end do
@@ -924,6 +920,21 @@ endif
 !           Add source term
 !           ***************
 !The scale with sqrtRho is done in the subroutines, not done againg here
+#ifndef _OPENACC
+!        The user source term is a host routine of the problem file library, so it is only
+!        called in CPU builds. Its momentum is scaled with 1/sqrt(rho), as in legacy.
+         do eID = 1, mesh % no_of_elements
+            associate ( e => mesh % elements(eID) )
+            do k = 0, e % Nxyz(3) ; do j = 0, e % Nxyz(2) ; do i = 0, e % Nxyz(1)
+               Source = 0.0_RP
+               call UserDefinedSourceTermNS(e % geom % x(:,i,j,k), e % storage % Q(:,i,j,k), t, Source, &
+                                            thermodynamics, dimensionless, refValues, multiphase)
+               invSqrtRho = 1.0_RP / sqrt(e % storage % rho(i,j,k))
+               e % storage % S_NS(:,i,j,k) = Source * [1.0_RP, invSqrtRho, invSqrtRho, invSqrtRho, 1.0_RP]
+            end do ; end do ; end do
+            end associate
+         end do
+#endif
          !$acc wait
          call ForcesFarm(farm, mesh, t)
          !$acc wait
