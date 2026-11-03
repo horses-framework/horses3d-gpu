@@ -373,6 +373,7 @@ module SpatialDiscretization
          use WallFunctionConnectivity
          use TripForceClass, only: randomTrip
          use ActuatorLine, only: farm, ForcesFarm
+         use ActuatorDisk, only: diskFarm, ForcesDiskFarm
          use SpongeClass, only: sponge
          use ChannelForcing, only: channelSource
          use IBMClass, only: IBM_SourceTerm
@@ -596,6 +597,9 @@ module SpatialDiscretization
             ! for the sponge, loops are in the internal subroutine as values are precalculated
 !            call sponge % addSource(mesh)
             call ForcesFarm(farm, mesh, t)
+            ! NOTE: ActuatorLine and ActuatorDisk both write S_NS(momentum/energy) on their
+            ! own actuated elements; do not enable both models on overlapping mesh regions.
+            call ForcesDiskFarm(diskFarm, mesh, t)
             call channelSource(mesh)
 !
 !           Add Particles source
@@ -717,6 +721,7 @@ module SpatialDiscretization
       use WallFunctionConnectivity
          use TripForceClass, only: randomTrip
          use ActuatorLine, only: farm, ForcesFarm
+         use ActuatorDisk, only: diskFarm, ForcesDiskFarm
          use IBMClass
          implicit none
          type(HexMesh)              :: mesh
@@ -917,6 +922,9 @@ module SpatialDiscretization
 !$omp end do
 
             call ForcesFarm(farm, mesh, t)
+            ! NOTE: ActuatorLine and ActuatorDisk both write S_NS(momentum/energy) on their
+            ! own actuated elements; do not enable both models on overlapping mesh regions.
+            call ForcesDiskFarm(diskFarm, mesh, t)
 !
 !           Add Particles source
 !           ********************
@@ -1094,6 +1102,7 @@ module SpatialDiscretization
       subroutine TimeDerivative_ComputeQDotIsolated( mesh , t )
          use TripForceClass, only: randomTrip
          use ActuatorLine, only: farm, ForcesFarm
+         use ActuatorDisk, only: diskFarm, ForcesDiskFarm
          implicit none
          type(HexMesh)              :: mesh
          real(kind=RP)              :: t
@@ -1146,6 +1155,9 @@ module SpatialDiscretization
             end do
 !$omp end do
             call ForcesFarm(farm, mesh, t)
+            ! NOTE: ActuatorLine and ActuatorDisk both write S_NS(momentum/energy) on their
+            ! own actuated elements; do not enable both models on overlapping mesh regions.
+            call ForcesDiskFarm(diskFarm, mesh, t)
          end if
 
 !$omp do schedule(runtime) private(i,j,k)
