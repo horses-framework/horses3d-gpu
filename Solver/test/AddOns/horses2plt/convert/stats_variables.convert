@@ -1,0 +1,8 @@
+!
+!  horses2plt CI: volumetric statistics, statistics variables, FE mode (native order)
+!
+hmesh file       = MESH/Cylinder_0000000000.hmesh
+hsol file        = RESULTS/Cylinder.stats.hsol
+has gradients    = .true.
+output mode      = FE
+output variables = Vmean,umean,vmean,wmean,Sij,rho,p

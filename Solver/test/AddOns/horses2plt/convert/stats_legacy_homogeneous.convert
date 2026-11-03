@@ -1,0 +1,8 @@
+!
+!  horses2plt CI: legacy statistics file (Stats2Plt), homogeneous points with fixed order
+!
+hmesh file   = MESH/Cylinder_0000000000.hmesh
+hsol file    = RESULTS/Legacy.stats.hsol
+legacy stats = .true.
+output order = 2
+output basis = Homogeneous

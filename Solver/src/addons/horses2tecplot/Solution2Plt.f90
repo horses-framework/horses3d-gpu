@@ -199,6 +199,7 @@ module Solution2PltModule
          e % QDot_out(1:,0:,0:,0:) => e % QDot
          if (hasStats) e % statsout(1:,0:,0:,0:) => e % stats
          if (hasUt_NS) e % ut_NSout(1:,0:,0:,0:) => e % ut_NS
+         if (hasUTauVec_NS) e % u_tau_vec_NSout(1:,0:,0:,0:) => e % u_tau_vec_NS
          if (hasMu_NS) e % mu_NSout(1:,0:,0:,0:) => e % mu_NS
          if (hasWallY) e % wallYout(1:,0:,0:,0:) => e % wallY
          if (hasMu_sgs) e % mu_sgsout(1:,0:,0:,0:) => e % mu_sgs
@@ -371,6 +372,7 @@ module Solution2PltModule
             e % QDot_out(1:,0:,0:,0:) => e % QDot
             if (hasStats) e % statsout(1:,0:,0:,0:) => e % stats
             if (hasUt_NS) e % ut_NSout(1:,0:,0:,0:) => e % ut_NS
+            if (hasUTauVec_NS) e % u_tau_vec_NSout(1:,0:,0:,0:) => e % u_tau_vec_NS
             if (hasMu_NS) e % mu_NSout(1:,0:,0:,0:) => e % mu_NS
             if (hasWallY) e % wallYout(1:,0:,0:,0:) => e % wallY
             if (hasMu_sgs) e % mu_sgsout(1:,0:,0:,0:) => e % mu_sgs
@@ -396,6 +398,11 @@ module Solution2PltModule
             if (hasUt_NS) then
                 allocate( e % ut_NSout(1:NSTAT,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
                 call prolongSolutionToGaussPoints(1, e % Nsol, e % ut_NS, e % Nout, e % ut_NSout, Tx, Ty, Tz)
+            end if
+
+            if (hasUTauVec_NS) then
+                allocate( e % u_tau_vec_NSout(1:NDIM,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+                call prolongSolutionToGaussPoints(NDIM, e % Nsol, e % u_tau_vec_NS, e % Nout, e % u_tau_vec_NSout, Tx, Ty, Tz)
             end if
 
             if (hasMu_NS) then
@@ -642,6 +649,16 @@ module Solution2PltModule
             do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
                do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
                   e % ut_NSout(:,i,j,k) = e % ut_NSout(:,i,j,k) + e % ut_NS(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
+               end do            ; end do            ; end do
+            end do            ; end do            ; end do
+         end if
+
+         if (hasUTauVec_NS) then
+            allocate( e % u_tau_vec_NSout(1:NDIM,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            e % u_tau_vec_NSout = 0.0_RP
+            do n = 0, e % Nsol(3) ; do m = 0, e % Nsol(2) ; do l = 0, e % Nsol(1)
+               do k = 0, e % Nout(3) ; do j = 0, e % Nout(2) ; do i = 0, e % Nout(1)
+                  e % u_tau_vec_NSout(:,i,j,k) = e % u_tau_vec_NSout(:,i,j,k) + e % u_tau_vec_NS(:,l,m,n) * TxSol(i,l) * TySol(j,m) * TzSol(k,n)
                end do            ; end do            ; end do
             end do            ; end do            ; end do
          end if
