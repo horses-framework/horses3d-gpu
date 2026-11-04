@@ -96,6 +96,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/Cylinder_AdaptiveTimeStep_pAdaptationRL \
             ./NavierStokes/ABLBoundaryMapping \
             ./NavierStokes/ActuatorLineController \
+            ./NavierStokes/RotaryPeriodic \
             ./NavierStokes/Channel \
             ./NavierStokes/Channel64 \
             ./IncompressibleNS/Convergence \
