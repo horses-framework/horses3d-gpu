@@ -598,6 +598,17 @@
       call sem % fwh % updateValues(sem % mesh, t, sem % numberOfTimeSteps )
       call sem % fwh % writeToFile()
 #endif
+!
+!     The friction velocity of the surfaces is otherwise computed only after each time step, so
+!     the first file would hold the initial values of the storage (u_tau = 1, u_tau_vector = 0).
+!     The gradients are already available: they come from ComputeTimeDerivative above.
+!     ---------------------------------------------------------------------------------------
+#if defined(NAVIERSTOKES)
+      if ( surfacesMesh % active ) then
+         call sem % mesh % UpdateFacesHostData()
+         if (.not. useWallFunc) call getU_tauInSurfaces(surfacesMesh, sem % mesh, saveUTauWithSign)
+      end if
+#endif
       call surfacesMesh % saveAllSolution(sem % mesh, self % initial_iter, t, controlVariables)
 !
 !     -----------------
