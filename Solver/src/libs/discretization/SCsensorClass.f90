@@ -351,7 +351,12 @@ module SCsensorClass
       end do
 !$omp end parallel do
 
-      call sensor % TEestim % coarseSem % mesh % pAdapt(N, controlVariables)
+!     If this is an MPI simulation, we have to call the `pAdapt` routine that is specialized for parallel
+      if (MPI_Process % doMPIAction) then
+         call sensor % TEestim % coarseSem % mesh % pAdapt_MPI(N, controlVariables)
+      else
+         call sensor % TEestim % coarseSem % mesh % pAdapt(N, controlVariables)
+      end if
       call sensor % TEestim % coarseSem % mesh % storage % PointStorage()
 !
 !     Update the SVV if active
@@ -469,7 +474,7 @@ module SCsensorClass
 !     Add 'inertia' to the scaled value
 !     ---------------------------------
       if (sensor % min_steps > 1) then   ! Enter the loop only if necessary
-!$omp parallel do default(private) shared(sem)
+!$omp parallel do default(private) shared(sem, sensor)
          do eID = 1, sem % mesh % no_of_elements
             e => sem % mesh % elements(eID)
             s = e % storage % sensor
@@ -846,7 +851,7 @@ module SCsensorClass
 !
 !     Maximum TE computation
 !     ----------------------
-!$omp parallel do default(private) shared(sem, csem)
+!$omp parallel do default(private) shared(sem, csem, sensor, t, NodalStorage, thermodynamics, dimensionless, refValues)
       do eID = 1, sem % mesh % no_of_elements
 
          e  => sem % mesh % elements(eID)
@@ -858,7 +863,8 @@ module SCsensorClass
          mTE = 0.0_RP
          do k = 0, ce % Nxyz(IZ) ; do j = 0, ce % Nxyz(IY) ; do i = 0, ce % Nxyz(IX)
 
-            call UserDefinedSourceTermNS(ce % geom % x, ce % storage % Q(:,i,j,k), t, S, &
+            S = 0.0_RP
+            call UserDefinedSourceTermNS(ce % geom % x(:,i,j,k), ce % storage % Q(:,i,j,k), t, S, &
                                          thermodynamics, dimensionless, refValues)
             wx = NodalStorage(ce % Nxyz(IX)) % w(i)
             wy = NodalStorage(ce % Nxyz(IY)) % w(j)
@@ -892,7 +898,7 @@ module SCsensorClass
 !     -------
 !     Modules
 !     -------
-      use HyperbolicDiscretizations, only: HyperbolicDiscretization, SplitDG_t
+      use HyperbolicDiscretizations, only: HyperbolicDiscretization, SplitDG_t, SplitDG_ComputeSplitFormFluxes
       use Physics,                   only: EulerFlux
       use Utilities,                 only: AlmostEqual
 !
@@ -936,6 +942,7 @@ module SCsensorClass
          if (allocated(F)) then
             if (all(ubound(F) == [NCONS, e % Nxyz(1), e % Nxyz(2), e % Nxyz(3), NDIM])) then
                need_alloc = .false.
+               need_dealloc = .false.
             end if
          else
             need_dealloc = .false.
@@ -957,7 +964,7 @@ module SCsensorClass
          end if
 
          call HyperbolicDiscretization % ComputeInnerFluxes(e, EulerFlux, F)
-         !call HyperbolicDiscretization % ComputeSplitFormFluxes(e, F, Fs, Gs, Hs)
+         call SplitDG_ComputeSplitFormFluxes(e, F, Fs, Gs, Hs)
 
          aliasing = 0.0_RP
          do k = 0, e % Nxyz(3) ; do j = 0, e % Nxyz(2) ; do l = 0, e % Nxyz(1) ; do i = 0, e % Nxyz(1)

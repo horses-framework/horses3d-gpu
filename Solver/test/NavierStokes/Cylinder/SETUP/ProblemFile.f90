@@ -562,6 +562,7 @@ end module ProblemFileFunctions
             real(kind=RP), parameter           :: wake_u = 1.0965307794823676E-08_RP
             real(kind=RP), parameter           :: cd = 3.4573345486345943E+01_RP
             real(kind=RP), parameter           :: cl = -4.6800322917661674E-04_RP
+            real(kind=RP), parameter           :: p_gauge_aver = 1.1803861222154900E-01_RP
 
 !
             N = mesh % elements(1) % Nxyz(1) ! This works here because all the elements have the same order in all directions
@@ -614,6 +615,10 @@ end module ProblemFileFunctions
                                tol           = 1.d-11, &
                                msg           = "Lift coefficient")
 
+            CALL FTAssertEqual(expectedValue = p_gauge_aver, &
+                               actualValue   = monitors % surfaceMonitors(3) % values(1), &
+                               tol           = 1.d-11, &
+                               msg           = "Gauge pressure average over the cylinder")
 
             CALL sharedManager % summarizeAssertions(title = testName,iUnit = 6)
    

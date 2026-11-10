@@ -1,0 +1,5 @@
+!
+!  horses2plt CI: mesh only (no solution file -> Mesh2Plt)
+!
+hmesh file    = MESH/Cylinder_0000000000.hmesh
+boundary file = MESH/CylinderNSpol3.bmesh
