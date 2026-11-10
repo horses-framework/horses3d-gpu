@@ -235,7 +235,7 @@ module SurfaceIntegrals
 !
 !////////////////////////////////////////////////////////////////////////////////////////
 !
-      function VectorSurfaceIntegral(mesh, zoneID, integralType, iter) result(val)
+      function VectorSurfaceIntegral(mesh, zoneID, integralType, iter) result(final_val)
 !
 !        -----------------------------------------------------------
 !           This function computes scalar integrals, that is, those
@@ -254,7 +254,7 @@ module SurfaceIntegrals
          type(HexMesh),       intent(inout) :: mesh 
          integer,             intent(in)    :: zoneID
          integer,             intent(in)    :: integralType, iter
-         real(kind=RP)                      :: val(NDIM)
+         real(kind=RP)                      :: final_val(NDIM)
 !
 !        ---------------
 !        Local variables
@@ -262,6 +262,7 @@ module SurfaceIntegrals
 !
          integer  :: zonefID, fID, eID, i, j, ierr
          real(kind=RP)  :: localval(NDIM)
+         real(kind=RP)  :: val(NDIM)
          real(kind=RP)  :: valx, valy, valz
          real(kind=RP)  :: localx, localy, localz
          real(kind=RP)  :: p, tau(1:NDIM, 1:NDIM)
@@ -269,6 +270,7 @@ module SurfaceIntegrals
 !        Initialization
 !        --------------
          val = 0.0_RP
+         final_val = 0.0_RP
          localval = 0.0_RP
          valx = 0.0_RP
          valy = 0.0_RP
@@ -280,7 +282,7 @@ module SurfaceIntegrals
          case ( SURFACE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz)
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,val) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -318,7 +320,7 @@ module SurfaceIntegrals
          case ( TOTAL_FORCE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz)
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,p,tau) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -363,7 +365,7 @@ module SurfaceIntegrals
          case ( PRESSURE_FORCE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz) 
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,p,val) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -406,7 +408,7 @@ module SurfaceIntegrals
          case ( VISCOUS_FORCE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz)
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,tau,val) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -449,11 +451,11 @@ module SurfaceIntegrals
            
          end select
             
-         val(1:3) = [valx, valy, valz]
+         final_val(1:3) = [valx, valy, valz]
          
 #ifdef _HAS_MPI_
-         localVal = val
-         call mpi_allreduce(localVal, val, NDIM, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, ierr)
+         localVal = final_val
+         call mpi_allreduce(localVal, final_val, NDIM, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, ierr)
 #endif
 
       end function VectorSurfaceIntegral

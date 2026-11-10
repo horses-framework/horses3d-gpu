@@ -893,7 +893,7 @@ module SCsensorClass
 !     -------
 !     Modules
 !     -------
-      use HyperbolicDiscretizations, only: HyperbolicDiscretization, SplitDG_t
+      use HyperbolicDiscretizations, only: HyperbolicDiscretization, SplitDG_t, SplitDG_ComputeSplitFormFluxes
       use Physics,                   only: EulerFlux
       use Utilities,                 only: AlmostEqual
 !
@@ -937,6 +937,7 @@ module SCsensorClass
          if (allocated(F)) then
             if (all(ubound(F) == [NCONS, e % Nxyz(1), e % Nxyz(2), e % Nxyz(3), NDIM])) then
                need_alloc = .false.
+               need_dealloc = .false.
             end if
          else
             need_dealloc = .false.
@@ -958,7 +959,7 @@ module SCsensorClass
          end if
 
          call HyperbolicDiscretization % ComputeInnerFluxes(e, EulerFlux, F)
-         !call HyperbolicDiscretization % ComputeSplitFormFluxes(e, F, Fs, Gs, Hs)
+         call SplitDG_ComputeSplitFormFluxes(e, F, Fs, Gs, Hs)
 
          aliasing = 0.0_RP
          do k = 0, e % Nxyz(3) ; do j = 0, e % Nxyz(2) ; do l = 0, e % Nxyz(1) ; do i = 0, e % Nxyz(1)
