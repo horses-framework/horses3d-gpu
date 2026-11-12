@@ -26,6 +26,9 @@ The options comprise following flags:
 | --partition-file=  | *CHARACTER*: Specifies the path to the partition file (*.pmesh) to export the MPI ranks of the simulation.     | Not Present   |
 | --boundary-file=   | *CHARACTER*: Specifies the path to the boundary mesh file (*.bmesh) to export the surfaces as additional zones of the Tecplot file. | Not Present   |
 | --output-type=     | *CHARACTER*: Specifies the type of output file: *tecplot* or *vtkhdf*.                                          | *tecplot*     |
+| --gradient-variables= | *CHARACTER*: Gradient variables of the gradients saved in the solution file (see the solver keyword *gradient variables*): *state*, *entropy* or *energy*. Used to compute the velocity gradients. | *state*       |
+
+> **Warning:** `--gradient-variables` (or the `gradient variables` key of the *.h2t* control file) is a setting of *horses2plt* itself, independent of the solver, and it silently defaults to *state* when left unspecified. It must be set to exactly the same value used for the *gradient variables* keyword when the simulation was run; otherwise every quantity derived from a velocity gradient in the postprocessed output (skin friction, vorticity, Q-criterion, wall shear stress, ...) will be computed from the wrong set of variables and will be silently wrong, with no error or warning raised.
 
 * *Homogeneous* when *--output-order* is specified
 

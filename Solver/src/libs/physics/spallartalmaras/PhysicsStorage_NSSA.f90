@@ -103,6 +103,7 @@
         enumerator :: GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY
      end enum
      integer, protected :: grad_vars = GRADVARS_STATE
+     !$acc declare copyin(grad_vars)
 !
 !    ------------------------------
 !    Thermodynamic specs of the Air
@@ -538,6 +539,7 @@
          select case(grad_vars_)
          case(GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY)
             grad_vars = grad_vars_
+            !$acc update device(grad_vars)
          case default
             print*, "Unrecognized option"
             errorMessage(STD_OUT)

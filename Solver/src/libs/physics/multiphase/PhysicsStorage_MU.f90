@@ -62,6 +62,8 @@
      public    IGMU, IGU, IGV, IGW, IGP
      public    computeGradients
      public    enableGravity
+     public    GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY
+     public    grad_vars
 
      public    ConstructPhysicsStorage_MU, DestructPhysicsStorage_MU, DescribePhysicsStorage_MU
      public    CheckPhysics_MUInputIntegrity
@@ -93,6 +95,18 @@
         enumerator :: IGMU = 1, IGU, IGV, IGW, IGP
      end enum
      !$acc declare copyin(IGMU, IGU, IGV, IGW, IGP)
+!
+!    --------------------------------
+!    Choice of the gradient variables
+!    --------------------------------
+!
+!    The multiphase flow equations always compute gradients of the entropy
+!    variables, U = (mu, u, v, w, p) (see mGradientVariables).
+!
+     enum, bind(C)
+        enumerator :: GRADVARS_STATE, GRADVARS_ENTROPY, GRADVARS_ENERGY
+     end enum
+     integer, parameter :: grad_vars = GRADVARS_ENTROPY
 
 
      logical, protected       :: enableGravity         = .false.
