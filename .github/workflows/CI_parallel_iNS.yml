@@ -95,6 +95,9 @@ jobs:
       - name: Install METIS (intel)
         # if: (steps.cache-metis.outputs.cache-hit != 'true')
         # wget "http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz" (OLD LINK TO METIS)
+        # CMake 4 (ubuntu-latest) rejects METIS 5.1.0's cmake_minimum_required(VERSION 2.8)
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: 3.5
         if: (matrix.compiler == 'ifort') 
         run: |
           source /opt/intel/oneapi/setvars.sh || true
@@ -111,6 +114,9 @@ jobs:
       - name: Install METIS (gnu)
       # if: (steps.cache-metis.outputs.cache-hit != 'true')
       # wget "http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz" (OLD LINK TO METIS)
+        # CMake 4 (ubuntu-latest) rejects METIS 5.1.0's cmake_minimum_required(VERSION 2.8)
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: 3.5
         if: (matrix.compiler == 'gfortran') 
         run: |
           wget "https://src.fedoraproject.org/lookaside/pkgs/metis/metis-5.1.0.tar.gz/5465e67079419a69e0116de24fce58fe/metis-5.1.0.tar.gz" 
