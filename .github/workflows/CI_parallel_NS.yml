@@ -61,7 +61,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openmpi-bin libopenmpi-dev
-          export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
           mpif90 --version
           mpif90 --showme
           mpicc --version
@@ -93,7 +92,6 @@ jobs:
       - name: Install HDF5 (gnu)
         if: (matrix.compiler == 'gfortran') 
         run: |
-          export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
           wget "https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.12/hdf5-1.12.0/src/hdf5-1.12.0.tar.gz"
           tar -xvf hdf5-1.12.0.tar.gz
           cd hdf5-1.12.0
@@ -157,7 +155,6 @@ jobs:
       # wget "http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz" (OLD LINK TO METIS)
         if: (matrix.compiler == 'gfortran') 
         run: |
-          export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
           wget "https://src.fedoraproject.org/lookaside/pkgs/metis/metis-5.1.0.tar.gz/5465e67079419a69e0116de24fce58fe/metis-5.1.0.tar.gz" 
           tar -xvf metis-5.1.0.tar.gz
           cd metis-5.1.0
@@ -190,8 +187,6 @@ jobs:
       - name: Compile horses3d
         working-directory: ./Solver
         run: |
-         export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
-          
          # Compile the code
          make allclean MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}" EXTRA_LDFLAGS="$EXTRA_LINK_FLAGS"
          make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
@@ -207,14 +202,12 @@ jobs:
       - name: Build unit test WallShearStress
         working-directory: ./Solver/test/Components/WallShearStress
         run: |
-         export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
          make unittest MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
         if: '!cancelled()'
 
       - name: Run unit test WallShearStress
         working-directory: ./Solver/test/Components/WallShearStress
         run: |
-         export OMPI_FCFLAGS="-DOMPI_SKIP_MPIF08" # deactivate mpi_f08 interface to avoid compilation problems
          make run-unittest MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
         if: '!cancelled()'
 
