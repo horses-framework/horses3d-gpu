@@ -574,25 +574,34 @@ module SpatialDiscretization
 !        *****************************************************************************************************************************
          if (.not. mesh % child) then
 !
-!           Add physical source term
-!           ************************
-!!$acc parallel loop gang present(mesh,thermodynamics,dimensionless,refValues) copyin(t)
-!!$omp do schedule(runtime) private(i,j,k)
-!            do eID = 1, mesh % no_of_elements
-!             ! the source term is reset to 0 each time Qdot is calculated to enable the possibility to add source terms to
-!              ! different contributions and not accumulate each call
-!               mesh % elements(eID) % storage % S_NS = 0.0_RP
-!!!$acc loop vector collapse(3)
-!               do k = 0, mesh % elements(eID) % Nxyz(1) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
-!
-!                  call UserDefinedSourceTermNS( mesh % elements(eID) % geom % x(:,i,j,k),  mesh % elements(eID) % storage % Q(:,i,j,k), t, &
-!                                                mesh % elements(eID) % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues)
-!                  call randomTrip % getTripSource( mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % storage % S_NS(:,i,j,k) )
-!                  call ForcesFarm(farm, mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % storage % Q(:,i,j,k), mesh % elements(eID) % storage % S_NS(:,i,j,k), t)
-!               end do                  ; end do                ; end do
-!            end do
-!!!$acc end parallel loop
-!!$omp end do
+!           Add physical (user-defined) source term
+!           ***************************************
+!           WARNING: the user-defined source term (UserDefinedSourceTermNS) does NOT work
+!           with nvfortran / OpenACC (GPU). It lives in the problemfile shared library,
+!           which is compiled WITHOUT -acc, so it is a host routine and the problemfile
+!           cannot issue OpenACC data directives. On the GPU the solution Q is resident on
+!           the device, so running this host loop there would read stale host data and the
+!           forcing would silently not enter QDot. It is therefore compiled ONLY for
+!           non-OpenACC (CPU, e.g. gfortran) builds and skipped entirely under
+!           nvfortran/OpenACC - zero effect and zero cost on the GPU. Consequence: anything
+!           that relies on it - e.g. the Method of Manufactured Solutions convergence suite
+!           in test/NavierStokes/MMS_NS - is a CPU/serial-only feature. On the GPU, S_NS is
+!           populated only by the device-side sources below (ForcesFarm, channelSource,
+!           particles).
+#ifndef _OPENACC
+!$omp do schedule(runtime) private(i,j,k)
+            do eID = 1, mesh % no_of_elements
+             ! the source term is reset to 0 each time Qdot is calculated to enable the possibility to add source terms to
+              ! different contributions and not accumulate each call
+               mesh % elements(eID) % storage % S_NS = 0.0_RP
+               do k = 0, mesh % elements(eID) % Nxyz(3) ; do j = 0, mesh % elements(eID) % Nxyz(2) ; do i = 0, mesh % elements(eID) % Nxyz(1)
+                  call UserDefinedSourceTermNS( mesh % elements(eID) % geom % x(:,i,j,k),  mesh % elements(eID) % storage % Q(:,i,j,k), t, &
+                                                mesh % elements(eID) % storage % S_NS(:,i,j,k), thermodynamics, dimensionless, refValues)
+                  call randomTrip % getTripSource( mesh % elements(eID) % geom % x(:,i,j,k), mesh % elements(eID) % storage % S_NS(:,i,j,k) )
+               end do                  ; end do                ; end do
+            end do
+!$omp end do
+#endif
             ! for the sponge, loops are in the internal subroutine as values are precalculated
 !            call sponge % addSource(mesh)
             call ForcesFarm(farm, mesh, t)
