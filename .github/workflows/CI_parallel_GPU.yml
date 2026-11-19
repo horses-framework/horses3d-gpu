@@ -169,10 +169,11 @@ jobs:
       - name: Run NS Cylinder (surface wall variables) for horses2plt
         working-directory: ./Solver/test/AddOns/horses2plt
         run: |
-          mkdir -p MESH RESULTS/surfaces
+          # MESH and RESULTS are created by the job itself: the SLURM job runs as $CI_USER,
+          # and directories made here (as root) would not be writable by it
           ln -sf ../../../bin/horses3d.ns horses3d.ns
           ln -sf ../../../bin/horses2plt horses2plt
-          $GITHUB_WORKSPACE/ci_run_slurm_test.sh HORSES2PLT_Parallel mpirun -np 1 --bind-to none ./horses3d.ns Cylinder.control
+          $GITHUB_WORKSPACE/ci_run_slurm_test.sh HORSES2PLT_Parallel 'mkdir -p MESH RESULTS/surfaces && mpirun -np 1 --bind-to none ./horses3d.ns Cylinder.control'
         if: '!cancelled()'
 
       - name: horses2plt - surface wall shear stress vector (u_tau_vector, tau, tau_x/y/z)
