@@ -17,9 +17,8 @@ optionally, changes to the control file, which apply to every selected case (e.g
 case and order runs in its own job, in parallel; a job has a 6-hour limit, which mesh 32
 at high P may exceed. A final job per case merges them, writes the table of errors and
 orders to the job summary and uploads `errors.csv`, `convergence.png` and the control
-files and logs of the runs. The default sweep, P = 3 to 6 on meshes 4, 8 and 16 for NS
-and P = 2 to 6 on meshes 4, 6, 8, 12 and 16 for MU, takes about 45 minutes, set by MU
-at P = 6 on one thread.
+files and logs of the runs. The default sweep, P = 3 to 6 on meshes 4, 8 and 16 for both
+cases, takes about 40 minutes, set by NS at P = 6 on one thread.
 
 GitHub shows the Run workflow button only for workflows on the default branch. On
 another branch, once the workflow has run in the repository, use the GitHub CLI:
@@ -82,53 +81,59 @@ with `$GMSH_PYTHON` if set. No mesh files are kept in this repository.
 
 ## Results
 
-Orders of the total error between meshes 8 and 16, gfortran, the same as in horses3d:
+Orders of convergence between meshes 8 and 16, gfortran, the same as in horses3d. Each
+cell gives the order of the total error and, in brackets, the lowest order of any single
+variable. The job summary of each run gives the order of every variable between
+consecutive meshes, and the lowest of them.
 
 | P | NS | MU |
 |---|---|---|
-| 2 |      | 1.99 |
-| 3 | 3.18 | 3.00 |
-| 4 | 4.31 | 4.00 |
-| 5 | 5.18 | 5.01 |
-| 6 | 6.75 | 6.03 |
+| 3 | 3.18 (3.08) | 3.03 (2.47) |
+| 4 | 4.31 (3.92) | 3.96 (2.52) |
+| 5 | 5.18 (5.04) | 5.03 (4.95) |
+| 6 | 6.75 (6.16) | 6.17 (6.14) |
 
-In MU the total error is that of the pressure, one to three orders of magnitude above
-the others. Orders of each MU variable between meshes 8 and 16 (the job summary lists
-every variable):
-
-| P | c | sqrt(rho) u | p |
-|---|---|---|---|
-| 2 | -0.69 | 0.69 | 1.99 |
-| 3 | 1.88 | 2.72 | 3.00 |
-| 4 | 1.73 | 2.86 | 4.00 |
-| 5 | 5.25 | 5.10 | 5.01 |
-| 6 | 6.10 | 6.08 | 6.03 |
-
-* The runs are short: t = 0.02 in NS (200 steps), and t = 2e-5 in MU, whose time step is
+* These are the orders of short runs between two meshes, not asymptotic rates. The runs
+  end at t = 0.02 in NS (200 steps), and at t = 2e-4 in MU, whose explicit time step is
   limited by Cahn-Hilliard. The initial condition is exact at the nodes, where the error
-  is measured, so the error comes from the time evolution alone. At first it grows like
-  t times the truncation error of the spatial operator at the nodes, and it approaches
-  the O(h^(P+1)) error of DG only later, as the scheme damps it. For the first
-  derivatives that truncation error converges at order P, so the orders of the total
-  error are about P: P in MU, the shortest run, whose error grows linearly in time, and
-  between P and P + 0.8 in NS.
-* The truncation error of higher derivatives converges more slowly, and in MU the run is
-  too short for the scheme to damp it: c, through the fourth derivatives of Cahn-Hilliard,
-  and the momentum, through the viscous and capillary terms, converge at lower orders up
-  to P = 4, and at P = 2 the error of c grows on the finer meshes.
-* In horses3d, runs five times longer give orders of 3.51 in NS and 3.04 in MU at P = 3
-  (2.09 for c in MU), at five times the cost, and halving the time step changes the
-  errors at P = 6 on mesh 16 by about 1e-5 at most, so they are errors of the spatial
-  discretization. To run longer, raise `Number of time steps`.
+  is measured, so the whole error is made during the run by the truncation error of the
+  spatial operator at the nodes, which is the residual printed at iteration 0 of each log
+  (maximum norm). Between meshes 8 and 16 its order is between P - 1.6 and P + 0.2 in NS
+  (lowest at even P, from BR1), and lower in MU (on meshes 12 and 16, about 2 at P = 4 and
+  4 at P = 6). The dissipation of the scheme damps part of this error during the run,
+  faster on finer meshes, so the orders change with the final time and with the meshes.
+* Every variable converges at order P - 0.1 or higher between meshes 8 and 16, except in
+  MU: the momentum at P = 3 and 4, and c at P = 4. In MU the total is mostly the pressure
+  error (at least 92% of the squared total on mesh 16), so the order of the total is the
+  order of the pressure.
+* In horses3d, one-off runs on finer meshes with the same final time give these orders:
+  NS between meshes 16 and 32, 3.25 (3.15), 4.75 (4.61), 5.11 (5.00), 7.23 (6.88) for P = 3
+  to 6; MU between meshes 16 and 24, 3.05 (2.60), 4.19 (4.18), 5.08 (4.95), 6.30 (6.24),
+  and between 24 and 32, 3.06 (2.73) and 4.45 (3.62) for P = 3 and 4. Runs five times
+  longer give NS 3.51, 5.04, 5.12, 7.81 between meshes 8 and 16. Halving the time step
+  changes the errors at P = 6 on mesh 16 by at most 2.6e-8 (NS) and 1.1e-6 (MU), so they
+  are errors of the spatial discretization. To run longer, raise `Number of time steps`.
 * NS runs at Re = 10, so that the viscous terms are about a fifth of the momentum source.
+  The two MU fluids have different densities, viscosities and sound speeds, so that the
+  mixture laws, which weight each property by the concentration, are exercised. The MU
+  errors of this repository agree with those of horses3d within the run-to-run noise of
+  its multi-threaded MU runs (up to about 1e-4 relative).
+* Not tested: Riemann solvers other than matrix dissipation in NS and the exact one in
+  MU; two-point fluxes other than Chandrasekar; BR2 and IP; Gauss nodes; time integrators
+  other than RK3; non-periodic boundary conditions; curved, non-affine or non-conforming
+  meshes; gravity; MPI; the OpenACC paths of this repository.
 
 ## Assumptions
 
 * NS uses the default Sutherland constants, so do not set `sutherland temperature` or
   `sutherland reference temperature`. Gravity is not included.
 * The time steps of the control files are stable up to P = 6 on mesh 16, the finest
-  pair of the default sweeps; higher orders or finer meshes may need a smaller `dt`, with
-  more steps to keep the final time. In MU the explicit step is limited by Cahn-Hilliard,
-  which scales like h^4/P^8; the chemical characteristic time of 2000 s (a small
-  mobility) keeps dt = 1e-7 stable.
+  pair of the default sweeps, where twice the step is still stable; higher orders or
+  finer meshes may need a smaller `dt`, with more steps to keep the final time. In MU the
+  explicit step is limited by Cahn-Hilliard: the limit scales like h^4, falls steeply
+  with P and grows with the chemical characteristic time. With 20000 s (a small
+  mobility), dt = 1e-6 is stable; at P = 6 on mesh 16, 2.5 times this step is stable and
+  5 times diverges (measured in horses3d).
+* The default sweeps start at P = 3: at P = 2 the truncation error of the MU momentum
+  does not converge.
 * The error sums are rank-local, so run without MPI.
