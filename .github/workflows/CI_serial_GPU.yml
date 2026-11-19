@@ -82,14 +82,45 @@ jobs:
           SBATCH_EOF
 
           job_id=$(sbatch --uid=$CI_USER --parsable run_test.sh)
-          while squeue -j $job_id 2>/dev/null | grep -q $job_id; do sleep 10; done
+          echo "[$(date +%T)] Submitted SLURM job '${job_name}' with id '${job_id}'"
+          if [ -z "$job_id" ]; then
+            echo "sbatch did not return a job id"
+            exit 1
+          fi
 
-          cat slurm-${job_id}.out
+          # Cancelling a GitHub run does not cancel the SLURM job: do it here, also on time-out
+          # ("wait" so that the trap runs at once and not when the sleep ends)
+          trap 'scancel "$job_id" 2>/dev/null || true' EXIT INT TERM
+
+          max_wait=1800   # seconds in the queue plus running; the job itself has a 15 min limit
+          waited=0
+          while squeue -j "$job_id" -h 2>/dev/null | grep -q .; do
+            if [ $((waited % 60)) -eq 0 ]; then
+              echo "[$(date +%T)] job ${job_id}: $(squeue -j "$job_id" -h -o '%T (%r), running time %M' 2>/dev/null)," \
+                   "$(squeue -p gpu -h -t R 2>/dev/null | wc -l) job(s) running in the gpu partition"
+            fi
+            if [ $waited -ge $max_wait ]; then
+              echo "Time-out: job ${job_id} did not finish in ${max_wait} s"
+              scontrol show job "$job_id" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 10 &
+            wait $!
+            waited=$((waited + 10))
+          done
+          echo "[$(date +%T)] job ${job_id} is no longer in the queue"
+
+          if [ -f "slurm-${job_id}.out" ]; then
+            cat "slurm-${job_id}.out"
+          else
+            echo "slurm-${job_id}.out was not created"
+          fi
 
           # Check exit code (ExitCode:Signal, e.g., "0:0" means success)
-          exit_code=$(sacct -j $job_id --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
+          timeout 120 sacct -j "$job_id" --format=JobID,State,ExitCode,Elapsed --noheader || echo "sacct failed or timed out"
+          exit_code=$(timeout 120 sacct -j "$job_id" --format=ExitCode --noheader | head -1 | tr -d ' ' | cut -d':' -f1)
           if [ "$exit_code" != "0" ]; then
-            echo "Test failed with exit code: $exit_code"
+            echo "Test failed with exit code: '${exit_code}'"
             exit 1
           fi
           RUNNER_EOF
