@@ -196,7 +196,7 @@ module Solution2PltModule
             e % U_yout(1:,0:,0:,0:) => e % U_y
             e % U_zout(1:,0:,0:,0:) => e % U_z
          end if
-         if (associated(e % QDot)) e % QDot_out(1:,0:,0:,0:) => e % QDot
+         e % QDot_out(1:,0:,0:,0:) => e % QDot
          if (hasStats) e % statsout(1:,0:,0:,0:) => e % stats
          if (hasUt_NS) e % ut_NSout(1:,0:,0:,0:) => e % ut_NS
          if (hasUTauVec_NS) e % u_tau_vec_NSout(1:,0:,0:,0:) => e % u_tau_vec_NS
@@ -369,7 +369,7 @@ module Solution2PltModule
             end if
 
 
-            if (associated(e % QDot)) e % QDot_out(1:,0:,0:,0:) => e % QDot
+            e % QDot_out(1:,0:,0:,0:) => e % QDot
             if (hasStats) e % statsout(1:,0:,0:,0:) => e % stats
             if (hasUt_NS) e % ut_NSout(1:,0:,0:,0:) => e % ut_NS
             if (hasUTauVec_NS) e % u_tau_vec_NSout(1:,0:,0:,0:) => e % u_tau_vec_NS
@@ -420,11 +420,8 @@ module Solution2PltModule
                 call prolongSolutionToGaussPoints(1, e % Nsol, e % mu_sgs, e % Nout, e % mu_sgsout, Tx, Ty, Tz)            
             end if
 
-            ! QDot is not read from the solution files: only prolong it if it exists
-            if (associated(e % QDot)) then
-               allocate( e % QDot_out(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
-               call prolongSolutionToGaussPoints(NVARS, e % Nsol, e % QDot, e % Nout, e % QDot_out, Tx, Ty, Tz)
-            end if
+            allocate( e % QDot_out(1:NVARS,0:e % Nout(1), 0:e % Nout(2), 0:e % Nout(3)) )
+            call prolongSolutionToGaussPoints(NVARS, e % Nsol, e % QDot, e % Nout, e % QDot_out, Tx, Ty, Tz)
 
          end if
 
