@@ -18,7 +18,7 @@
       USE Physics
       USE ExplicitMethods
       USE IMEXMethods
-      use AutosaveClass                   , only: Autosave_t, AUTOSAVE_BY_TIME
+      use AutosaveClass                   , only: Autosave_t, AutosaveLambVector_t, AUTOSAVE_BY_TIME
       use StopwatchClass
       use MPI_Process_Info
       use TimeIntegratorDefinitions
@@ -50,6 +50,7 @@
          LOGICAL                                :: Compute_dt                    ! Is st computed from an inputted CFL number?
          type(Autosave_t)                       :: autosave
          class(pAdaptation_t), allocatable      :: pAdaptator
+         type(AutosaveLambVector_t)             :: lambSave
          type(MultiTauEstim_t)                  :: TauEstimator
          character(len=LINE_LENGTH)             :: integration_method
          integer                                :: RKStep_key
@@ -251,6 +252,8 @@
          call surfacesMesh % autosaveConfig (controlVariables, initial_time)      ! If not requested, the procedure returns only setting not save values
 
          call self % TauEstimator % construct(controlVariables, sem)
+
+         call self % lambSave % Configure(controlVariables, initial_time)
 
          if (.not. MPI_Process % isRoot ) return
 
@@ -489,7 +492,14 @@
       t = self % time
 
 #if defined(NAVIERSTOKES)
-      if( .not. sem % mesh % IBM % active ) call Initialize_WallConnection(controlVariables, sem % mesh)
+      if( .not. sem % mesh % IBM % active ) then
+         call Initialize_WallConnection(controlVariables, sem % mesh)
+!        The friction-velocity vector is only computed from the resolved velocity gradient
+!        (getU_tauInSurfaces), which is skipped when wall functions are active
+         if ( useWallFunc .and. surfacesMesh % active .and. surfacesMesh % saveUtauVector ) then
+            error stop "'surface save utau vector' is not supported together with wall functions"
+         end if
+      end if
       if (useTrip) call randomTrip % construct(sem % mesh, controlVariables)
       call initializeChannel(controlVariables)
 #endif
@@ -794,6 +804,12 @@
             end if
 #endif
          end if
+         ! Lamb vector autosave
+         if ( self % lambsave % Autosave(k+1) ) then
+            call Stopwatch % Pause("Solver")
+            call sem % mesh % SaveLambVector(k+1,t,SolutionFileName, controlVariables)
+            call Stopwatch % Start("Solver")
+         end if
 !
 !        Save surfaces solution
 !        ----------------------
@@ -966,8 +982,9 @@
       integer, parameter :: DO_NOTHING  = 0
       integer, parameter :: AUTOSAVE    = 1
       integer, parameter :: ADAPT       = 2
-      integer, parameter :: SURFSAVE     = 3
-      integer, parameter :: DONT_KNOW   = 4
+      integer, parameter :: SURFSAVE    = 3
+      integer, parameter :: LAMBSAVE    = 4
+      integer, parameter :: DONT_KNOW   = 5
       integer, save :: next_time_will = DONT_KNOW
       !----------------------------------------------------------
 
@@ -977,6 +994,7 @@
       self % pAdaptator % performPAdaptationT = .FALSE.
       self % autosave   % performAutosave = .FALSE.
       surfacesMesh % autosave % performAutosave = .FALSE.
+      self % lambsave   % performAutosave = .FALSE.
       dt_out = dt_in
 
 !
@@ -1013,7 +1031,7 @@
                end if
 
                self % autosave % nextAutosaveTime = self % autosave % nextAutosaveTime + self % autosave % time_interval
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
             end if
 
          case (ADAPT)
@@ -1033,7 +1051,7 @@
                end if
 
                self % pAdaptator % nextAdaptationTime = self % pAdaptator % nextAdaptationTime + self % pAdaptator % time_interval
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
             end if
 
          case (SURFSAVE)
@@ -1053,16 +1071,27 @@
                end if
 
                surfacesMesh % autosave % nextAutosaveTime = surfacesMesh % autosave % nextAutosaveTime + surfacesMesh % autosave % time_interval
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
+            end if
+
+         case (LAMBSAVE)
+
+            if ( self % lambsave % nextAutosaveTime < (t + dt_out) ) then
+               dt_out = self % lambsave % nextAutosaveTime - t
+               self % lambsave % performAutosave = .TRUE.
+
+               self % lambsave % nextAutosaveTime = self % lambsave % nextAutosaveTime + self % lambsave % time_interval
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
             end if
 
          case (DONT_KNOW)
 
             if (  self % pAdaptator % adaptation_mode == ADAPT_DYNAMIC_TIME .or. &
                   surfacesMesh % autosave % mode      == AUTOSAVE_BY_TIME .or. &
-                  self % autosave % mode              == AUTOSAVE_BY_TIME) then
+                  self % autosave % mode              == AUTOSAVE_BY_TIME .or. &
+                  self % lambsave % mode              == AUTOSAVE_BY_TIME) then
 
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
                dt_temp = self % CorrectDt (t, dt_out)
                dt_out  = dt_temp
             else

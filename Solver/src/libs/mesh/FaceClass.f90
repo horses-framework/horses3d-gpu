@@ -76,6 +76,7 @@
          integer                         :: elementSide(2)
          integer                         :: projectionType(2)
          CHARACTER(LEN=BC_STRING_LENGTH) :: boundaryName
+         real(kind=RP)                   :: rotaryAngle = 0.0_RP  ! Periodic revolution: angle (rad) rotating side 1 onto side 2 (0: not rotary)
          type(MappedGeometryFace), pointer :: geom => Null()
          type(FaceStorage_t), pointer      :: storage(:) => Null()
          contains
@@ -1043,17 +1044,18 @@
          to % elementSide = from % elementSide
          to % projectionType = from % projectionType
          to % boundaryName = from % boundaryName
+         to % rotaryAngle = from % rotaryAngle
          if (associated(from % geom)) then
             if (.not. associated(to % geom)) then
                allocate(to % geom)
-               to % geom => from % geom
             end if
+            to % geom = from % geom
          end if
          if (associated(from % storage)) then
             if (.not. associated(to % storage)) then
-               allocate(to % storage(2))
-               to % storage => from % storage
+               allocate(to % storage(size(from % storage)))
             end if
+            to % storage = from % storage
          end if
       end subroutine Face_Assign
 end Module FaceClass

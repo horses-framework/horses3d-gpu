@@ -30,6 +30,7 @@ LIBOBJS_NS = 	./build_ns/ConnectivityClass.o \
 		./build_ns/Read_SpecMesh.o \
 		./build_ns/Read_GMSH.o \
 		./build_ns/ReadMeshFile.o \
+		./build_ns/RotaryFaceRotations.o \
 		./build_ns/MeshPartitioning.o \
 		./build_ns/SurfaceMesh.o
 
@@ -55,6 +56,7 @@ LIBOBJS_NSSA = 	./build_nssa/ConnectivityClass.o \
 		./build_nssa/Read_SpecMesh.o \
 		./build_nssa/Read_GMSH.o \
 		./build_nssa/ReadMeshFile.o \
+		./build_nssa/RotaryFaceRotations.o \
 		./build_nssa/MeshPartitioning.o \
 		./build_nssa/SurfaceMesh.o
 
@@ -80,6 +82,7 @@ LIBOBJS_iNS = 	./build_ins/ConnectivityClass.o \
 		./build_ins/Read_SpecMesh.o \
 		./build_ins/Read_GMSH.o \
 		./build_ins/ReadMeshFile.o \
+		./build_ins/RotaryFaceRotations.o \
 		./build_ins/MeshPartitioning.o \
 		./build_ins/SurfaceMesh.o
 
@@ -106,6 +109,7 @@ LIBOBJS_CH = 	./build_ch/ConnectivityClass.o \
 		./build_ch/Read_SpecMesh.o \
 		./build_ch/Read_GMSH.o \
 		./build_ch/ReadMeshFile.o \
+		./build_ch/RotaryFaceRotations.o \
 		./build_ch/MeshPartitioning.o \
 		./build_ch/SurfaceMesh.o
 
@@ -131,6 +135,7 @@ LIBOBJS_MU =  ./build_mu/ConnectivityClass.o \
 		./build_mu/Read_SpecMesh.o \
 		./build_mu/Read_GMSH.o \
 		./build_mu/ReadMeshFile.o \
+		./build_mu/RotaryFaceRotations.o \
 		./build_mu/MeshPartitioning.o \
 		./build_mu/SurfaceMesh.o
 
@@ -156,6 +161,7 @@ LIBOBJS_CAA =  ./build_caa/ConnectivityClass.o \
 		./build_caa/Read_SpecMesh.o \
 		./build_caa/Read_GMSH.o \
 		./build_caa/ReadMeshFile.o \
+		./build_caa/RotaryFaceRotations.o \
 		./build_caa/MeshPartitioning.o \
 		./build_caa/SurfaceMesh.o
 

@@ -11,6 +11,7 @@ make.inc
 *.bmesh
 *.pmesh
 *.hsol
+*.partitioning
 RESULTS
 
 # osx noise
@@ -51,6 +52,9 @@ Tests/TestMeshes/CylinderNSpol3_v2.mesh
 *.ns
 *.nssa
 *.ins
+Solver/test/AddOns/*/horses2plt
+Solver/test/AddOns/*/horses.mergeStats
+Solver/test/AddOns/*/MESH/*.tec
 bin/
 Makefile
 Makefile.template

@@ -102,6 +102,7 @@ Module DGSEMClass
       use PartitionedMeshClass
       use MeshPartitioning
       use SurfaceMesh, only: surfacesMesh
+      use RotationData, only: InitializeRotationFromControl, rotationParams
 
       IMPLICIT NONE
 !
@@ -239,6 +240,18 @@ Module DGSEMClass
 
       useRelaxPeriodic = controlVariables % logicalValueForKey("periodic relative tolerance")
       useWeightsPartition = controlVariables % getValueOrDefault("partitioning with weights", .true.)
+
+      ! Initialize rotation parameters from control variables
+      call InitializeRotationFromControl(controlVariables)
+
+#if !defined(NAVIERSTOKES) || defined(SPALARTALMARAS)
+      if (rotationParams % periodicEnabled) then
+         if (MPI_Process % isRoot) then
+            write(STD_OUT,'(A)') "ERROR: periodic revolution BCs are only supported in Navier-Stokes solver"
+         end if
+         error stop
+      end if
+#endif
 !
 !     **********************************************************
 !     *                  MPI PREPROCESSING                     *
@@ -572,6 +585,14 @@ Module DGSEMClass
             IF(controlVariables % stringValueForKey(solutionFileNameKey,LINE_LENGTH) /= "none")     THEN           
                write(solutionName,'(A,A,I10.10,A)') trim(solutionName), "_", initial_iteration, ".hsol"
                call self % mesh % SaveSolution(initial_iteration, initial_time, solutionName, saveGradients, withSensor, saveLES)
+#ifdef FLOW
+               if (controlVariables % logicalValueForKey(saveLambVectorKey) .or. &
+                   controlVariables % logicalValueForKey(saveLambVectorDivergenceKey)) then
+                  solutionName = controlVariables % stringValueForKey(solutionFileNameKey, requestedLength = LINE_LENGTH)
+                  solutionName = trim(getFileName(solutionName))
+                  call self % mesh % SaveLambVector(initial_iteration, initial_time, solutionName, controlVariables)
+               end if
+#endif
                !TDG: ADD PARTICLES WRITE WITH IFDEF
             END IF 
          END IF
