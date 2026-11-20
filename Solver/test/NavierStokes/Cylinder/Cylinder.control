@@ -52,10 +52,11 @@ riemann solver        = roe
 #end
 
 #define surface monitor 3
-   Name           = p2-avg
-   Marker         = innercylinder
-   Variable       = pressure-average
-   Gauge pressure = .true.
+   Name              = p2-avg
+   Marker            = innercylinder
+   Variable          = pressure-average
+   Reference surface = 1.0
+   Gauge pressure    = .true.
 #end
 
 #define probe 1

@@ -524,6 +524,10 @@ MODULE HexMeshClass
       INTEGER                    :: i,j,k,l
       integer                    :: zIDplus, zIDMinus, iFace, jFace
       character(len=LINE_LENGTH) :: associatedBname
+      real(kind=RP)              :: printAngle       ! Magnitude of the rotary angle, for the summary
+      integer                    :: ierr
+!
+      printAngle = 0.0_RP
 !
 !     --------------------------------------------
 !     Loop to find faces with the label "periodic"
@@ -548,6 +552,7 @@ MODULE HexMeshClass
 !        Reset the coordinate (changes when changing zones)
 !        --------------------------------------------------
          coord = 0
+         if (rotationParams % periodicEnabled) coord = RotationAxisIndex()
 !
 !        Get the marker of the associated zone
 !        -------------------------------------
@@ -650,10 +655,18 @@ slavecoord:             DO l = 1, 4
                      DO l = 1, 4
                         IF (.NOT.slave_matched(l)) THEN
                            x2 = self%nodes(self%faces(j)%nodeIDs(l))%x
-                           IF (useRelaxTol) THEN
-                               CALL CompareTwoNodesRelax(x1, x2, master_matched(k), coord, min_edge_length)
+                           IF (rotationParams % periodicEnabled) THEN
+                               IF (useRelaxTol) THEN
+                                  CALL CompareTwoNodesRevolRelax(x1, x2, master_matched(k), coord, rotationParams % center, min_edge_length)
+                               ELSE
+                                  CALL CompareTwoNodesRevol(x1, x2, master_matched(k), coord, rotationParams % center)
+                               END IF
                            ELSE
-                               CALL CompareTwoNodes(x1, x2, master_matched(k), coord)
+                               IF (useRelaxTol) THEN
+                                  CALL CompareTwoNodesRelax(x1, x2, master_matched(k), coord, min_edge_length)
+                               ELSE
+                                  CALL CompareTwoNodes(x1, x2, master_matched(k), coord)
+                               END IF
                            END IF
                            IF (master_matched(k)) THEN
                               slave_matched(l) = .TRUE.
@@ -672,6 +685,18 @@ slavecoord:             DO l = 1, 4
                   self % faces(i) % elementIDs(2)  = self % faces(j) % elementIDs(1)
                   self % faces(i) % elementSide(2) = self % faces(j) % elementSide(1)
                   self % faces(i) % FaceType       = HMESH_INTERIOR
+                  if (rotationParams % periodicEnabled) then
+!                    Angle that rotates face i (kept, side 1) onto face j (side 2), from the face centroids:
+!                    each pair keeps its own sign, and a centroid is never on the rotation axis
+                     x1 = 0.0_RP
+                     x2 = 0.0_RP
+                     do k = 1, 4
+                        x1 = x1 + 0.25_RP * self % nodes(self % faces(i) % nodeIDs(k)) % x
+                        x2 = x2 + 0.25_RP * self % nodes(self % faces(j) % nodeIDs(k)) % x
+                     end do
+                     self % faces(i) % rotaryAngle = SectorAngle(x1, x2)
+                     printAngle = abs(self % faces(i) % rotaryAngle)
+                  end if
                   self % elements(self % faces(i) % elementIDs(1)) % boundaryName(self % faces(i) % elementSide(1)) = emptyBCName
                   self % elements(self % faces(i) % elementIDs(2)) % boundaryName(self % faces(i) % elementSide(2)) = emptyBCName
 !
@@ -681,10 +706,18 @@ slavecoord:             DO l = 1, 4
                      x1 = self % nodes ( self % faces(i) % nodeIDs(k)) % x
                      do l = 1, 4
                         x2 = self % nodes ( self % faces(j) % nodeIDs(l) ) % x
-                        IF (useRelaxTol) THEN
-                            CALL CompareTwoNodesRelax(x1, x2, success, coord, min_edge_length)
+                        IF (rotationParams % periodicEnabled) THEN
+                            IF (useRelaxTol) THEN
+                               CALL CompareTwoNodesRevolRelax(x1, x2, success, coord, rotationParams % center, min_edge_length)
+                            ELSE
+                               CALL CompareTwoNodesRevol(x1, x2, success, coord, rotationParams % center)
+                            END IF
                         ELSE
-                            CALL CompareTwoNodes(x1, x2, success, coord)
+                            IF (useRelaxTol) THEN
+                               CALL CompareTwoNodesRelax(x1, x2, success, coord, min_edge_length)
+                            ELSE
+                               CALL CompareTwoNodes(x1, x2, success, coord)
+                            END IF
                         END IF
                         if ( success ) then
                            slaveNodeIDs(l) = self % faces(i) % nodeIDs(k)
@@ -710,6 +743,16 @@ slavecoord:             DO l = 1, 4
          end do               ! periodic+ zones
 
          if ( MPI_Process % isRoot .and. useRelaxTol) print *, "Success: when matching all periodic boundary conditions with relaxed comparison"
+         if ( MPI_Process % isRoot .and. rotationParams % periodicEnabled) then
+            write(STD_OUT,'(A,3(ES10.3,A),I0)') "Success: revolution periodic matching with center [", &
+                                                 rotationParams % center(1), ", ", &
+                                                 rotationParams % center(2), ", ", &
+                                                 rotationParams % center(3), "] and axis ", coord
+            if (printAngle > 0.0_RP) then
+               write(STD_OUT,'(A,F8.3,A)') "         Periodic sector angle: ", &
+                                            printAngle * 180.0_RP / PI, " degrees"
+            end if
+         end if
 
       END SUBROUTINE ConstructPeriodicFaces
 !
@@ -2477,6 +2520,11 @@ slavecoord:             DO l = 1, 4
             f % elementIDs(otherSide(eSide)) = HMESH_NONE   ! This makes sense since elementIDs are in local numbering...
             f % elementSide(eSide) = side
             f % elementSide(otherSide(eSide)) = partition % element_mpifaceSideOther(bFace)
+!
+!           Restore the rotary angle that was packed in
+!           GetPartitionBoundaryFaces and communicated via MPI.
+!           -----------------------------------------------------------------
+            f % rotaryAngle = partition % mpiface_rotaryAngle(bFace)
 
             if (eSide == RIGHT) f % nodeIDs = f % nodeIDs (invRot (:,f % rotation) )
             end associate
@@ -4487,7 +4535,6 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % elements(eID) % geom % InvJacobian)
          !$acc enter data copyin(self % elements(eID) % geom % dWall)
          !$acc enter data copyin(self % elements(eID) % geom % Volume)
-         !$acc enter data copyin(self % elements(eID) % geom % x)
          !$acc enter data copyin(self % elements(eID) % geom % normal)
 
          !$acc enter data copyin(self % elements(eID) % faceIDs)
@@ -4607,10 +4654,16 @@ slavecoord:             DO l = 1, 4
          !$acc enter data copyin(self % zones(zoneID) % toBeDeleted)     
       enddo
 
-      DO i = 0, self % Nx(1) !it should be the maximum nX
-         !$acc enter data copyin(NodalStorage(i))
+!     Copy the whole NodalStorage array, then attach each constructed order's matrices.
+!     Copying one element at a time leaves the device pointer NodalStorage attached to a
+!     single element, so kernels could only index one order.
+      !$acc enter data copyin(NodalStorage)
+      DO i = lbound(NodalStorage,1), ubound(NodalStorage,1)
+         if (.not. NodalStorage(i) % Constructed) cycle
          !$acc enter data copyin(NodalStorage(i) % hatD)
-         !$acc enter data copyin(NodalStorage(i) % sharpD)
+         if (allocated(NodalStorage(i) % sharpD)) then
+            !$acc enter data copyin(NodalStorage(i) % sharpD)
+         end if
          !$acc enter data copyin(NodalStorage(i) % D)
          !$acc enter data copyin(NodalStorage(i) % b)
          !$acc enter data copyin(NodalStorage(i) % v)
@@ -4654,6 +4707,11 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % storage % U_z)
          !$acc exit data delete(self % elements(eID) % storage % mu_ns)
          !$acc exit data delete(self % elements(eID) % storage % mu_turb_NS)
+         !$acc exit data delete(self % elements(eID) % storage % S_NS)
+         if (allocated(self % elements(eID) % storage % stats % data)) then
+            !$acc exit data delete(self % elements(eID) % storage % stats % data)
+            !$acc exit data delete(self % elements(eID) % storage % stats)
+         end if
          !$acc exit data delete(self % elements(eID) % geom % jGradXi)
          !$acc exit data delete(self % elements(eID) % geom % jGradEta)
          !$acc exit data delete(self % elements(eID) % geom % jGradZeta)
@@ -4661,6 +4719,10 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID) % geom % InvJacobian)
          !$acc exit data delete(self % elements(eID) % geom % dWall)
          !$acc exit data delete(self % elements(eID) % geom % Volume)
+         !$acc exit data delete(self % elements(eID) % geom % x)
+         !$acc exit data delete(self % elements(eID) % geom % normal)
+         !$acc exit data delete(self % elements(eID) % isInsideBody)
+         !$acc exit data delete(self % elements(eID) % STL)
          !$acc exit data delete(self % elements(eID) % faceIDs)
          !$acc exit data delete(self % elements(eID) % faceSide)
          !$acc exit data delete(self % elements(eID) % storage)
@@ -4690,6 +4752,7 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % elements(eID))
 
       ENDDO
+      !$acc exit data delete(self%no_of_elements)
 
       do iFace = 1, size(self % faces)
          !$acc exit data delete(self % faces(iFace) % Nf)
@@ -4714,7 +4777,11 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete(self % faces(iFace) % storage(1) % unStar)
          !$acc exit data delete(self % faces(iFace) % storage(2) % fStar)
          !$acc exit data delete(self % faces(iFace) % storage(2) % unStar)
+         !$acc exit data delete(self % faces(iFace) % storage(1) % rho)
+         !$acc exit data delete(self % faces(iFace) % storage(2) % rho)
          !$acc exit data delete(self % faces(iFace) % storage)
+         !$acc exit data delete(self % faces(iFace) % geom % x)
+         !$acc exit data delete(self % faces(iFace) % geom % h)
          !$acc exit data delete(self % faces(iFace) % geom % normal)
          !$acc exit data delete(self % faces(iFace) % geom % t1)
          !$acc exit data delete(self % faces(iFace) % geom % t2)
@@ -4759,16 +4826,22 @@ slavecoord:             DO l = 1, 4
          !$acc exit data delete (self % zones(zoneID) % assocPeriodZone)
          !$acc exit data delete (self % zones(zoneID) % marker)
          !$acc exit data delete (self % zones(zoneID) % toBeDeleted)     
+         !$acc exit data delete (self % zones(zoneID))
       enddo
 
-      DO i = 0, self % Nx(1) !it should be the maximum nX
+      DO i = lbound(NodalStorage,1), ubound(NodalStorage,1)
+         if (.not. NodalStorage(i) % Constructed) cycle
          !$acc exit data delete (NodalStorage(i) % hatD)
-         !$acc exit data delete (NodalStorage(i) % sharpD)
+         if (allocated(NodalStorage(i) % sharpD)) then
+            !$acc exit data delete (NodalStorage(i) % sharpD)
+         end if
          !$acc exit data delete (NodalStorage(i) % D)
          !$acc exit data delete (NodalStorage(i) % b)
          !$acc exit data delete (NodalStorage(i) % v)
-         !$acc exit data delete (NodalStorage(i))
+         !$acc exit data delete (NodalStorage(i) % w)
+         !$acc exit data delete (NodalStorage(i) % x)
       END DO
+      !$acc exit data delete (NodalStorage)
 
 #ifdef _HAS_MPI_
       !$acc exit data delete (self % faces_mpi)

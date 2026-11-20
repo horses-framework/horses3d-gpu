@@ -148,6 +148,7 @@ module EllipticBR1
       subroutine BR1_LiftGradients(self, nEqn, nGradEqn, mesh, time, GetGradients)
 !
          use HexMeshClass
+         use RotaryFaceRotations
          use PhysicsStorage
          use Physics
          use ElementClass
@@ -186,6 +187,8 @@ module EllipticBR1
          enddo
 !$omp end do 
 
+         call RotateBackRotaryFacesGradientFlux(mesh, size(mesh % faces_interior), mesh % faces_interior)
+
 !$omp do schedule(runtime) private(eID)
          !$acc parallel loop gang present(mesh) async(1) 
          do iEl = 1, size(mesh % elements_sequential)
@@ -206,6 +209,7 @@ module EllipticBR1
             call HexMesh_GatherMPIFacesSolution(mesh, nEqn)
          end if
 !$omp end single
+         call RotateRotaryMPIFacesSolution(mesh)
 
 !$omp do schedule(runtime) private(fID)
          !$acc parallel loop gang present(mesh, self) async(1) 
@@ -235,6 +239,11 @@ module EllipticBR1
          call HexMesh_ProlongGradientsToFaces(mesh, size(mesh % elements_mpi), mesh % elements_mpi, nGradEqn)
 !
 #endif
+!
+!        Interior rotary periodic faces: rotate the gradients of side 2 into the frame of side 1
+!        (after both prolongations, since side 2 can belong to a sequential or an MPI element)
+!        ---------------------------------------------------------------------------------------
+         call RotateRotaryFacesGradients(mesh)
 
       end subroutine BR1_LiftGradients
 
