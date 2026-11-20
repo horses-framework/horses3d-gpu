@@ -5,8 +5,20 @@ multiphase (`MU`) solvers. A smooth periodic solution is imposed with a source t
 the L2 error at the final time gives the order of convergence under h-refinement.
 
 The user source term is a host routine, so the tests run on CPU builds (gfortran,
-single-threaded); with OpenACC the solvers do not call it. The scripts are the same as
-in horses3d, where the other equation sets have cases too.
+single-threaded): with OpenACC, the NS and MU time derivatives that the tests use do not
+call it. The scripts are the same as in horses3d, where the other equation sets have
+cases too.
+
+## Checking a change
+
+Run the workflow on the branch with the default inputs (see below). Both cases then run
+P = 3 to 6 on meshes 4, 8 and 16, and the workflow fails if a run fails or if an error
+differs from `<case>/reference.csv` by more than a relative 1e-3. The references are
+those of horses3d, so this also compares the two solvers. The summary of the report job
+of each case gives the errors, the orders of convergence between consecutive meshes and
+the result of the comparison. If a change to a case is intended, check that its orders
+are still those of the Results section and regenerate its reference (see Maintaining
+the suite).
 
 ## Run on GitHub
 
@@ -16,8 +28,9 @@ optionally, changes to the control file, which apply to every selected case (e.g
 `Reynolds number = 100; Riemann solver = Roe` with case NS: MU has no Roe solver). Each
 case and order runs in its own job, in parallel; a job has a 6-hour limit, which mesh 32
 at high P may exceed. A final job per case merges them, writes the table of errors and
-orders to the job summary and uploads `errors.csv`, `convergence.png` and the control
-files and logs of the runs. The default sweep, P = 3 to 6 on meshes 4, 8 and 16 for both
+orders and the result of the comparison to the job summary, fails if a run has no
+result, and uploads `errors.csv`, `convergence.png` and the control files, logs and
+problem files of the runs. The default sweep, P = 3 to 6 on meshes 4, 8 and 16 for both
 cases, takes about 40 minutes, set by NS at P = 6 on one thread.
 
 GitHub shows the Run workflow button only for workflows on the default branch. On
@@ -29,10 +42,11 @@ gh workflow run mms.yml --ref <branch> -f case=NS -f P="2 3 4" -f meshes="4 8 16
 
 ## Run locally
 
-Build the solver (`./configure && make ns COMPILER=gfortran ENABLE_THREADS=NO` in `Solver`), then:
+Build the solvers (`./configure && make ns mu COMPILER=gfortran ENABLE_THREADS=NO` in
+`Solver`), then:
 
 ```
-pip install sympy gmsh matplotlib
+pip install sympy==1.14.0 gmsh==4.15.2 matplotlib   # the versions of the workflow
 python3 run.py NS                                   # default sweep of NS (sweeps.json)
 python3 run.py NS --P 3 4 --meshes 4 8              # quick run
 python3 run.py NS --set "Reynolds number = 100"     # change the control file
@@ -40,27 +54,35 @@ python3 run.py MU --P 3 4 --meshes 4 8 --check      # compare with MU/reference.
 python3 plot.py NS                                  # NS/convergence.png
 ```
 
-The scripts need Linux, since the problem file is built as a shared library (`.so`).
-The gmsh module also needs the system libraries that the workflow installs
+Where pip refuses to install packages for the system Python (e.g. Ubuntu 24.04), use a
+virtual environment: `python3 -m venv ~/mms && . ~/mms/bin/activate`. The scripts need
+Linux, since the problem file is built as a shared library (`.so`). The gmsh module also
+needs the system libraries that the workflow installs
 (`apt install libglu1-mesa libgl1 libxcursor1 libxft2 libxinerama1 libfontconfig1`).
 
 `run.py` generates `<case>/SETUP/ProblemFile.f90`, builds it with the HORSES3D build
 settings (`COMPILER`, `ENABLE_THREADS`, ... from the environment and `Solver/make.inc`),
 and runs every mesh and P with `<case>/control_template.control`, filling in the mesh,
 the solution file and the order. Everything else, including `dt` and the number of
-steps, comes from the control file; edit it or override keys with `--set`. Keep a fixed
-time step: with `cfl` the solver ignores `dt`, so the runs stop at another time and are
-reported as failed. Results go
-to `<case>/errors.csv`, and pairs already run with the same solver, problem file and
-control file are skipped. `run.py` exits with an error if a run fails and, with
-`--check` and the committed control file, if an error differs from
-`<case>/reference.csv` by more than 1e-3.
+steps, comes from the control file; edit it or override keys with `--set`. A key that is
+not in the template is added with a warning, since HORSES3D ignores the keys it does not
+read: check its spelling, units included (`Interface width (m)`). Keep a fixed time step:
+with `cfl` the solver ignores `dt`, so the runs stop at another time and are reported as
+failed. Results go to `<case>/errors.csv`; pairs already run with the same solver,
+problem file, build settings and control file are skipped unless `--force` is given, and
+only one `run.py` at a time can work on a case. `run.py` exits with an error if a run
+fails and, with `--check`, if an error differs by more than a relative 1e-3 from the row
+of the same mesh and P in `<case>/reference.csv`, or if a run of the default sweep has no
+row there. Runs with `--set`, and meshes or orders outside the default sweep, are not
+compared; the last lines of the output say how many runs were.
 
 The meshes are periodic cubes [-1,1]^3 with N^3 elements, made by the cartesian-box
 generator of [horses3d-meshes](https://github.com/horses-framework/horses3d-meshes)
 (Gmsh Python API). `run.py` downloads the script at a fixed commit into `MESH/`, or uses
 `$HORSES3D_MESHES_DIR/cartesian-box/` if that variable points to a clone, and runs it
-with `$GMSH_PYTHON` if set. No mesh files are kept in this repository.
+with `$GMSH_PYTHON` if set. The meshes are kept in `MESH/` and reused: after changing the
+generator, delete `MESH/` and run with `--force`, since the skipped pairs do not depend on
+the meshes. No mesh files are kept in this repository.
 
 ## Files
 
@@ -75,9 +97,9 @@ with `$GMSH_PYTHON` if set. No mesh files are kept in this repository.
   normalised by the mesh volume (integral of 1).
 * `<case>/control_template.control`: control file of each case.
 * `sweeps.json`: default orders and meshes of each case, used by `run.py` and the workflow.
-* `<case>/reference.csv`: errors of the default sweep of the committed case, the same as
-  in horses3d (gfortran, RELEASE). After changing a case on purpose, copy its `errors.csv`
-  here.
+* `<case>/reference.csv`: copied from horses3d, where `run.py --write-reference` writes
+  it from a run of its workflow. The runs of this repository differ from it by at most
+  4.1e-9 in NS and 6.7e-8 in MU (relative).
 
 ## Results
 
@@ -98,10 +120,10 @@ consecutive meshes, and the lowest of them.
   limited by Cahn-Hilliard. The initial condition is exact at the nodes, where the error
   is measured, so the whole error is made during the run by the truncation error of the
   spatial operator at the nodes, which is the residual printed at iteration 0 of each log
-  (maximum norm). Between meshes 8 and 16 its order is between P - 1.6 and P + 0.2 in NS
-  (lowest at even P, from BR1), and lower in MU (on meshes 12 and 16, about 2 at P = 4 and
-  4 at P = 6). The dissipation of the scheme damps part of this error during the run,
-  faster on finer meshes, so the orders change with the final time and with the meshes.
+  (maximum norm). Between meshes 8 and 16 its order is between P - 1.6 and P + 0.1 in NS
+  (lowest at even P, from BR1), and between P - 2.7 and P + 0.1 in MU (lowest in c at
+  even P). The dissipation of the scheme damps part of this error during the run, faster
+  on finer meshes, so the orders change with the final time and with the meshes.
 * Every variable converges at order P - 0.1 or higher between meshes 8 and 16, except in
   MU: the momentum at P = 3 and 4, and c at P = 4. In MU the total is mostly the pressure
   error (at least 92% of the squared total on mesh 16), so the order of the total is the
@@ -115,13 +137,15 @@ consecutive meshes, and the lowest of them.
   are errors of the spatial discretization. To run longer, raise `Number of time steps`.
 * NS runs at Re = 10, so that the viscous terms are about a fifth of the momentum source.
   The two MU fluids have different densities, viscosities and sound speeds, so that the
-  mixture laws, which weight each property by the concentration, are exercised. The MU
-  errors of this repository agree with those of horses3d within the run-to-run noise of
-  its multi-threaded MU runs (up to about 1e-4 relative).
+  mixture laws, which weight each property by the concentration, are exercised.
 * Not tested: Riemann solvers other than matrix dissipation in NS and the exact one in
-  MU; two-point fluxes other than Chandrasekar; BR2 and IP; Gauss nodes; time integrators
-  other than RK3; non-periodic boundary conditions; curved, non-affine or non-conforming
-  meshes; gravity; MPI; the OpenACC paths of this repository.
+  MU; two-point fluxes other than Chandrasekar; BR2 and IP; gradient variables other than
+  the state; Gauss nodes; time integrators other than RK3; non-periodic boundary
+  conditions; meshes other than uniform Cartesian ones (all elements are equal cubes
+  with the same orientation, so the metric terms are constant and diagonal),
+  non-conforming meshes, and orders that differ between elements or directions (mortars,
+  p-adaptation); LES, SVV and shock capturing; the clipping of c in MU (c stays in [0.1, 0.9]); gravity; MPI; the
+  OpenACC paths of this repository.
 
 ## Assumptions
 
@@ -137,3 +161,18 @@ consecutive meshes, and the lowest of them.
 * The default sweeps start at P = 3: at P = 2 the truncation error of the MU momentum
   does not converge.
 * The error sums are rank-local, so run without MPI.
+
+## Maintaining the suite
+
+`generate.py`, `run.py`, `plot.py`, `ProblemFile.f90.in`, `sweeps.json`, `.gitignore` and
+the NS and MU control files and references are the same files as in horses3d, whose
+README explains how the suite works, how to change or add a case and what to watch
+for. Change them in both repositories, regenerate the references in horses3d and copy
+them here; only this README, `doc/pages/user_manual/s-verification.md` and `mms.yml`
+(case lists, thread and library settings) differ.
+
+NS calls the user source term in `TimeDerivative_ComputeQDot` and MU in
+`ComputeNSTimeDerivative` only in CPU builds (under `#ifndef _OPENACC`); the NS routines
+of p-adaptation and tau estimation (`TimeDerivative_ComputeQDotHO` and
+`TimeDerivative_ComputeQDotIsolated`) call it in every build, as before. Unlike horses3d,
+MU here uses the exact Riemann solver when the control file does not name one.
