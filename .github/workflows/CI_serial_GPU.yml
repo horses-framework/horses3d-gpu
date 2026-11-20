@@ -623,6 +623,36 @@ jobs:
         working-directory: ./Solver/test/NavierStokes/LimiterTest
         run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSLimiterTest ./horses3d.ns LimiterTest.control
         if: '!cancelled()'
+
+#
+# 51) Lamb vector and its divergence
+# ----------------------------------
+      - name: Build NSLambVector
+        working-directory: ./Solver/test/NavierStokes/LambVector/SETUP
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make clean || true
+          make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+      - name: Run NSLambVector
+        working-directory: ./Solver/test/NavierStokes/LambVector
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSLambVector ./horses3d.ns LambVector.control
+        if: '!cancelled()'
+
+#
+# 52) Lamb vector and its divergence inside a cube
+# ------------------------------------------------
+      - name: Build NSLambVectorCube
+        working-directory: ./Solver/test/NavierStokes/LambVectorCube/SETUP
+        run: |
+          source "$GITHUB_WORKSPACE/ci_env.sh"
+          make clean || true
+          make ns COMPILER=nvfortran COMM=SERIAL ENABLE_THREADS=NO
+        if: '!cancelled()'
+      - name: Run NSLambVectorCube
+        working-directory: ./Solver/test/NavierStokes/LambVectorCube
+        run: $GITHUB_WORKSPACE/ci_run_slurm_test.sh NSLambVectorCube ./horses3d.ns LambVectorCube.control
+        if: '!cancelled()'
 ########################################################################
 #######                INCOMPRESSIBLE_NS TESTS                 ########
 ########################################################################
