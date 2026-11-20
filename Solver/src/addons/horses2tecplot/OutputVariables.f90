@@ -42,6 +42,7 @@ module OutputVariables
       enumerator :: RHOW_V, RHOE_V, C_V, Cp_V, Nxi_V, Neta_V
       enumerator :: Nzeta_V, Nav_V, N_V
       enumerator :: Xi_V, Eta_V, Zeta_V, ThreeAxes_V, Axes_V, eID_V
+      enumerator :: LAMBvec_V, LAMBx_V, LAMBy_V, LAMBz_V, DIVLAMB_V
       enumerator :: MPIRANK_V
       enumerator :: GRADV_V, UX_V, VX_V, WX_V
       enumerator :: UY_V, VY_V, WY_V, UZ_V, VZ_V, WZ_V
@@ -98,6 +99,11 @@ module OutputVariables
    character(len=STR_VAR_LEN), parameter  :: ThreeAxesKey  = "ThreeAxes"
    character(len=STR_VAR_LEN), parameter  :: AxesKey       = "Axes"
    character(len=STR_VAR_LEN), parameter  :: eIDKey        = "eID"
+   character(len=STR_VAR_LEN), parameter  :: LambKey       = "lamb"
+   character(len=STR_VAR_LEN), parameter  :: LambxKey      = "lamb_x"
+   character(len=STR_VAR_LEN), parameter  :: LambyKey      = "lamb_y"
+   character(len=STR_VAR_LEN), parameter  :: LambzKey      = "lamb_z"
+   character(len=STR_VAR_LEN), parameter  :: DivLambKey    = "divlamb"
    character(len=STR_VAR_LEN), parameter  :: mpiRankKey    = "mpi_rank"
    character(len=STR_VAR_LEN), parameter  :: gradVKey      = "gradV"
    character(len=STR_VAR_LEN), parameter  :: uxKey         = "u_x"
@@ -156,6 +162,7 @@ module OutputVariables
                                                                             VvecKey, HtKey, RHOUKey, RHOVKey, RHOWKey, &
                                                                             RHOEKey, cKey, CpKey, NxiKey, NetaKey, NzetaKey, NavKey, NKey, &
                                                                             XiKey, EtaKey, ZetaKey, ThreeAxesKey, AxesKey, eIDKey, &
+                                                                            LambKey, LambxKey, LambyKey, LambzKey, DivLambKey, &
                                                                             mpiRankKey, &
                                                                             gradVKey, uxKey, vxKey, wxKey, &
                                                                             uyKey, vyKey, wyKey, uzKey, vzKey, wzKey, &
@@ -459,6 +466,26 @@ module OutputVariables
                      output(var,i,j,k) = Q(IRHOE,i,j,k)
                   end do         ; end do         ; end do
                   if ( outScale ) output(var,:,:,:) = refs(RHO_REF) * POW2(refs(V_REF)) * output(var,:,:,:)
+
+               case(LAMBx_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) = Q(1,i,j,k)
+                  end do         ; end do         ; end do
+
+               case(LAMBy_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) = Q(2,i,j,k)
+                  end do         ; end do         ; end do
+
+               case(LAMBz_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) = Q(3,i,j,k)
+                  end do         ; end do         ; end do
+
+               case(DIVLAMB_V)
+                  do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+                     output(var,i,j,k) = Q(1,i,j,k)
+                  end do         ; end do         ; end do
 
                case(Nxi_V)
                   output(var,:,:,:) = e % Nsol(1)
@@ -904,6 +931,9 @@ module OutputVariables
          case(Vfvec_Vrms)
             outputVariablesForVariable = 3
 
+         case(LAMBvec_V)
+            outputVariablesForVariable = 3
+
          case(U_TAU_V)
             if ( hasUt_NS .and. hasUTauVec_NS ) then
                outputVariablesForVariable = 4
@@ -975,6 +1005,9 @@ module OutputVariables
 
          case(Vfvec_Vrms)
             output = (/Uf_Vrms, Vf_Vrms, Wf_Vrms/)
+
+         case(LAMBvec_V)
+            output = (/LAMBx_V, LAMBy_V, LAMBz_V/)
 
          case(U_TAU_V)
             if ( hasUt_NS .and. hasUTauVec_NS ) then

@@ -114,6 +114,8 @@ MODULE HexMeshClass
             procedure :: ExportOrders                  => HexMesh_ExportOrders
             procedure :: ExportBoundaryMesh            => HexMesh_ExportBoundaryMesh
             procedure :: SaveSolution                  => HexMesh_SaveSolution
+            procedure :: SaveLambVector                => HexMesh_SaveLambVector
+            procedure :: findElementsInsideCube        => HexMesh_findElementsInsideCube
             procedure :: pAdapt                        => HexMesh_pAdapt
             procedure :: pAdapt_MPI                    => HexMesh_pAdapt_MPI
             procedure :: UpdateHOArrays                => HexMesh_UpdateHOArrays
@@ -3423,6 +3425,378 @@ slavecoord:             DO l = 1, 4
 
       end subroutine HexMesh_SaveSolution
 
+      subroutine HexMesh_SaveLambVector(self, iter, time, name, controlVariables)
+         use mainKeywordsModule, only: saveLambVectorKey, saveLambVectorDivergenceKey, LambVectorCubeKey
+         use FileReadingUtilities, only: GetRealArrayFromString
+         implicit none
+         class(HexMesh)                         :: self
+         integer,             intent(in)        :: iter
+         real(kind=RP),       intent(in)        :: time
+         character(len=*),    intent(in)        :: name
+         TYPE(FTValueDictionary), optional, intent(in)    :: controlVariables
+
+         ! Local variables
+         real(rp) :: cubeCoords(6) ! [x0, x1, y0, y1, z0, z1]
+         logical  :: saveLamb, saveDivergence
+
+         saveLamb       = .true.
+         saveDivergence = .false.
+         if ( present(controlVariables) ) then
+            saveLamb       = controlVariables % logicalValueForKey(saveLambVectorKey)
+            saveDivergence = controlVariables % logicalValueForKey(saveLambVectorDivergenceKey)
+         end if
+         if ( .not. (saveLamb .or. saveDivergence) ) return
+
+#if !(defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE))
+         print *, "The Lamb vector and its divergence can only be saved with the NS, NSSA, iNS and MU solvers."
+         errorMessage(STD_OUT)
+         error stop
+#else
+         call self % UpdateHostData()
+
+         if ( present(controlVariables) .and. controlVariables % containsKey(LambVectorCubeKey)) then
+            ! Read cube coordinates
+            cubeCoords = GetRealArrayFromString( controlVariables % StringValueForKey(LambVectorCubeKey,requestedLength = LINE_LENGTH))
+            if (size(cubeCoords) .ne. 6) then
+               print *, "ERROR: size(cubeCoords) != 6"
+               print *, "Cube coordinates read: ", cubeCoords
+               print *, "[x0, x1, y0, y1, z0, z1] is expected."
+               error stop
+            end if
+            call HexMesh_SaveLambVector_subregion(self, iter, time, name, cubeCoords, saveLamb, saveDivergence)
+         else
+            call HexMesh_SaveLambVector_all(self, iter, time, name, saveLamb, saveDivergence)
+         end if
+#endif
+
+      end subroutine HexMesh_SaveLambVector
+
+#if defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE)
+
+      subroutine HexMesh_SaveLambVector_all(self, iter, time, name, saveLamb, saveDivergence)
+         use SolutionFile
+         use MPI_Process_Info
+         use MappedGeometryClass, only: vCross, ComputeVorticity
+#if (defined(NAVIERSTOKES) && !(defined(SPALARTALMARAS)) )
+         use VariableConversion_NS, only: getVelocityGradients_STATE, Pressure
+#elif (defined(NAVIERSTOKES) && (defined(SPALARTALMARAS)) )
+         use VariableConversion_NSSA, only: getVelocityGradients_STATE, Pressure
+#elif defined(INCNS)
+         use VariableConversion_iNS, only: getVelocityGradients
+#elif defined(MULTIPHASE)
+         use VariableConversion_MU, only: getVelocityGradients
+         use FluidData_MU, only: dimensionless
+#endif
+         implicit none
+         class(HexMesh)                         :: self
+         integer,             intent(in)        :: iter
+         real(kind=RP),       intent(in)        :: time
+         character(len=*),    intent(in)        :: name
+         logical,             intent(in)        :: saveLamb, saveDivergence
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer                          :: fid, fidDiv, eID
+         integer(kind=AddrInt)            :: pos, posDiv
+         character(len=LINE_LENGTH)       :: fileName, fileNameDiv
+         real(kind=RP)                    :: refs(NO_OF_SAVED_REFS)
+         real(kind=RP), allocatable       :: Q(:,:,:,:), divLamb(:,:,:,:)
+         integer                          :: i, j, k
+         real(kind=RP), dimension(NDIM)   :: vorticity, velocity, LambVector
+         real(kind=RP), dimension(NDIM)   :: gradvel_x, gradvel_y, gradvel_z
+!
+!        Gather reference quantities
+!        ---------------------------
+#if defined(NAVIERSTOKES)
+         refs(GAMMA_REF) = thermodynamics % gamma
+         refs(RGAS_REF)  = thermodynamics % R
+         refs(RHO_REF)   = refValues      % rho
+         refs(V_REF)     = refValues      % V
+         refs(T_REF)     = refValues      % T
+         refs(MACH_REF)  = dimensionless  % Mach
+#elif defined(INCNS)
+         refs(GAMMA_REF) = 0.0_RP
+         refs(RGAS_REF)  = 0.0_RP
+         refs(RHO_REF)   = refValues      % rho
+         refs(V_REF)     = refValues      % V
+         refs(T_REF)     = 0.0_RP
+         refs(MACH_REF)  = 0.0_RP
+#else
+         refs = 0.0_RP
+#endif
+!
+!        Create new file
+!        ---------------
+         if (saveLamb) then
+            WRITE(filename,'(2A,I10.10,A)')  TRIM(getFileName(name)),'_',iter,'.Lamb.hsol'
+            call CreateNewSolutionFile(trim(filename), SOLUTION_FILE, self % nodeType, &
+                                       self % no_of_allElements, iter, time, refs)
+            fID = putSolutionFileInWriteDataMode(trim(filename))
+         end if
+         if (saveDivergence) then
+            WRITE(fileNameDiv,'(2A,I10.10,A)')  TRIM(getFileName(name)),'_',iter,'.divLamb.hsol'
+            call CreateNewSolutionFile(trim(fileNameDiv), SOLUTION_FILE, self % nodeType, &
+                                       self % no_of_allElements, iter, time, refs)
+            fidDiv = putSolutionFileInWriteDataMode(trim(fileNameDiv))
+         end if
+!
+!        Write arrays
+!        ------------
+         do eID = 1, self % no_of_elements
+            associate( e => self % elements(eID) )
+               pos = POS_INIT_DATA + (e % globID-1)*5_AddrInt*SIZEOF_INT + 1_AddrInt*NDIM*e % offsetIO*SIZEOF_RP
+               posDiv = POS_INIT_DATA + (e % globID-1)*5_AddrInt*SIZEOF_INT + 1_AddrInt*e % offsetIO*SIZEOF_RP
+               allocate(Q(NDIM, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+
+               do k = 0, e % Nxyz(3)   ; do j = 0, e % Nxyz(2)    ; do i = 0, e % Nxyz(1)
+#if defined(NAVIERSTOKES)
+                  call getVelocityGradients_State(e % storage % Q(:,i,j,k), e % storage % U_x(:,i,j,k), e % storage % U_y(:,i,j,k), e % storage % U_z(:,i,j,k), gradvel_x, gradvel_y, gradvel_z)
+                  velocity = e % storage % Q(IRHOU:IRHOW,i,j,k) / e % storage % Q(IRHO,i,j,k)
+#elif defined(INCNS)
+                  call getVelocityGradients(e % storage % Q(:,i,j,k), e % storage % U_x(:,i,j,k), e % storage % U_y(:,i,j,k), e % storage % U_z(:,i,j,k), gradvel_x, gradvel_y, gradvel_z)                  
+                  velocity = e % storage % Q(INSRHOU:INSRHOW,i,j,k) / e % storage % Q(INSRHO,i,j,k)
+#elif defined(MULTIPHASE)
+                  call getVelocityGradients(e % storage % Q(:,i,j,k), e % storage % U_x(:,i,j,k), e % storage % U_y(:,i,j,k), e % storage % U_z(:,i,j,k), dimensionless, gradvel_x, gradvel_y, gradvel_z)
+                  e % storage % rho(i,j,k) = dimensionless % rho(2) + (dimensionless % rho(1)-dimensionless % rho(2)) * e % storage % Q(IMC,i,j,k)
+                  e % storage % rho(i,j,k) = min(max(e % storage % rho(i,j,k), dimensionless % rho_min),dimensionless % rho_max)
+                  velocity = e % storage % Q(IMSQRHOU:IMSQRHOW,i,j,k) / sqrt( e % storage % rho(i,j,k) )
+#endif
+                  call ComputeVorticity(gradvel_x, gradvel_y, gradvel_z, vorticity)                  
+                  call vCross(velocity, vorticity, LambVector)
+                  Q(:,i,j,k) = LambVector
+               end do                  ; end do                   ; end do
+
+               if (saveLamb) call writeArray(fid, Q, position=pos)
+
+               if (saveDivergence) then
+                  allocate(divLamb(1, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+                  call ComputeLambVectorDivergence(e, Q, divLamb)
+                  call writeArray(fidDiv, divLamb, position=posDiv)
+                  deallocate(divLamb)
+               end if
+
+               deallocate(Q)
+            end associate
+         end do
+!
+!        Close the files
+!        ---------------
+         if (saveLamb) then
+            close(fid)
+            call SealSolutionFile(trim(filename))
+         end if
+
+         if (saveDivergence) then
+            close(fidDiv)
+            call SealSolutionFile(trim(fileNameDiv))
+         end if
+
+      end subroutine HexMesh_SaveLambVector_all
+
+      subroutine HexMesh_SaveLambVector_subregion(self, iter, time, name, cubeCoords, saveLamb, saveDivergence)
+         use SolutionFile
+         use MPI_Process_Info
+         use MappedGeometryClass, only: vCross, ComputeVorticity
+#if (defined(NAVIERSTOKES) && !(defined(SPALARTALMARAS)) )
+         use VariableConversion_NS, only: getVelocityGradients_STATE, Pressure
+#elif (defined(NAVIERSTOKES) && (defined(SPALARTALMARAS)) )
+         use VariableConversion_NSSA, only: getVelocityGradients_STATE, Pressure
+#elif defined(INCNS)
+         use VariableConversion_iNS, only: getVelocityGradients
+#elif defined(MULTIPHASE)
+         use VariableConversion_MU, only: getVelocityGradients
+         use FluidData_MU, only: dimensionless
+#endif
+         implicit none
+         class(HexMesh)                         :: self
+         integer,             intent(in)        :: iter
+         real(kind=RP),       intent(in)        :: time
+         character(len=*),    intent(in)        :: name
+         real(rp),            intent(in)        :: cubeCoords(6) ! [x0, x1, y0, y1, z0, z1]
+         logical,             intent(in)        :: saveLamb, saveDivergence
+
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer                          :: fid, fidDiv, eID, ierr
+         integer(kind=AddrInt)            :: pos, posDiv
+         character(len=LINE_LENGTH)       :: fileName, fileNameDiv
+         real(kind=RP)                    :: refs(NO_OF_SAVED_REFS)
+         real(kind=RP), allocatable       :: Q(:,:,:,:), divLamb(:,:,:,:)
+         integer                          :: i, j, k
+         real(kind=RP), dimension(NDIM)   :: vorticity, velocity, LambVector
+         real(kind=RP), dimension(NDIM)   :: gradvel_x, gradvel_y, gradvel_z
+
+         integer :: local_dofs, global_dofs_offset, all_elements_inside, n_elements_before
+         integer, allocatable :: elementsInside(:)
+
+         !
+         ! Compute the elements inside the region (cube)
+         !
+         call self % findElementsInsideCube(cubeCoords, elementsInside)
+         !
+         ! Compute offset
+         !
+         local_dofs = 0
+         do eID = 1, size(elementsInside)
+            associate(e => self % elements(elementsInside(eID)))
+            local_dofs = local_dofs + product( e % Nxyz + 1)
+            end associate
+         end do
+         global_dofs_offset = 0
+         all_elements_inside = size(elementsInside)
+         n_elements_before = 0
+         if ( MPI_Process % doMPIAction ) then
+#ifdef _HAS_MPI_
+            call mpi_exscan(local_dofs, global_dofs_offset, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD, ierr)
+            call mpi_exscan(size(elementsInside), n_elements_before, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD, ierr)
+            call mpi_allreduce(size(elementsInside), all_elements_inside, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD, ierr)
+#endif
+         end if
+         if ( MPI_Process % isRoot ) then
+            global_dofs_offset = 0
+            n_elements_before = 0
+         end if
+         !
+         ! Write the file
+         !
+         ! Gather reference quantities
+#if defined(NAVIERSTOKES)
+         refs(GAMMA_REF) = thermodynamics % gamma
+         refs(RGAS_REF)  = thermodynamics % R
+         refs(RHO_REF)   = refValues      % rho
+         refs(V_REF)     = refValues      % V
+         refs(T_REF)     = refValues      % T
+         refs(MACH_REF)  = dimensionless  % Mach
+#elif defined(INCNS)
+         refs(GAMMA_REF) = 0.0_RP
+         refs(RGAS_REF)  = 0.0_RP
+         refs(RHO_REF)   = refValues      % rho
+         refs(V_REF)     = refValues      % V
+         refs(T_REF)     = 0.0_RP
+         refs(MACH_REF)  = 0.0_RP
+#else
+         refs = 0.0_RP
+#endif
+         ! Create new file
+         if (saveLamb) then
+            WRITE(filename,'(2A,I10.10,A)')  TRIM(getFileName(name)),'_',iter,'.Lamb.hsol'
+            call CreateNewSolutionFile(trim(filename), SOLUTION_FILE, self % nodeType, &
+                                       all_elements_inside, iter, time, refs)
+            fID = putSolutionFileInWriteDataMode(trim(filename))
+         end if
+         if (saveDivergence) then
+            WRITE(fileNameDiv,'(2A,I10.10,A)')  TRIM(getFileName(name)),'_',iter,'.divLamb.hsol'
+            call CreateNewSolutionFile(trim(fileNameDiv), SOLUTION_FILE, self % nodeType, &
+                                       all_elements_inside, iter, time, refs)
+            fidDiv = putSolutionFileInWriteDataMode(trim(fileNameDiv))
+         end if
+
+         ! Write array to file
+         do eID = 1, size(elementsInside)
+            associate( e => self % elements(elementsInside(eID)) )
+               pos = POS_INIT_DATA + n_elements_before*5_AddrInt*SIZEOF_INT + 1_AddrInt*global_dofs_offset*NDIM*SIZEOF_RP
+               posDiv = POS_INIT_DATA + n_elements_before*5_AddrInt*SIZEOF_INT + 1_AddrInt*global_dofs_offset*SIZEOF_RP
+               n_elements_before  = n_elements_before + 1
+               global_dofs_offset = global_dofs_offset + product(e % Nxyz + 1)
+
+               ! Write the Lamb vector
+               allocate(Q(NDIM, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+               do k = 0, e % Nxyz(3)   ; do j = 0, e % Nxyz(2)    ; do i = 0, e % Nxyz(1)
+#if defined(NAVIERSTOKES)
+                  call getVelocityGradients_State(e % storage % Q(:,i,j,k), e % storage % U_x(:,i,j,k), e % storage % U_y(:,i,j,k), e % storage % U_z(:,i,j,k), gradvel_x, gradvel_y, gradvel_z)
+                  velocity = e % storage % Q(IRHOU:IRHOW,i,j,k) / e % storage % Q(IRHO,i,j,k)
+#elif defined(INCNS)
+                  call getVelocityGradients(e % storage % Q(:,i,j,k), e % storage % U_x(:,i,j,k), e % storage % U_y(:,i,j,k), e % storage % U_z(:,i,j,k), gradvel_x, gradvel_y, gradvel_z)                  
+                  velocity = e % storage % Q(INSRHOU:INSRHOW,i,j,k) / e % storage % Q(INSRHO,i,j,k)
+#elif defined(MULTIPHASE)
+                  call getVelocityGradients(e % storage % Q(:,i,j,k), e % storage % U_x(:,i,j,k), e % storage % U_y(:,i,j,k), e % storage % U_z(:,i,j,k), dimensionless, gradvel_x, gradvel_y, gradvel_z)
+                  e % storage % rho(i,j,k) = dimensionless % rho(2) + (dimensionless % rho(1)-dimensionless % rho(2)) * e % storage % Q(IMC,i,j,k)
+                  e % storage % rho(i,j,k) = min(max(e % storage % rho(i,j,k), dimensionless % rho_min),dimensionless % rho_max)
+                  velocity = e % storage % Q(IMSQRHOU:IMSQRHOW,i,j,k) / sqrt( e % storage % rho(i,j,k) )
+#endif
+                  call ComputeVorticity(gradvel_x, gradvel_y, gradvel_z, vorticity)                  
+                  call vCross(velocity, vorticity, LambVector)
+                  Q(:,i,j,k) = LambVector
+               end do                  ; end do                   ; end do
+
+               if (saveLamb) call writeArray(fid, Q, position=pos)
+               if (saveDivergence) then
+                  allocate(divLamb(1, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3)))
+                  call ComputeLambVectorDivergence(e, Q, divLamb)
+                  call writeArray(fidDiv, divLamb, position=posDiv)
+                  deallocate(divLamb)
+               end if
+               deallocate(Q)
+            end associate
+         end do
+         ! Close the files
+         if (saveLamb) then
+            close(fid)
+            call SealSolutionFile(trim(filename))
+         end if
+
+         if (saveDivergence) then
+            close(fidDiv)
+            call SealSolutionFile(trim(fileNameDiv))
+         end if
+
+      end subroutine HexMesh_SaveLambVector_subregion
+#endif
+
+      subroutine ComputeLambVectorDivergence(e, L, divL)
+!
+!        Element-local divergence, same chain rule as HexElement_ComputeLocalGradient:
+!           div(L) = (1/J) \sum_i Ja^i \cdot \partial L / \partial \xi^i
+!        It is discontinuous across element interfaces.
+!
+         implicit none
+         type(Element), intent(in)  :: e
+         real(kind=RP), intent(in)  :: L(1:NDIM, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3))
+         real(kind=RP), intent(out) :: divL(1, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3))
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer        :: i, j, k, m
+         real(kind=RP)  :: L_xi(NDIM), L_eta(NDIM), L_zeta(NDIM)
+
+         associate( N => e % Nxyz, &
+                    D_xi   => NodalStorage(e % Nxyz(1)) % D, &
+                    D_eta  => NodalStorage(e % Nxyz(2)) % D, &
+                    D_zeta => NodalStorage(e % Nxyz(3)) % D )
+
+         do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
+            L_xi = 0.0_RP
+            do m = 0, N(1)
+               L_xi = L_xi + L(:,m,j,k) * D_xi(i,m)
+            end do
+
+            L_eta = 0.0_RP
+            do m = 0, N(2)
+               L_eta = L_eta + L(:,i,m,k) * D_eta(j,m)
+            end do
+
+            L_zeta = 0.0_RP
+            do m = 0, N(3)
+               L_zeta = L_zeta + L(:,i,j,m) * D_zeta(k,m)
+            end do
+
+            divL(1,i,j,k) = (  dot_product(e % geom % jGradXi(:,i,j,k),   L_xi)   &
+                             + dot_product(e % geom % jGradEta(:,i,j,k),  L_eta)  &
+                             + dot_product(e % geom % jGradZeta(:,i,j,k), L_zeta) ) &
+                            * e % geom % InvJacobian(i,j,k)
+         end do         ; end do         ; end do
+
+         end associate
+
+      end subroutine ComputeLambVectorDivergence
+
 #if defined(NAVIERSTOKES)
       subroutine HexMesh_SaveStatistics(self, iter, time, name, saveGradients)
          use SolutionFile
@@ -5850,5 +6224,75 @@ call elementMPIList % destruct
 !$omp end do nowait
    end subroutine HexMesh_ComputeLocalGradientMU
 #endif
+
+   subroutine HexMesh_findElementsInsideCube(mesh, cubeCoords, array)
+      use IntegerDataLinkedList
+      implicit none
+      class(HexMesh), intent(in) :: mesh
+      real(rp), intent(in) :: cubeCoords(6) ! [x0, x1, y0, y1, z0, z1]
+      integer, allocatable, intent(out) :: array(:)
+
+      ! Local variables
+      type(IntegerDataLinkedList_t) :: Data
+      integer :: eID
+
+      ! Find elements inside cube
+      Data = IntegerDataLinkedList_t(.false.)
+      do eID = 1, mesh % no_of_elements
+         if (intersect(mesh % elements(eID) % surfInfo % corners, cubeCoords)) then
+               call Data % Add(eID)
+         end if
+      end do
+      call Data % ExportToArray(array)
+      call Data % destruct
+
+   end subroutine HexMesh_findElementsInsideCube
+
+   logical function intersect(corners, cube)
+      ! Returns true if the corners of the element are inside the cube.
+      ! Curved elements are considered straight-sided.
+      ! We define that the element intersects the cube if:
+      ! any x-coordinate of the corners belongs to [x0, x1] AND
+      ! any y-coordinate of the corners belongs to [y0, y1] AND
+      ! any z-coordinate of the corners belongs to [z0, z1]
+      use ElementConnectivityDefinitions, only: NODES_PER_ELEMENT
+      implicit none
+      real(kind=RP), intent(in)   :: corners(NDIM,NODES_PER_ELEMENT)
+      real(kind=RP), intent(in)   :: cube(6) ! [x0, x1, y0, y1, z0, z1]
+
+      ! Local variables
+      logical :: isInside
+      integer :: i
+
+      isInside = .false.
+      do i = 1, NODES_PER_ELEMENT
+         if ((cube(1) <= corners(1,i)) .and. (corners(1,i) <= cube(2))) isInside = .true.
+      end do
+      if (.not. isInside) then
+         intersect = .false.
+         return
+      end if
+
+      isInside = .false.
+      do i = 1, NODES_PER_ELEMENT
+         if ((cube(3) <= corners(2,i)) .and. (corners(2,i) <= cube(4))) isInside = .true.
+      end do
+      if (.not. isInside) then
+         intersect = .false.
+         return
+      end if
+
+      isInside = .false.
+      do i = 1, NODES_PER_ELEMENT
+         if ((cube(5) <= corners(3,i)) .and. (corners(3,i) <= cube(6))) isInside = .true.
+      end do
+      if (.not. isInside) then
+         intersect = .false.
+         return
+      end if
+      ! At this point, isInside is true.
+      intersect = .true.
+
+   end function intersect
 
 END MODULE HexMeshClass
