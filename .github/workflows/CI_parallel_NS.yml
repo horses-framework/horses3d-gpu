@@ -73,12 +73,23 @@ jobs:
           mpifort --showme
           gcc --version
 
-      # Install gmsh (used to generate test meshes from their .geo sources)
-      - name: Install gmsh
+      # Meshes repository and Gmsh (Python API), available to all the tests:
+      #   $HORSES3D_MESHES_DIR : clone of https://github.com/horses-framework/horses3d-meshes
+      #   $GMSH_PYTHON         : Python interpreter with the gmsh module, to run the mesh scripts
+      - name: Checkout horses3d-meshes
+        uses: actions/checkout@v3
+        with:
+          repository: horses-framework/horses3d-meshes
+          path: horses3d-meshes
+
+      - name: Install Gmsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gmsh
-          gmsh --version
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libglu1-mesa libgl1 libxcursor1 libxft2 libxinerama1 libfontconfig1
+          python3 -m venv "$RUNNER_TEMP/gmsh-venv"
+          "$RUNNER_TEMP/gmsh-venv/bin/pip" install -q gmsh
+          echo "HORSES3D_MESHES_DIR=$GITHUB_WORKSPACE/horses3d-meshes" >> $GITHUB_ENV
+          echo "GMSH_PYTHON=$RUNNER_TEMP/gmsh-venv/bin/python" >> $GITHUB_ENV
 
       # # Install parallel HDF5 (OpenMPI version)
       # - name: Install HDF5 (parallel, OpenMPI)
@@ -1384,7 +1395,8 @@ jobs:
         working-directory: ./Solver/test/Euler/IsentropicVortex
         run: |
           # source /opt/intel/oneapi/setvars.sh || true
-          (cd MESH && gmsh -3 isentropicvortex2D.geo -o isentropicvortex2D.msh)
+          mkdir -p MESH
+          "$GMSH_PYTHON" "$HORSES3D_MESHES_DIR/isentropic-vortex/isentropic_vortex_2d.py" -o MESH/isentropicvortex2D.msh
           (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}")
         if: '!cancelled()'
 
@@ -1401,7 +1413,8 @@ jobs:
       - name: Setup RotaryPeriodic
         working-directory: ./Solver/test/NavierStokes/RotaryPeriodic
         run: |
-          (cd MESH && gmsh -3 RotaryPeriodic.geo -o RotaryPeriodic.msh)
+          mkdir -p MESH
+          "$GMSH_PYTHON" "$HORSES3D_MESHES_DIR/rotary-periodic/rotary_periodic.py" -o MESH/RotaryPeriodic.msh
           (cd SETUP && make ns MODE=${{matrix.mode}} COMPILER=${{matrix.compiler}} COMM=${{matrix.comm}} ENABLE_THREADS=${{matrix.enable_threads}} WITH_METIS=YES WITH_MKL=${{matrix.mkl}} WITH_HDF5=${{matrix.hdf5}} EXTRA_FFLAGS="${{ env.EXTRA_COV }}")
         if: '!cancelled()'
 
