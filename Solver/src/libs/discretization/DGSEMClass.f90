@@ -585,6 +585,14 @@ Module DGSEMClass
             IF(controlVariables % stringValueForKey(solutionFileNameKey,LINE_LENGTH) /= "none")     THEN           
                write(solutionName,'(A,A,I10.10,A)') trim(solutionName), "_", initial_iteration, ".hsol"
                call self % mesh % SaveSolution(initial_iteration, initial_time, solutionName, saveGradients, withSensor, saveLES)
+#ifdef FLOW
+               if (controlVariables % logicalValueForKey(saveLambVectorKey) .or. &
+                   controlVariables % logicalValueForKey(saveLambVectorDivergenceKey)) then
+                  solutionName = controlVariables % stringValueForKey(solutionFileNameKey, requestedLength = LINE_LENGTH)
+                  solutionName = trim(getFileName(solutionName))
+                  call self % mesh % SaveLambVector(initial_iteration, initial_time, solutionName, controlVariables)
+               end if
+#endif
                !TDG: ADD PARTICLES WRITE WITH IFDEF
             END IF 
          END IF

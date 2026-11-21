@@ -6,6 +6,7 @@ module AutosaveClass
 
    private
    public   Autosave_t, AUTOSAVE_BY_TIME, AUTOSAVE_BY_ITERATION, AUTOSAVE_UNDEFINED
+   public   AutosaveLambVector_t
 
    integer, parameter :: AUTOSAVE_UNDEFINED    = 0
    integer, parameter :: AUTOSAVE_BY_TIME      = 1
@@ -22,6 +23,11 @@ module AutosaveClass
          procedure   :: Configure => Autosave_Configure
          procedure   :: Autosave  => Autosave_Autosave
    end type Autosave_t
+
+   type, extends(Autosave_t)  :: AutosaveLambVector_t
+         contains
+         procedure   :: Configure => AutosaveLambVector_Configure
+   end type AutosaveLambVector_t
 
    contains
 !
@@ -130,6 +136,8 @@ module AutosaveClass
 !        -----------------------------
          self % enable = .false.
          self % mode   = AUTOSAVE_UNDEFINED
+         self % iter_interval = huge(1)
+         self % time_interval = huge(1.0_RP)
 
       end if
 !
@@ -162,5 +170,96 @@ module AutosaveClass
       
       end select
    end function Autosave_Autosave
+
+   subroutine AutosaveLambVector_Configure(self, controlVariables, t0)
+      use mainKeywordsModule, only: saveLambVectorKey, saveLambVectorDivergenceKey
+      implicit none
+      class(AutosaveLambVector_t) :: self
+      class(FTValueDictionary)   :: controlVariables
+      real(kind=RP), intent(in)  :: t0
+!
+!     ---------------
+!     Local variables
+!     ---------------
+!
+      character(len=LINE_LENGTH) :: autosaveMode
+      CHARACTER(LEN=*), PARAMETER :: saveLambVectorModeKey = "save lamb vector mode"
+      CHARACTER(LEN=*), PARAMETER :: saveLambVectorIntervalKey = "save lamb vector interval"
+      character(len=LINE_LENGTH), parameter :: autosaveByIteration = "iteration"
+      character(len=LINE_LENGTH), parameter :: autosaveByTime = "time"
+
+      if (.not. (controlVariables % logicalValueForKey(saveLambVectorKey) .or. &
+                 controlVariables % logicalValueForKey(saveLambVectorDivergenceKey))) then
+         self % enable = .false.
+         self % mode   = AUTOSAVE_UNDEFINED
+         self % iter_interval = huge(1)
+         self % time_interval = huge(1.0_RP)
+         self % nextAutosaveTime = t0 + self % time_interval
+         self % performAutosave = .false.
+         return
+      end if
+!
+!     Check whether the autosave mode is present
+!     ------------------------------------------
+      if ( controlVariables % containsKey(trim(saveLambVectorModeKey)) ) then
+!
+!        Present: associate the appropriate mode
+!        ---------------------------------------
+         autosaveMode = controlVariables % stringValueForKey(trim(saveLambVectorModeKey), requestedLength = LINE_LENGTH)
+         call ToLower(autosaveMode)
+
+         if ( trim(autosaveMode) .eq. trim(autosaveByIteration) ) then
+            self % mode = AUTOSAVE_BY_ITERATION
+
+         elseif ( trim(autosaveMode) .eq. trim(autosaveByTime) ) then
+            self % mode = AUTOSAVE_BY_TIME
+
+         else
+            print*, 'Unknown autosave mode for the Lamb vector"',trim(autosaveMode),'".'
+            print*, "Implemented modes are:"
+            print*, "   * iteration"
+            print*, "   * time"
+            errorMessage(STD_OUT)
+            error stop
+         end if
+   
+      else 
+            print *, trim(saveLambVectorModeKey), " should be specified to save the Lamb vector."
+            errorMessage(STD_OUT)
+            error stop
+      end if
+!
+!     Check whether the autosave interval is present
+!     ----------------------------------------------
+      if ( controlVariables % containsKey(trim(saveLambVectorIntervalKey)) ) then
+!
+!        Present: assign to time/iter depending on the mode (see below for the undefined case)
+!        --------------------------------------------------         
+         select case ( self % mode )
+
+         case (AUTOSAVE_BY_ITERATION)
+            self % enable = .true.
+            self % iter_interval = controlVariables % integerValueForKey(trim(saveLambVectorIntervalKey))
+            self % time_interval = huge(1.0_RP)
+   
+         case (AUTOSAVE_BY_TIME)
+            self % enable = .true.
+            self % time_interval = controlVariables % doublePrecisionValueForKey(trim(saveLambVectorIntervalKey))
+            self % iter_interval = huge(1)
+
+         end select
+
+      else  
+            print *, trim(saveLambVectorIntervalKey), " should be specified to save the Lamb vector."
+            errorMessage(STD_OUT)
+            error stop
+      end if
+!
+!     Reset the last autosave time
+!     ----------------------------
+      self % nextAutosaveTime = t0 + self % time_interval
+      self % performAutosave = .false.
+         
+   end subroutine AutosaveLambVector_Configure
 
 end module AutosaveClass
