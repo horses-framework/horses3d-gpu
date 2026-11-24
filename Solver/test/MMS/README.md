@@ -12,8 +12,8 @@ cases too.
 ## Step by step: using MMS in your development
 
 Follow these steps to run a convergence study from a fresh checkout. The examples use the
-NS case; for MU, replace `NS` with `MU`. Run the commands in step 1 from `Solver`, and
-all other commands from `Solver/test/MMS`.
+NS case; for MU, replace `NS` with `MU`. Step 1 starts at the top of the repository, and
+all other commands run from `Solver/test/MMS`.
 
 > **OpenACC builds are not tested.** The tests check only the CPU code of the NS and MU
 > solvers. The source term that imposes the manufactured solution is a host routine of the
@@ -28,6 +28,8 @@ You need:
 * Linux, because `run.py` builds the problem file as a shared library (`.so`).
 * gfortran, for a CPU build of the solver (see step 1).
 * Python 3 with sympy, gmsh and matplotlib.
+* Internet access the first time you run `run.py`, which downloads the mesh generator of
+  horses3d-meshes.
 
 To install the Python packages, run:
 
@@ -35,17 +37,17 @@ To install the Python packages, run:
 pip install sympy==1.14.0 gmsh==4.15.2 matplotlib   # the versions that the CI workflow uses
 ```
 
-If pip refuses to install packages for the system Python, as on Ubuntu 24.04, do one of
-the following:
+If pip isn't installed, or refuses to install packages for the system Python, as on
+Ubuntu 24.04, do one of the following:
 
-* Create a virtual environment with `python3 -m venv ~/mms && . ~/mms/bin/activate`, and
-  then run the `pip` command above.
 * On Ubuntu, install the system packages with
   `sudo apt install python3-sympy python3-gmsh python3-matplotlib`. These versions are
   older, but they work.
+* Install venv with `sudo apt install python3-venv`, create a virtual environment with
+  `python3 -m venv ~/mms && . ~/mms/bin/activate`, and then run the `pip` command above.
 
-gmsh needs the system libraries that the workflow installs:
-`apt install libglu1-mesa libgl1 libxcursor1 libxft2 libxinerama1 libfontconfig1`.
+With pip, gmsh also needs the system libraries that the workflow installs:
+`sudo apt install libglu1-mesa libgl1 libxcursor1 libxft2 libxinerama1 libfontconfig1`.
 
 ### 1. Build the solver
 
@@ -56,22 +58,29 @@ thread.
 
 ```bash
 cd Solver
-./configure                                  # only once per checkout
+./configure      # once per checkout, and again after a pull that changes Makefile.in
 make ns COMPILER=gfortran ENABLE_THREADS=NO
 ```
 
-Don't build with MPI. Each MPI process would sum only its own part of the error.
+Build without MPI, the default (`COMM=SEQUENTIAL`). `run.py` starts the solver as a single
+process, and the problem file sums the error only over the elements of its own process,
+so the suite doesn't support MPI runs.
 
 If you build with other options, pass the same options to `run.py`. It compiles the
 problem file with the settings it finds in the environment (`COMPILER`, `MODE`,
 `ENABLE_THREADS` and so on) and in `Solver/make.inc`, and by default with gfortran, in
-RELEASE mode and without threads. For example, for a debug build:
+RELEASE mode and without threads. Make doesn't track compiler options, so run
+`make clean` before you build with other options. For example, for a debug build:
 
 ```bash
+make clean
 make ns COMPILER=gfortran ENABLE_THREADS=NO MODE=DEBUG
 cd test/MMS
 MODE=DEBUG python3 run.py NS --P 3 --meshes 4 8
 ```
+
+To go back to the default build, run `make clean` and the `make` command above again in
+`Solver`.
 
 ### 2. Choose the manufactured solution
 
@@ -95,7 +104,7 @@ B = ( sin(pi x) cos(pi y) cos(pi z), cos(pi x) sin(pi y) cos(pi z),    cos(pi x)
 
 A is divergence-free and makes the vorticity vary. B is irrotational and compresses the
 flow. The shear term (0.3 sin(pi z), 0.3 cos(pi z), 0) keeps |omega| > 0 everywhere,
-which the Spalart-Allmaras case of horses3d needs.
+which keeps the source term of the Spalart-Allmaras case of horses3d smooth.
 
 | Case | Fields | Where in `generate.py` |
 |---|---|---|
@@ -136,8 +145,8 @@ FLOW = dict(rho=1 + 0.2*sp.tanh(sp.sin(pi*(x - t))/delta),
 
 The function tanh(sin(pi (x - t))/delta) is close to 1 or -1. It jumps smoothly wherever
 sin(pi (x - t)) changes sign: up at x = t and down at x = t ± 1. The jumps move in x at
-speed 1, and their width is proportional to delta. NS takes its density from `FLOW`; MU computes its
-own from c.
+speed 1, and their width is proportional to delta. NS takes its density from `FLOW`; MU
+computes its own from c.
 
 Run the case without `--check`, because the reference errors are for the default
 solution:
@@ -147,9 +156,16 @@ python3 run.py NS --P 3 --meshes 4 8 16
 ```
 
 In horses3d, with delta = 0.3, the order of the total error at P = 3 is 0.6 between
-meshes 4 and 8, and 2.4 between meshes 8 and 16. The order stays low while the mesh can't resolve the
-front, and it rises once the mesh can. With delta = 0.1, mesh 16 still can't resolve the
-front (order 0.2), so a steeper front needs finer meshes.
+meshes 4 and 8, and 2.4 between meshes 8 and 16. The total is mostly the energy error,
+though: the density, which carries the front, converges at only about order 1 between
+meshes 8 and 16, because mesh 16 only starts to resolve the front. With delta = 0.1, the
+order of the total between meshes 8 and 16 is 0.2, so a steeper front needs finer meshes.
+
+Undo the change before you go on, or the `--check` runs of step 6 fail:
+
+```bash
+git checkout generate.py
+```
 
 ### 3. Change the problem file (optional)
 
@@ -188,8 +204,15 @@ To print the largest nodal error of each variable as well, edit `UserDefinedFina
             print *, "MMS max error vars : ", emax                          ! new
 ```
 
-After the next run, each log, such as `NS/CONTROL/N4_P3.log`, has a line that starts
-with `MMS max error vars :`, followed by the largest error of each variable.
+Then run a case and open its log, `NS/CONTROL/N4_P3.log`:
+
+```bash
+python3 run.py NS --P 3 --meshes 4
+```
+
+The log has a line that starts with `MMS max error vars :`, followed by the largest error
+of each variable. This change doesn't alter the L2 errors. To undo it, run
+`git checkout ProblemFile.f90.in`.
 
 ### 4. Generate the problem file (optional)
 
@@ -209,8 +232,9 @@ the physical parameters, the scheme, `dt` and the number of time steps. `run.py`
 the mesh, the solution file and the polynomial order, which appear in the file as
 `{MESH_FILE}`, `{SOLUTION_FILE}` and `{P}`.
 
-Use a fixed time step. If you set `cfl` instead, the runs stop at a different time and
-`run.py` reports them as failed.
+Use a fixed time step. With `cfl` instead, the runs fail: NS stops at start-up unless
+`dcfl` is also set, and with both the runs stop at another time, which `run.py` reports
+as a failure.
 
 To change a case permanently, edit its control file, and then update its reference (see
 step 8). For example, `NS/control_template.control` contains these lines:
@@ -227,9 +251,13 @@ step 8). For example, `NS/control_template.control` contains these lines:
 To change keys for one run only, use `--set`:
 
 ```bash
-python3 run.py NS --P 3 --meshes 4 8 --set "Riemann solver = Roe"
+python3 run.py NS --P 3 --meshes 4 8 --set "Reynolds number = 100"
 python3 run.py NS --P 3 --meshes 4 8 --set "dt = 5.0e-5; Number of time steps = 400"
 ```
+
+The first command changes the errors: on mesh 4, the L2 error is 4.0069e-04 instead of
+4.2541e-04. The second halves the time step and keeps the final time. Its errors change by
+less than 1e-9 relative, which shows that the time-integration error is negligible.
 
 If you set a key that isn't in the control file, `run.py` adds it and prints a warning,
 because HORSES3D ignores keys that it doesn't read. Check the spelling of the key,
@@ -244,7 +272,9 @@ then a table of errors and orders of convergence. If you leave out `--P` and `--
 takes much longer.
 
 `run.py` skips the runs that it has already done with the same build. To run them again,
-use `--force`. Only one `run.py` at a time can work on a case.
+use `--force`. `--keep` keeps the solution files only of the runs that `run.py` makes, so
+combine it with `--force` for runs already done. Only one `run.py` at a time can work on
+a case.
 
 These are the most common commands:
 
@@ -253,14 +283,17 @@ python3 run.py NS --P 3 4 --meshes 4 8              # quick run
 python3 run.py NS --P 3 4 --meshes 4 8 --check      # the same, compared with NS/reference.csv
 python3 run.py NS --check                           # default sweep, compared with NS/reference.csv
 python3 run.py NS --P 3 --meshes 4 8 --force        # run again the runs already in NS/errors.csv
-python3 run.py NS --P 3 --meshes 4 --keep           # keep the solution files, in NS/RESULTS
-python3 run.py MU --P 3 4 --meshes 4 8 --check      # the MU case
+python3 run.py NS --P 3 --meshes 4 --keep --force   # run again, keeping the solution files in NS/RESULTS
+python3 run.py MU --P 3 4 --meshes 4 8 --check      # the MU case (build horses3d.mu first)
 python3 plot.py NS                                  # draw NS/convergence.png
 python3 run.py --help                               # list every option
 ```
 
 To run both cases on GitHub instead, use the workflow (see Checking a change and Run on
-GitHub):
+GitHub). The commands below need the GitHub CLI, logged in with `gh auth login`, and your
+branch pushed. Running a workflow needs write access to the repository: without it, push
+the branch to your fork, enable Actions there, and add `-R <your-user>/horses3d-gpu` to
+the commands.
 
 ```bash
 gh workflow run mms.yml --ref <your-branch>                                   # both cases, compared with the references
@@ -282,8 +315,9 @@ Between meshes 8 and 16, the orders should be close to P or higher (see Results)
 `--check`, the last lines show how many runs `run.py` compared with the reference,
 followed by `PASS` or `FAILED`.
 
-For example, the quick check in step 6 prints the following (the run times in brackets
-depend on the machine):
+For example, on a fresh checkout, `python3 run.py NS --P 3 4 --meshes 4 8 --check` prints
+the following; the run times in brackets depend on the machine. If you ran the quick run
+first, the first four lines say instead that the runs were skipped.
 
 ```
 NS N=4 P=3: L2 = 4.2541e-04 (1 s)
@@ -308,14 +342,15 @@ PASS
 
 * `NS/errors.csv`: the results of every run
 * `NS/CONTROL/`: the control file and the log of each run
-* `NS/convergence.png`: the plot that `python3 plot.py NS` draws
+
+`python3 plot.py NS` draws the results of the last runs in `NS/convergence.png`.
 
 ### 8. Update the reference
 
 `<case>/reference.csv` contains the errors of the default sweep of horses3d for the
-committed case, so the check also compares this solver with horses3d. If you change the
-solution, the problem file or the control file of a case on purpose, its errors change,
-and `--check` fails until the reference changes too.
+committed case, so the check also compares this solver with horses3d. If a deliberate
+change to the solution, the problem file or the control file changes the errors of a
+case, `--check` fails until the reference changes too.
 
 To update the reference, do the following:
 
@@ -361,22 +396,16 @@ gh workflow run mms.yml --ref <branch> -f case=NS -f P="2 3 4" -f meshes="4 8 16
 ## Run locally
 
 The step-by-step guide above shows how to install the Python packages, build the solver
-and run the cases. In more detail, `run.py` generates `<case>/SETUP/ProblemFile.f90`,
-builds it with the HORSES3D build settings (`COMPILER`, `ENABLE_THREADS`, ... from the
-environment and `Solver/make.inc`), and runs every mesh and P with
-`<case>/control_template.control`, filling in the mesh, the solution file and the order.
-Everything else, including `dt` and the number of steps, comes from the control file;
-edit it or override keys with `--set`. A key that is not in the template is added with a
-warning, since HORSES3D ignores the keys it does not read: check its spelling, units
-included (`Interface width (m)`). Keep a fixed time step: with `cfl` the solver ignores
-`dt`, so the runs stop at another time and are reported as failed. Results go to
-`<case>/errors.csv`; pairs already run with the same solver, problem file, build settings
-and control file are skipped unless `--force` is given, and only one `run.py` at a time
-can work on a case. `run.py` exits with an error if a run fails and, with `--check`, if
-an error differs by more than a relative 1e-3 from the row of the same mesh and P in
-`<case>/reference.csv`, or if a run of the default sweep has no row there. Runs with
-`--set`, and meshes or orders outside the default sweep, are not compared; the last lines
-of the output say how many runs were.
+and run the cases; steps 5 and 6 cover the control file, `--set`, skipped runs and
+`--force`. In more detail, `run.py` generates `<case>/SETUP/ProblemFile.f90`, builds it
+with the HORSES3D build settings (`COMPILER`, `ENABLE_THREADS`, ... from the environment
+and `Solver/make.inc`), and runs every mesh and P with `<case>/control_template.control`,
+filling in the mesh, the solution file and the order. Results go to `<case>/errors.csv`.
+`run.py` exits with an error if a run fails and, with `--check`, if an error differs by
+more than a relative 1e-3 from the row of the same mesh and P in `<case>/reference.csv`,
+or if a run of the default sweep has no row there. Runs with `--set`, and meshes or
+orders outside the default sweep, are not compared; the last lines of the output say how
+many runs were.
 
 The meshes are periodic cubes [-1,1]^3 with N^3 elements, made by the cartesian-box
 generator of [horses3d-meshes](https://github.com/horses-framework/horses3d-meshes)
