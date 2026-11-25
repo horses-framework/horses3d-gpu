@@ -3477,16 +3477,6 @@ slavecoord:             DO l = 1, 4
          use SolutionFile
          use MPI_Process_Info
          use MappedGeometryClass, only: vCross, ComputeVorticity
-#if (defined(NAVIERSTOKES) && !(defined(SPALARTALMARAS)) )
-         use VariableConversion_NS, only: getVelocityGradients_STATE, Pressure
-#elif (defined(NAVIERSTOKES) && (defined(SPALARTALMARAS)) )
-         use VariableConversion_NSSA, only: getVelocityGradients_STATE, Pressure
-#elif defined(INCNS)
-         use VariableConversion_iNS, only: getVelocityGradients
-#elif defined(MULTIPHASE)
-         use VariableConversion_MU, only: getVelocityGradients
-         use FluidData_MU, only: dimensionless
-#endif
          implicit none
          class(HexMesh)                         :: self
          integer,             intent(in)        :: iter
@@ -3599,16 +3589,6 @@ slavecoord:             DO l = 1, 4
          use SolutionFile
          use MPI_Process_Info
          use MappedGeometryClass, only: vCross, ComputeVorticity
-#if (defined(NAVIERSTOKES) && !(defined(SPALARTALMARAS)) )
-         use VariableConversion_NS, only: getVelocityGradients_STATE, Pressure
-#elif (defined(NAVIERSTOKES) && (defined(SPALARTALMARAS)) )
-         use VariableConversion_NSSA, only: getVelocityGradients_STATE, Pressure
-#elif defined(INCNS)
-         use VariableConversion_iNS, only: getVelocityGradients
-#elif defined(MULTIPHASE)
-         use VariableConversion_MU, only: getVelocityGradients
-         use FluidData_MU, only: dimensionless
-#endif
          implicit none
          class(HexMesh)                         :: self
          integer,             intent(in)        :: iter
