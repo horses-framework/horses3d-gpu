@@ -1,0 +1,77 @@
+!
+!  Same case as CylinderFWH.control, with the FWH surface merged with the BCs: "boundaries to save"
+!  equal to "acoustic solid surface". The single surface file then stores Q, Qdot, the gradients,
+!  u_tau, the u_tau vector, mu and the wall distance (31 values per node):
+!     * RESULTS/CylinderFWHMerged.<observer>.observer
+!     * MESH/CylinderFWHMerged_fwh_0000000000.surf.hmesh
+!     * RESULTS/surfaces/CylinderFWHMerged_fwh_*.surf.hsol
+!  Read by horses.tools (FWHPostMerged.control), which must reproduce the observers, and by horses2plt
+!  (convert/merged_wall.convert), to check the wall variables.
+!
+Flow equations        = "NS"
+mesh file name        = "../../../TestMeshes/CylinderNSpol3.mesh"
+Polynomial order      = 3
+Number of time steps  = 50
+Output Interval       = 10
+Convergence tolerance = 1.d-10
+cfl                   = 0.3
+dcfl                  = 0.3
+mach number           = 0.3
+Reynolds number       = 200.0
+AOA theta             = 0.0
+AOA phi               = 90.0
+solution file name    = "RESULTS/CylinderFWHMerged.hsol"
+save gradients with solution = .false.
+restart               = .false.
+restart file name     = "RESULTS/CylinderFWHMerged.hsol"
+riemann solver        = roe
+Discretization nodes  = Gauss
+partitioning          = SFC   ! no METIS needed for the parallel run
+
+! -------------------------
+! FWH acoustic analogy
+! -------------------------
+! Solid (impermeable) surface on the cylinder wall. Without "acoustic save timestep"
+! the FWH integrals are computed and the surface is saved at every time step.
+acoustic analogy            = FWH
+acoustic analogy permeable  = .false.
+acoustic solid surface      = [InnerCylinder]
+acoustic surface mesh save  = .true.
+acoustic solution save      = .true.
+! Flush the observers several times during the run
+observers flush interval    = 20
+
+! -------------------------
+! Merged with the BC surface
+! -------------------------
+boundaries to save       = [InnerCylinder]
+surface save gradients   = .true.
+surface save utau        = .true.   ! u_tau -> Cf, tau
+surface save utau vector = .true.   ! u_tau_x/y/z, tau_x/y/z
+surface save turbulent   = .true.   ! mu_NS and wall distance -> yplus
+
+#define acoustic observer 1
+   name     = side
+   position = [10.0, 0.5, 0.0]
+#end
+
+#define acoustic observer 2
+   name     = upstream
+   position = [0.0, 0.5, -10.0]
+#end
+
+#define boundary InnerCylinder
+  type = NoSlipWall
+#end
+
+#define boundary bottom__top
+  type = FreeSlipWall
+#end
+
+#define boundary back__left__front
+  type = Inflow
+#end
+
+#define boundary right
+  type = Outflow
+#end
