@@ -604,7 +604,12 @@ Module SurfaceMesh
             ! the side is always 1 since is at a face of a boundary
             ! eSides = 1
             elementSide = 1
-            isNoSlip = .true.
+            ! Wall fields are valid only if all selected zones are no-slip walls.
+            isNoSlip = any(zonesIDs /= -1)
+            do i = 1, no_of_zones
+                if (zonesIDs(i) .eq. -1) cycle
+                if (mesh % zones(zonesIDs(i)) % zoneBCName .ne. "noslipwall") isNoSlip = .false.
+            end do
 
             deallocate(zonesIDs, zones_names) 
         elseif (controlVariables % containsKey("acoustic surface file")) then
@@ -1458,8 +1463,9 @@ Module SurfaceMesh
         if (.not. surfaces % saveUt) return
         do surfID = 1, surfaces % numberOfSurfaces
             if (.not. surfaces % surfaceActive(surfID)) cycle
-            if ( (surfaces % surfaceTypes(surfID) .ne. SURFACE_TYPE_BC) .or. &
-                 (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. .not. surfaces % mergeFWHandBC) ) cycle
+            ! same condition as the writer: BC surfaces, or FWH surfaces merged with the BCs
+            if ( .not. ( (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_BC) .or. &
+                         (surfaces % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. surfaces % mergeFWHandBC) ) ) cycle
              if (.not. surfaces % isNoSlip(surfID)) cycle
              ! save dwall in each face of the no slip bc zones
 !!!$omp parallel
