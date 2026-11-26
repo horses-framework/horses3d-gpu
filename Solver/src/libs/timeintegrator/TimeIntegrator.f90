@@ -467,6 +467,7 @@
 #if defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE)
       use SpongeClass, only: sponge
       use ActuatorLine, only: farm, ConstructFarm, DestructFarm, UpdateFarm, WriteFarmForces
+      use ActuatorDisk, only: diskFarm, ConstructDiskFarm, DestructDiskFarm, UpdateDiskFarm, WriteDiskFarmForces
 #endif
 
       use IBMClass
@@ -504,7 +505,7 @@
       type(BDFIntegrator_t)         :: BDFSolver
       type(RosenbrockIntegrator_t)  :: RosenbrockSolver
 
-      logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, saveLES, saveOrders, saveUTauWithSign
+      logical                       :: saveGradients, saveSensor, useTrip, ActuatorLineFlag, ActuatorDiskFlag, saveLES, saveOrders, saveUTauWithSign
       procedure(UserDefinedPeriodicOperation_f) :: UserDefinedPeriodicOperation
 !
 !     ----------------------
@@ -514,6 +515,7 @@
       SolutionFileName   = trim(getFileName(controlVariables % StringValueForKey("solution file name",LINE_LENGTH)))
       useTrip            = controlVariables % logicalValueForKey("use trip")
       ActuatorLineFlag   = controlVariables % logicalValueForKey("use actuatorline")
+      ActuatorDiskFlag   = controlVariables % logicalValueForKey("use actuatordisk")
       saveOrders         = controlVariables % logicalValueForKey("save mesh order")
 
 !
@@ -545,6 +547,10 @@
       if(ActuatorLineFlag) then
           call ConstructFarm(farm, controlVariables, t, sem % mesh)
           call UpdateFarm(farm, t, sem % mesh)
+      end if
+      if(ActuatorDiskFlag) then
+          call ConstructDiskFarm(diskFarm, controlVariables, t, sem % mesh)
+          call UpdateDiskFarm(diskFarm, t, sem % mesh)
       end if
       call sponge % construct(sem % mesh,controlVariables)
 #endif
@@ -701,6 +707,7 @@
 #endif
 #if defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE)
          if(ActuatorLineFlag) call UpdateFarm(farm, t, sem % mesh)
+         if(ActuatorDiskFlag) call UpdateDiskFarm(diskFarm, t, sem % mesh)
 #endif
 !
 !        Perform time step
@@ -751,6 +758,7 @@
 
 #if defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE)
          if(ActuatorLineFlag)  call WriteFarmForces(farm,t,k)
+         if(ActuatorDiskFlag)  call WriteDiskFarmForces(diskFarm,t,k)
          call sponge % updateBaseFlow(sem % mesh,dt)
 #endif
 !
@@ -884,6 +892,7 @@
 #endif
 #if defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE)
          if(ActuatorLineFlag)  call WriteFarmForces(farm, t, k, last=.true.)
+         if(ActuatorDiskFlag)  call WriteDiskFarmForces(diskFarm, t, k, last=.true.)
          call sponge % writeBaseFlow(sem % mesh, k, t, last=.true.)
 #endif
       end if
@@ -916,6 +925,7 @@
 #endif
 #if defined(NAVIERSTOKES) || defined(INCNS) || defined(MULTIPHASE)
          if(ActuatorLineFlag) call DestructFarm(farm)
+         if(ActuatorDiskFlag) call DestructDiskFarm(diskFarm)
          call sponge % destruct()
 #endif
 
