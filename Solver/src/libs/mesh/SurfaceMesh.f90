@@ -473,9 +473,6 @@ Module SurfaceMesh
         if (.not. self % active) return
         saveFWH = controlVariables % logicalValueForKey("acoustic solution save") .or. self % mergeFWHandBC
         do i = 1, self % numberOfSurfaces
-            saveUt = .false.
-            saveUtauVector = .false.
-            saveTurb = .false.
             if (.not. self % surfaceActive(i)) cycle
             !skip fwh if not requested
             if ( (self % surfaceTypes(i) .eq. SURFACE_TYPE_FWH) .and. (.not. saveFWH) ) cycle
@@ -489,15 +486,7 @@ Module SurfaceMesh
                 ! for slices and BC use always the first element of the face, this can be changed if needed
                 elemSide = 1
             end if
-            ! save ut or turb if requested only for BC or FWH merged with BC
-            if ( (self % surfaceTypes(i) .eq. SURFACE_TYPE_BC) .or. &
-                 (self % surfaceTypes(i) .eq. SURFACE_TYPE_FWH .and. self % mergeFWHandBC) ) then
-                if (self%isNoSlip(i)) then
-                    saveUt = self % saveUt
-                    saveUtauVector = self % saveUtauVector
-                    saveTurb = self % saveTurb
-                end if
-            end if
+            call getSurfaceWallFlags(self, i, saveUt, saveUtauVector, saveTurb)
             call SurfaceSaveSolution(self % zones(i), mesh, time, iter, FinalName, self % totalFaces(i), &
                                  self % globalFid(1:nf,i), self % faceOffset(1:nf,i), elemSide, &
                                  self % surfaceTypes(i),self % saveGradients, &
@@ -518,7 +507,8 @@ Module SurfaceMesh
         logical, intent(in)                                  :: hasGradients
 
         !local variables
-        integer                                             :: nf
+        integer                                             :: nf, padding
+        logical                                             :: saveUt, saveUtauVector, saveTurb
 !
 !       Check if is activated
 !       ------------------------
@@ -528,11 +518,42 @@ Module SurfaceMesh
             error stop "only fwh surface can load a solution into the solver"
         end if
 !
+!       Same layout as the writer: the wall variables are in the file only if the FWH surface is
+!       merged with the BCs ("boundaries to save" equal to "acoustic solid surface") and the
+!       corresponding "surface save ..." keys are set, as in the control file of the simulation
+!       --------------------------------------------------------------------------------------------
+        call getSurfaceWallFlags(self, FWH_POSITION, saveUt, saveUtauVector, saveTurb)
+        padding = getSurfacePadding(SURFACE_TYPE_FWH, hasGradients, self % mergeFWHandBC, saveUt, saveUtauVector, saveTurb)
+!
         nf = self % zones(FWH_POSITION) % no_of_faces
         call SurfaceLoadSolution(self % zones(FWH_POSITION), mesh, fileName, self % globalFid(1:nf,FWH_POSITION), self % faceOffset(1:nf,FWH_POSITION), &
-                                 self % elementSide(:,1), hasGradients)
+                                 self % elementSide(:,1), padding)
 !
     End Subroutine SurfLoadSolution
+!
+    Subroutine getSurfaceWallFlags(self, surfID, saveUt, saveUtauVector, saveTurb)
+!     *******************************************************************
+!        Wall variables (u_tau, u_tau vector, mu and wall distance) saved
+!        for a surface: only for no-slip BCs or the FWH surface merged with them
+!     *******************************************************************
+        implicit none
+        class(SurfaceMesh_t), intent(in)                    :: self
+        integer, intent(in)                                 :: surfID
+        logical, intent(out)                                :: saveUt, saveUtauVector, saveTurb
+
+        saveUt         = .false.
+        saveUtauVector = .false.
+        saveTurb       = .false.
+        if ( (self % surfaceTypes(surfID) .eq. SURFACE_TYPE_BC) .or. &
+             (self % surfaceTypes(surfID) .eq. SURFACE_TYPE_FWH .and. self % mergeFWHandBC) ) then
+            if (self % isNoSlip(surfID)) then
+                saveUt         = self % saveUt
+                saveUtauVector = self % saveUtauVector
+                saveTurb       = self % saveTurb
+            end if
+        end if
+
+    End Subroutine getSurfaceWallFlags
 !
     Subroutine createFWHSurface(self, controlVariables, mesh, solution_file, elementSide)
         use FileReadingUtilities, only: getCharArrayFromString
@@ -724,40 +745,14 @@ Module SurfaceMesh
          refs = 0.0_RP
 #endif
 
-      saveQdot = .false.
-      select case (surface_type)
-      case (SURFACE_TYPE_FWH)
-          saveQdot = .true.
+      saveQdot = (surface_type .eq. SURFACE_TYPE_FWH)
+      if (saveQdot) then
           solution_type = ZONE_SOLUTION_AND_DOT_FILE
-          if (saveGradients .and. saveBCandFWH) then
-              padding = NCONS*2 + NGRAD*3
-          else
-              padding = NCONS*2
-          end if 
-      case (SURFACE_TYPE_BC)
-          ! more variables such as friction velocity, mu, and height of first node will be saved in the future
+      else
           solution_type = ZONE_SOLUTION_FILE
-          if (saveGradients)  then
-              padding = NCONS + NGRAD*3
-          else
-              padding = NCONS
-          end if
-      case (SURFACE_TYPE_SLICE)
-          ! only solution and gradients will be saved for slices
-          solution_type = ZONE_SOLUTION_FILE
-          if (saveGradients)  then
-              padding = NCONS + NGRAD*3
-          else
-              padding = NCONS
-          end if
-      end select
-
-#if defined(NAVIERSTOKES)
-      if (saveUt) padding = padding + 1
-      if (saveUtauVector) padding = padding + NDIM
-      ! save mu_NS and y, for y+ value calc
-      if (saveTurb) padding = padding + 2
-#endif
+      end if
+      ! values per node, shared with the reader (SurfaceLoadSolution)
+      padding = getSurfacePadding(surface_type, saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb)
 !
 !     Create new file
 !     ---------------
@@ -780,7 +775,7 @@ Module SurfaceMesh
           Q(1:NCONS,:,:)  = f % storage(eSides(zoneFaceID)) % Q(:,:,:)
 
           ! 4 integers are written: number of dimension, and 3 value of the dimensions
-          pos = POS_INIT_DATA + (fGlobID(zoneFaceID)-1)*4_AddrInt*SIZEOF_INT + padding * faceOffset(zoneFaceID) * SIZEOF_RP
+          pos = POS_INIT_DATA + (fGlobID(zoneFaceID)-1)*4_AddrInt*SIZEOF_INT + 1_AddrInt*padding * faceOffset(zoneFaceID) * SIZEOF_RP
           call writeArray(fid, Q, position=pos)
 
           if (saveQdot) then
@@ -859,7 +854,12 @@ Module SurfaceMesh
 !
    End Subroutine SurfaceSaveSolution
 !         
-   Subroutine SurfaceLoadSolution(surface_zone, mesh, fileName, fGlobID, faceOffset, eSides, hasGradients)
+   Subroutine SurfaceLoadSolution(surface_zone, mesh, fileName, fGlobID, faceOffset, eSides, padding)
+!     *******************************************************************
+!        Loads Q and Qdot of a FWH surface file into the face storage.
+!        padding is the number of values per node in the file, it must be
+!        computed with getSurfacePadding using the same flags as the writer
+!     *******************************************************************
 
       use SolutionFile
       use PhysicsStorage
@@ -871,13 +871,14 @@ Module SurfaceMesh
       character(len=*), intent(in)                         :: fileName
       integer, dimension(:), intent(in)                    :: fGlobID, faceOffset
       integer, dimension(:), intent(in)                    :: eSides
-      logical, intent(in)                                  :: hasGradients
+      integer, intent(in)                                  :: padding
 
       ! local variables
       integer                                              :: zoneFaceID, meshFaceID, fileType
       real(kind=RP), dimension(:,:,:), allocatable         :: QF
       integer                                              :: Nx,Ny
-      integer                                              :: fID, pos, padding
+      integer                                              :: fID, io
+      integer(kind=AddrInt)                                :: pos
       integer                                              :: arrayRank, Neq, Npx, Npy
 
 !     get type and num of vars
@@ -889,10 +890,8 @@ Module SurfaceMesh
       case default
           write(STD_OUT,'(A,I0,A,I0)') "Error, hsol file expected is ", ZONE_SOLUTION_AND_DOT_FILE, ", got: ", fileType
           errorMessage(STD_OUT)
+          error stop
       end select
-
-      padding = NCONS*2
-      if (hasGradients) padding = padding + NGRAD*3
 !
 !     Read elements data
 !     ------------------
@@ -904,32 +903,32 @@ Module SurfaceMesh
       do zoneFaceID = 1, surface_zone % no_of_faces
           meshFaceID = surface_zone % faces(zoneFaceID)
           ! 4 integers were written: number of dimension, and 3 value of the dimensions
-          pos = POS_INIT_DATA + (fGlobID(zoneFaceID)-1)*4*SIZEOF_INT + padding * faceOffset(zoneFaceID) * SIZEOF_RP
+          pos = POS_INIT_DATA + (fGlobID(zoneFaceID)-1)*4_AddrInt*SIZEOF_INT + 1_AddrInt*padding * faceOffset(zoneFaceID) * SIZEOF_RP
           associate(f => mesh % faces(meshFaceID))
               Nx = f % Nf(1)
               Ny = f % Nf(2)
 !             verify dimensions of each row
-              read(fID, pos=pos) arrayRank
-              read(fID) Neq, Npx, Npy
-              if (     ((Npx-1) .ne. Nx) &
+              read(fID, pos=pos, iostat=io) arrayRank, Neq, Npx, Npy
+              if (     (io .ne. 0) .or. (arrayRank .ne. 3) &
+                  .or. ((Npx-1) .ne. Nx) &
                   .or. ((Npy-1) .ne. Ny) &
                   .or. (Neq     .ne. NCONS ) ) then
-                  write(STD_OUT,'(A,I0,A)') "Error reading fwh file: wrong dimension for face "&
-                      ,meshFaceID,"."
-
-                  write(STD_OUT,'(A,I0,A,I0,A)') "Face dimensions: ", Nx, &
-                      " ,", Ny, "."
-
-                  write(STD_OUT,'(A,I0,A,I0,A)') "File dimensions: ", Npx -1, &
-                      " ,", Npy-1, "."
+                  write(STD_OUT,'(A,A,A,I0,A)') "Error reading fwh file ", trim(fileName), ": wrong dimension for face ", &
+                      meshFaceID, "."
+                  write(STD_OUT,'(A,I0,A,I0,A)') "Face dimensions: ", Nx, " ,", Ny, "."
+                  write(STD_OUT,'(A,I0,A,I0,A,I0,A)') "File dimensions: ", Npx -1, " ,", Npy-1, " (", Neq, " variables)."
+                  write(STD_OUT,'(A)') "Check that the polynomial order and the surface keys (has gradients, boundaries to save,"
+                  write(STD_OUT,'(A)') "surface save utau/utau vector/turbulent) are the same as in the simulation."
                   errorMessage(STD_OUT)
                   error stop
               end if
 
               allocate(QF(1:NCONS,0:Nx,0:Ny))
-              read(fID) QF
+              read(fID, iostat=io) QF
+              if (io .ne. 0) error stop "Error reading Q from the fwh surface file"
               f % storage(eSides(zoneFaceID)) % Q = QF
-              read(fID) QF
+              read(fID, iostat=io) QF
+              if (io .ne. 0) error stop "Error reading Qdot from the fwh surface file"
               f % storage(eSides(zoneFaceID)) % Qdot = QF
               safedeallocate(QF)
           end associate
@@ -940,6 +939,37 @@ Module SurfaceMesh
       close(fID)
 !
    End Subroutine SurfaceLoadSolution
+!
+   integer function getSurfacePadding(surface_type, saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb) result(padding)
+!     *******************************************************************
+!        Number of values saved per node in a surface file. Used by the
+!        writer (SurfaceSaveSolution) and the reader (SurfaceLoadSolution)
+!        to get the position of each face, so they must use the same flags
+!     *******************************************************************
+      use PhysicsStorage
+      implicit none
+      integer, intent(in)                                  :: surface_type
+      logical, intent(in)                                  :: saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb
+
+      select case (surface_type)
+      case (SURFACE_TYPE_FWH)
+          ! Q and Qdot, the gradients only when merged with the BCs
+          padding = NCONS*2
+          if (saveGradients .and. saveBCandFWH) padding = padding + NGRAD*3
+      case default
+          ! BCs and slices: Q and the gradients
+          padding = NCONS
+          if (saveGradients) padding = padding + NGRAD*3
+      end select
+
+#if defined(NAVIERSTOKES)
+      if (saveUt) padding = padding + 1
+      if (saveUtauVector) padding = padding + NDIM
+      ! save mu_NS and y, for y+ value calc
+      if (saveTurb) padding = padding + 2
+#endif
+
+   end function getSurfacePadding
 !
    Subroutine SurfacePrepareForIO(surface_zone, mesh, totalNumberOfFaces, globalFaceID, faceOffset)
 
