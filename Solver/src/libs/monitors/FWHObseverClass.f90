@@ -874,8 +874,14 @@ use VariableConversion, only: Pressure, PressureDot
                                                             mesh % faces(meshFaceIDs(3)),&
                                                             mesh % faces(meshFaceIDs(4)),&
                                                             mesh % faces(meshFaceIDs(5)),&
-                                                            mesh % faces(meshFaceIDs(6)),&
-                                                             computeQdot = .TRUE.)
+                                                            mesh % faces(meshFaceIDs(6)))
+         call elements(eID) % ProlongQdotToFaces(NCONS,&
+                                                            mesh % faces(meshFaceIDs(1)),&
+                                                            mesh % faces(meshFaceIDs(2)),&
+                                                            mesh % faces(meshFaceIDs(3)),&
+                                                            mesh % faces(meshFaceIDs(4)),&
+                                                            mesh % faces(meshFaceIDs(5)),&
+                                                            mesh % faces(meshFaceIDs(6)))
 
          ! if ( computeGradients ) then
          !    call elements(eID) % ProlongGradientsToFaces(NGRAD, mesh % faces(meshFaceIDs(1)),&
