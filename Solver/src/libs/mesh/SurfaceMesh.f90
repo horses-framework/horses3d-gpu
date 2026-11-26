@@ -96,7 +96,7 @@ Module SurfaceMesh
         integer                                                 :: idSliceX, idSliceY, idSliceZ, idBC
         logical                                                 :: hasFWH, hasSliceX, hasSliceY, hasSliceZ, hasBC
         character(len=LINE_LENGTH)                              :: solution_file, read_str, fileName, zoneName, fullExpression, path
-        character(len=LINE_LENGTH), dimension(:), allocatable   :: bcs_names, bcs_namesFWH
+        character(len=LINE_LENGTH), dimension(:), allocatable   :: bcs_names, bcs_namesFWH, bcs_namesFWHcont
         integer, dimension(:), allocatable                      :: FWHelementSide, facesIDs
         real(kind=RP), dimension(:), allocatable                :: posSliceX, posSliceY, posSliceZ
         real(kind=RP), dimension(:), allocatable                :: limSliceX, limSliceY, limSliceZ
@@ -177,13 +177,26 @@ Module SurfaceMesh
         self % mergeFWHandBC = .false.
         if (hasFWH .and. hasBC) then
             if (controlVariables % containsKey("acoustic solid surface")) then
+                ! same zones as the FWH surface (createFWHSurface), including the continuation line
                 read_str = controlVariables % stringValueForKey("acoustic solid surface", LINE_LENGTH)
                 call toLower(read_str)
                 call getCharArrayFromString(read_str, LINE_LENGTH, bcs_namesFWH)
-                if (all( bcs_names .eq. bcs_namesFWH )) then
+                read_str = controlVariables % stringValueForKey("acoustic solid surface cont", LINE_LENGTH)
+                if (read_str .ne. "") then
+                    call toLower(read_str)
+                    call getCharArrayFromString(read_str, LINE_LENGTH, bcs_namesFWHcont)
+                    bcs_namesFWH = [bcs_namesFWH, bcs_namesFWHcont]
+                end if
+!               merge only if both lists have the same zones, in any order
+                if (size(bcs_names) .eq. size(bcs_namesFWH)) then
                     self % mergeFWHandBC = .true.
-                    numberOfSurfacesBC = 0
-                    hasBC = .false.
+                    do i = 1, size(bcs_namesFWH)
+                        if (.not. any(bcs_names .eq. bcs_namesFWH(i))) self % mergeFWHandBC = .false.
+                    end do
+                    if (self % mergeFWHandBC) then
+                        numberOfSurfacesBC = 0
+                        hasBC = .false.
+                    end if
                 end if
             end if
         end if
@@ -719,7 +732,7 @@ Module SurfaceMesh
       integer                                              :: fid, padding
       integer(kind=AddrInt)                                :: pos
       real(kind=RP)                                        :: refs(NO_OF_SAVED_REFS) 
-      logical                                              :: saveQdot
+      logical                                              :: saveQdot, writeGradients
 #if (defined(CAHNHILLIARD)) && (!defined(MULTIPHASE))
       logical                                              :: computeGradients = .true.
 #endif
@@ -753,6 +766,8 @@ Module SurfaceMesh
       end if
       ! values per node, shared with the reader (SurfaceLoadSolution)
       padding = getSurfacePadding(surface_type, saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb)
+      ! write the gradients only if they are counted in the padding
+      writeGradients = surfaceHasGradients(surface_type, saveGradients, saveBCandFWH)
 !
 !     Create new file
 !     ---------------
@@ -785,7 +800,7 @@ Module SurfaceMesh
           deallocate(Q)
 
           ! taken and adapted from saveSolution of HexMesh
-          if ( saveGradients .and. computeGradients ) then
+          if ( writeGradients .and. computeGradients ) then
 
                allocate(Q(1:NGRAD,0:Nx,0:Ny))
 
@@ -951,16 +966,13 @@ Module SurfaceMesh
       integer, intent(in)                                  :: surface_type
       logical, intent(in)                                  :: saveGradients, saveBCandFWH, saveUt, saveUtauVector, saveTurb
 
-      select case (surface_type)
-      case (SURFACE_TYPE_FWH)
-          ! Q and Qdot, the gradients only when merged with the BCs
+      ! Q, and Qdot for FWH
+      if (surface_type .eq. SURFACE_TYPE_FWH) then
           padding = NCONS*2
-          if (saveGradients .and. saveBCandFWH) padding = padding + NGRAD*3
-      case default
-          ! BCs and slices: Q and the gradients
+      else
           padding = NCONS
-          if (saveGradients) padding = padding + NGRAD*3
-      end select
+      end if
+      if (surfaceHasGradients(surface_type, saveGradients, saveBCandFWH)) padding = padding + NGRAD*3
 
 #if defined(NAVIERSTOKES)
       if (saveUt) padding = padding + 1
@@ -970,6 +982,20 @@ Module SurfaceMesh
 #endif
 
    end function getSurfacePadding
+!
+   logical function surfaceHasGradients(surface_type, saveGradients, saveBCandFWH)
+!     *******************************************************************
+!        Gradients are saved for BCs and slices, and for the FWH surface
+!        only when it is merged with the BCs
+!     *******************************************************************
+      implicit none
+      integer, intent(in)                                  :: surface_type
+      logical, intent(in)                                  :: saveGradients, saveBCandFWH
+
+      surfaceHasGradients = saveGradients
+      if (surface_type .eq. SURFACE_TYPE_FWH) surfaceHasGradients = saveGradients .and. saveBCandFWH
+
+   end function surfaceHasGradients
 !
    Subroutine SurfacePrepareForIO(surface_zone, mesh, totalNumberOfFaces, globalFaceID, faceOffset)
 
@@ -1490,7 +1516,8 @@ Module SurfaceMesh
         integer                                                 :: surfID, faceID, i, j, meshFaceID
 
         if (.not. surfaces % active) return
-        if (.not. surfaces % saveUt) return
+        ! the wall distance is only saved with "surface save turbulent" (for y+)
+        if (.not. surfaces % saveTurb) return
         do surfID = 1, surfaces % numberOfSurfaces
             if (.not. surfaces % surfaceActive(surfID)) cycle
             ! same condition as the writer: BC surfaces, or FWH surfaces merged with the BCs
