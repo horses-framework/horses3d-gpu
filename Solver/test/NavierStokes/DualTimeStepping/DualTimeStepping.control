@@ -23,7 +23,7 @@ partitioning          = SFC
 ! DTS Flags
 !-------------------------------------------------------------
 time integration        = fas ! we integrate using FAS
-simulation type         = time-accurate ! FAS is primarily for steady-state. for time-accurate simulations it automatically switches to DTS
+simulation type         = Time-Accurate ! FAS is primarily for steady-state. for time-accurate simulations it automatically switches to DTS
 Convergence tolerance   = 500.0d0 ! convergence tolerance for each pseudo-time
 bdf order               = 2 ! order of implicit integration, Other options: 1,2,3,4,5
 
