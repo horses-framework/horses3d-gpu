@@ -1161,42 +1161,6 @@ module SpatialDiscretization
          call ViscousDiscretization % ComputeGradient( NCONS, NCONS, mesh , time , iNSGradientVariables)
 
       end subroutine DGSpatial_ComputeGradient
-
-      subroutine DensityLimiter(N,Q)
-         implicit none
-         integer,       intent(in)    :: N(3)
-         real(kind=RP), intent(inout) :: Q(1:NCONS,0:N(1),0:N(2),0:N(3))
-!
-!        ---------------
-!        Local variables
-!        ---------------
-!
-         integer  :: i, j, k 
-         real(kind=RP) :: rhoIn01, p, rhomin, rhomax
-
-         rhomin = thermodynamics % rho_min / refValues % rho
-         rhomax = thermodynamics % rho_max / refValues % rho
-
-         do k = 0, N(3) ; do j = 0, N(2) ; do i = 0, N(1)
-            rhoIn01 = (Q(INSRHO,i,j,k)-rhomin)/(rhomax-rhomin)
-
-            if ( rhoIn01 .ge. 1.0_RP ) then
-               Q(INSRHO,i,j,k) = rhomax
-
-            elseif ( rhoIn01 .le. 0.0_RP ) then
-               Q(INSRHO,i,j,k) = rhomin
-
-            else
-               !p = POW3(rhoIn01)*(6.0_RP*POW2(rhoIn01)-15.0_RP*rhoIn01+10.0_RP)
-               p = rhoIn01
-
-               Q(INSRHO,i,j,k) = (rhomax-rhomin)*p + rhomin
-         
-            end if
-
-         end do         ; end do         ; end do
-
-      end subroutine DensityLimiter
 !
 !////////////////////////////////////////////////////////////////////////////////////////
 !
