@@ -1,0 +1,177 @@
+name: CI HORSES.TOOLS
+
+########################################################################
+# Tests the horses.tools additional tools (Solver/src/addons/tools).
+#
+# 1) FWH post-processing ("tool type = fwh post"), Solver/test/AddOns/horsesTools/FWH:
+#    A short NS cylinder simulation (CylinderFWH.control, run in parallel) computes the
+#    Ffowcs Williams-Hawkings acoustic analogy on the fly, on a solid surface on the cylinder
+#    wall (SFC partitioning, no METIS needed), and saves the FWH surface solution (Q and Qdot) at every time step:
+#      * RESULTS/CylinderFWH.<observer>.observer
+#      * RESULTS/surfaces/CylinderFWH_fwh_*.surf.hsol
+#    horses.tools (FWHPost.control, serial) computes the observers again from the surface files:
+#      * RESULTS/FWHPost.<observer>.observer
+#    check_observers.py checks that both agree and compares with reference values.
+#
+# 2) Same case with the FWH surface merged with the BCs (CylinderFWHMerged.control):
+#    "boundaries to save" equal to "acoustic solid surface", so a single surface file stores
+#    Q, Qdot, the gradients, u_tau, the u_tau vector, mu and the wall distance.
+#      * horses.tools (FWHPostMerged.control) must read that layout and reproduce the observers.
+#      * horses2plt (convert/merged_wall.convert) checks the wall variables, with check_tec.sh and
+#        check_wall_shear.py from the horses2plt test (../../horses2plt).
+#
+# TODO: permeable FWH surface and the "fwh surface" pre-processing tool.
+########################################################################
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Permissions for codecov
+    permissions:
+      id-token: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['gfortran']
+        mode: ['DEBUG']
+        comm: ['PARALLEL']
+        enable_threads: ['NO']
+
+    name: HORSES.TOOLS - ${{ matrix.compiler }} - ${{ matrix.mode }} - ${{ matrix.comm }}
+
+    env:
+      MAKE_FLAGS: MODE=${{ matrix.mode }} COMPILER=${{ matrix.compiler }} COMM=${{ matrix.comm }} ENABLE_THREADS=${{ matrix.enable_threads }} WITH_METIS=NO
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Coverage Flags
+        run: |
+          if [ "${{ matrix.mode }}" = "DEBUG" ]; then
+            echo "EXTRA_COV=-Og -fprofile-arcs -ftest-coverage" >> $GITHUB_ENV
+          else
+            echo "EXTRA_COV=" >> $GITHUB_ENV
+          fi
+
+      - name: Install OpenMPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+          mpif90 --version
+
+      - name: Show ${{ matrix.compiler }} version
+        run: ${{ matrix.compiler }} --version
+
+      - name: Configure
+        working-directory: ./Solver
+        run: ./configure
+
+      - name: Compile horses3d.ns, horses.tools and horses2plt
+        working-directory: ./Solver
+        run: |
+          make allclean $MAKE_FLAGS
+          make ns $MAKE_FLAGS EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+          make addons ADDONS="tools horses2tecplot" $MAKE_FLAGS EXTRA_FFLAGS="${{ env.EXTRA_COV }}"
+          ls -l bin
+
+########################################################################
+#######              1) FWH: ON THE FLY AND POST-PROCESSING     ########
+########################################################################
+
+      - name: FWH - run NS Cylinder with FWH on the fly (MPI)
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: |
+          mpiexec --oversubscribe -n 4 ./horses3d.ns CylinderFWH.control
+          ls -l RESULTS RESULTS/surfaces | head -20
+          for f in RESULTS/CylinderFWH.side.observer \
+                   RESULTS/CylinderFWH.upstream.observer \
+                   RESULTS/surfaces/CylinderFWH_fwh_0000000000.surf.hsol \
+                   RESULTS/surfaces/CylinderFWH_fwh_0000000050.surf.hsol; do
+            [ -s "$f" ] || { echo "Missing $f"; exit 1; }
+          done
+          [ $(ls RESULTS/surfaces/CylinderFWH_fwh_*.surf.hsol | wc -l) -eq 51 ] || { echo "Expected 51 FWH surface files"; exit 1; }
+
+      - name: FWH - post-processing with horses.tools (serial)
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: |
+          rm -f RESULTS/FWHPost.*.observer
+          ./horses.tools FWHPost.control
+          for f in RESULTS/FWHPost.side.observer RESULTS/FWHPost.upstream.observer; do
+            [ -s "$f" ] || { echo "Missing $f"; exit 1; }
+          done
+
+      - name: FWH - check observers (on the fly vs post-processing and reference values)
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: python3 check_observers.py RESULTS/CylinderFWH RESULTS/FWHPost
+
+########################################################################
+#######   2) FWH SURFACE MERGED WITH THE BCs (WALL VARIABLES)   ########
+########################################################################
+
+      - name: FWH merged with BCs - run NS Cylinder on the fly (MPI)
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: |
+          mpiexec --oversubscribe -n 4 ./horses3d.ns CylinderFWHMerged.control
+          for f in RESULTS/CylinderFWHMerged.side.observer \
+                   RESULTS/CylinderFWHMerged.upstream.observer \
+                   MESH/CylinderFWHMerged_fwh_0000000000.surf.hmesh \
+                   RESULTS/surfaces/CylinderFWHMerged_fwh_0000000050.surf.hsol; do
+            [ -s "$f" ] || { echo "Missing $f"; exit 1; }
+          done
+          # merged: no separate BC surface
+          if ls RESULTS/surfaces/CylinderFWHMerged_bc* 2>/dev/null; then echo "BC surface not merged with FWH"; exit 1; fi
+        if: '!cancelled()'
+
+      - name: FWH merged with BCs - post-processing with horses.tools (serial)
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: |
+          rm -f RESULTS/FWHPostMerged.*.observer
+          ./horses.tools FWHPostMerged.control
+        if: '!cancelled()'
+
+      - name: FWH merged with BCs - check observers
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: python3 check_observers.py RESULTS/CylinderFWHMerged RESULTS/FWHPostMerged
+        if: '!cancelled()'
+
+      - name: FWH merged with BCs - wall variables with horses2plt
+        working-directory: ./Solver/test/AddOns/horsesTools/FWH
+        run: |
+          rm -f RESULTS/surfaces/CylinderFWHMerged_fwh_0000000050.surf.tec
+          ./horses2plt convert/merged_wall.convert
+          # "+" = strictly positive: wall_distance and yplus are zero if the wall distance is not computed
+          ../../horses2plt/check_tec.sh RESULTS/surfaces/CylinderFWHMerged_fwh_0000000050.surf.tec QUADRILATERAL \
+                         +u_tau u_tau_x u_tau_y u_tau_z +tau tau_x tau_y tau_z +Cf +mu_ns +wall_distance +yplus +rho p
+          python3 ../../horses2plt/check_wall_shear.py RESULTS/surfaces/CylinderFWHMerged_fwh_0000000050.surf.tec 1.0e-4
+        if: '!cancelled()'
+
+#
+# CHECK CODE COVERAGE
+# -------------------
+
+      - name: Install gcovr
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcovr
+
+      - name: Generate Coverage Report
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        run: gcovr --root . --print-summary --xml coverage.xml
+
+      - name: Upload Coverage to Codecov
+        if: matrix.mode == 'DEBUG' && !cancelled()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          flags: horses-tools
+          slug: horses-framework/horses3d-gpu
+          use_oidc: true

@@ -145,6 +145,8 @@ ADDONS="./AddOns/horsesConverter/MappingResult \
 POSTPROCESSING_TESTS="./AddOns/horses2plt \
                       ./AddOns/mergeStatistics"
 
+TOOLS_TESTS="./AddOns/horsesTools/FWH"
+
 cp -vf ../utils/modulefile/horses/dev-default ../utils/modulefile/horses/dev
 sed -i -e "s#@HORSES_HOME_DIR#$PWD#g" ../utils/modulefile/horses/dev
 
@@ -205,6 +207,14 @@ for subdir in $POSTPROCESSING_TESTS; do
 	ln -fsv $PWD/bin/horses3d.ns ./test/$subdir
 	ln -fsv $PWD/bin/horses2plt ./test/$subdir
 	ln -fsv $PWD/bin/horses.mergeStats ./test/$subdir
+done
+
+for subdir in $TOOLS_TESTS; do
+	mkdir -p ./test/$subdir/MESH
+	mkdir -p ./test/$subdir/RESULTS
+	ln -fsv $PWD/bin/horses3d.ns ./test/$subdir
+	ln -fsv $PWD/bin/horses.tools ./test/$subdir
+	ln -fsv $PWD/bin/horses2plt ./test/$subdir
 done
 
 # Comment gradients as it is outdated
