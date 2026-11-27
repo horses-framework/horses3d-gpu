@@ -90,6 +90,7 @@
             procedure   :: FindPointWithCoords     => HexElement_FindPointWithCoords
             procedure   :: EvaluateSolutionAtPoint => HexElement_EvaluateSolutionAtPoint
             procedure   :: ProlongSolutionToFaces  => HexElement_ProlongSolutionToFaces
+            procedure   :: ProlongQdotToFaces      => HexElement_ProlongQdotToFaces
             !procedure   :: ProlongGradientsToFaces => HexElement_ProlongGradientsToFaces
             procedure   :: ProlongAviscFluxToFaces => HexElement_ProlongAviscFluxToFaces
             !procedure   :: ComputeLocalGradient    => HexElement_ComputeLocalGradient
@@ -228,97 +229,131 @@
 !
 !////////////////////////////////////////////////////////////////////////
 !
-      subroutine HexElement_ProlongSolutionToFaces(self, nEqn, fFR, fBK, fBOT, fR, fT, fL, computeQdot)
+      subroutine HexElement_ProlongSolutionToFaces(self, nEqn, fFR, fBK, fBOT, fR, fT, fL)
          !$acc routine vector
          use FaceClass
          implicit none
          class(Element),   intent(in)  :: self
          integer,          intent(in)  :: nEqn
          class(Face),      intent(inout) :: fFR, fBK, fBOT, fR, fT, fL
-         logical,optional, intent(in)  :: computeQdot
 !
 !        ---------------
 !        Local variables
 !        ---------------
 !
-         integer  :: i, j, k, l, N(3)
-         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(3)) :: QFR, QBK, QdotFR, QdotBK
-         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(2)) :: QBOT, QT, QdotBOT, QdotT
-         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(2), 0:self % Nxyz(3)) :: QL, QR, QdotL, QdotR
-         logical :: prolongQdot
-
-
-         !if (present(computeQdot)) then
-         !    prolongQdot = computeQdot
-         !else
-         !    prolongQdot = .FALSE.
-         !end if
+         integer  :: i, j, k
+         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(3)) :: QFR, QBK
+         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(2)) :: QBOT, QT
+         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(2), 0:self % Nxyz(3)) :: QL, QR
 !
 !        *************************
 !        Prolong solution to faces
 !        *************************
 !
-!         QL   = 0.0_RP     ; QR   = 0.0_RP
-!         QFR  = 0.0_RP     ; QBK  = 0.0_RP
-!         QBOT = 0.0_RP     ; QT   = 0.0_RP
-         ! if (prolongQdot) then
-         !    QdotL   = 0.0_RP     ; QdotR   = 0.0_RP
-         !    QdotFR  = 0.0_RP     ; QdotBK  = 0.0_RP
-         !    QdotBOT = 0.0_RP     ; QdotT   = 0.0_RP
-         ! end if
-
          !$acc loop vector collapse(2)
-         do k = 0, self % Nxyz(3) ; do j = 0, self % Nxyz(2) 
+         do k = 0, self % Nxyz(3) ; do j = 0, self % Nxyz(2)
             QL  (:,j,k)= self % storage % Q(:,0,j,k)* NodalStorage(self % Nxyz(1)) % v(0,LEFT  )
             QR  (:,j,k)= self % storage % Q(:,0,j,k)* NodalStorage(self % Nxyz(1)) % v(0,RIGHT )
             !$acc loop seq
             do i = 1, self % Nxyz(1)
                QL  (:,j,k)= QL  (:,j,k)+ self % storage % Q(:,i,j,k)* NodalStorage(self % Nxyz(1)) % v(i,LEFT  )
                QR  (:,j,k)= QR  (:,j,k)+ self % storage % Q(:,i,j,k)* NodalStorage(self % Nxyz(1)) % v(i,RIGHT )
-            end do 
+            end do
          end do ; end do
 
          !$acc loop vector collapse(2)
-         do k = 0, self % Nxyz(3) ; do i = 0, self % Nxyz(1) 
+         do k = 0, self % Nxyz(3) ; do i = 0, self % Nxyz(1)
             QFR (:,i,k)= self % storage % Q(:,i,0,k)* NodalStorage(self % Nxyz(2)) % v(0,FRONT )
             QBK (:,i,k)= self % storage % Q(:,i,0,k)* NodalStorage(self % Nxyz(2)) % v(0,BACK  )
             !$acc loop seq
             do j = 1, self % Nxyz(2)
                QFR (:,i,k)= QFR (:,i,k)+ self % storage % Q(:,i,j,k)* NodalStorage(self % Nxyz(2)) % v(j,FRONT )
                QBK (:,i,k)= QBK (:,i,k)+ self % storage % Q(:,i,j,k)* NodalStorage(self % Nxyz(2)) % v(j,BACK  )
-            end do                   
+            end do
          end do                   ; end do
 
          !$acc loop vector collapse(2)
-         do j = 0, self % Nxyz(2) ; do i = 0, self % Nxyz(1) 
+         do j = 0, self % Nxyz(2) ; do i = 0, self % Nxyz(1)
             QBOT(:,i,j)= self % storage % Q(:,i,j,0)* NodalStorage(self % Nxyz(3)) % v(0,BOTTOM)
             QT  (:,i,j)= self % storage % Q(:,i,j,0)* NodalStorage(self % Nxyz(3)) % v(0,TOP   )
             !$acc loop seq
             do k = 1, self % Nxyz(3)
                QBOT(:,i,j)= QBOT(:,i,j)+ self % storage % Q(:,i,j,k)* NodalStorage(self % Nxyz(3)) % v(k,BOTTOM)
                QT  (:,i,j)= QT  (:,i,j)+ self % storage % Q(:,i,j,k)* NodalStorage(self % Nxyz(3)) % v(k,TOP   )
-            end do                   
+            end do
          end do                   ; end do
 
-         !   if (prolongQdot) then
-         !      do k = 0, self % Nxyz(3) ; do j = 0, self % Nxyz(2) ; do i = 0, self % Nxyz(1)
-         !       QdotL  (:,j,k)= QdotL  (:,j,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(1)) % v(i,LEFT  )
-         !       QdotR  (:,j,k)= QdotR  (:,j,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(1)) % v(i,RIGHT )
-         !       QdotFR (:,i,k)= QdotFR (:,i,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(2)) % v(j,FRONT )
-         !       QdotBK (:,i,k)= QdotBK (:,i,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(2)) % v(j,BACK  )
-         !       QdotBOT(:,i,j)= QdotBOT(:,i,j)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(3)) % v(k,BOTTOM)
-         !       QdotT  (:,i,j)= QdotT  (:,i,j)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(3)) % v(k,TOP   )
-         !      end do                   ; end do                   ; end do
-         !   end if
-
-         !call Face_AdaptSolutionToFace(fL,  nEqn, self % Nxyz(2), self % Nxyz(3), QL   , self % faceSide(ELEFT  ), QdotL, computeQdot)
-         !call Face_AdaptSolutionToFace(fR,  nEqn, self % Nxyz(2), self % Nxyz(3), QR   , self % faceSide(ERIGHT ), QdotR, computeQdot)
-         !call Face_AdaptSolutionToFace(fFR, nEqn, self % Nxyz(1), self % Nxyz(3), QFR  , self % faceSide(EFRONT ), QdotFR, computeQdot)
-         !call Face_AdaptSolutionToFace(fBK, nEqn, self % Nxyz(1), self % Nxyz(3), QBK  , self % faceSide(EBACK  ), QdotBK, computeQdot)
-         !call Face_AdaptSolutionToFace(fBOT,nEqn, self % Nxyz(1), self % Nxyz(2), QBOT , self % faceSide(EBOTTOM), QdotBOT, computeQdot)
-         !call Face_AdaptSolutionToFace(fT,  nEqn, self % Nxyz(1), self % Nxyz(2), QT   , self % faceSide(ETOP   ), QdotT, computeQdot)
+         call fL  % AdaptSolutionToFace(nEqn, self % Nxyz(2), self % Nxyz(3), QL  , self % faceSide(ELEFT  ))
+         call fR  % AdaptSolutionToFace(nEqn, self % Nxyz(2), self % Nxyz(3), QR  , self % faceSide(ERIGHT ))
+         call fFR % AdaptSolutionToFace(nEqn, self % Nxyz(1), self % Nxyz(3), QFR , self % faceSide(EFRONT ))
+         call fBK % AdaptSolutionToFace(nEqn, self % Nxyz(1), self % Nxyz(3), QBK , self % faceSide(EBACK  ))
+         call fBOT% AdaptSolutionToFace(nEqn, self % Nxyz(1), self % Nxyz(2), QBOT, self % faceSide(EBOTTOM))
+         call fT  % AdaptSolutionToFace(nEqn, self % Nxyz(1), self % Nxyz(2), QT  , self % faceSide(ETOP   ))
 
       end subroutine HexElement_ProlongSolutionToFaces
+
+      subroutine HexElement_ProlongQdotToFaces(self, nEqn, fFR, fBK, fBOT, fR, fT, fL)
+         !$acc routine vector
+         use FaceClass
+         implicit none
+         class(Element),   intent(in)  :: self
+         integer,          intent(in)  :: nEqn
+         class(Face),      intent(inout) :: fFR, fBK, fBOT, fR, fT, fL
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer  :: i, j, k
+         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(3)) :: QdotFR, QdotBK
+         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(1), 0:self % Nxyz(2)) :: QdotBOT, QdotT
+         real(kind=RP), dimension(1:nEqn, 0:self % Nxyz(2), 0:self % Nxyz(3)) :: QdotL, QdotR
+!
+!        *************************
+!        Prolong Qdot to faces
+!        *************************
+!
+         !$acc loop vector collapse(2)
+         do k = 0, self % Nxyz(3) ; do j = 0, self % Nxyz(2)
+            QdotL  (:,j,k)= self % storage % Qdot(:,0,j,k)* NodalStorage(self % Nxyz(1)) % v(0,LEFT  )
+            QdotR  (:,j,k)= self % storage % Qdot(:,0,j,k)* NodalStorage(self % Nxyz(1)) % v(0,RIGHT )
+            !$acc loop seq
+            do i = 1, self % Nxyz(1)
+               QdotL  (:,j,k)= QdotL  (:,j,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(1)) % v(i,LEFT  )
+               QdotR  (:,j,k)= QdotR  (:,j,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(1)) % v(i,RIGHT )
+            end do
+         end do ; end do
+
+         !$acc loop vector collapse(2)
+         do k = 0, self % Nxyz(3) ; do i = 0, self % Nxyz(1)
+            QdotFR (:,i,k)= self % storage % Qdot(:,i,0,k)* NodalStorage(self % Nxyz(2)) % v(0,FRONT )
+            QdotBK (:,i,k)= self % storage % Qdot(:,i,0,k)* NodalStorage(self % Nxyz(2)) % v(0,BACK  )
+            !$acc loop seq
+            do j = 1, self % Nxyz(2)
+               QdotFR (:,i,k)= QdotFR (:,i,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(2)) % v(j,FRONT )
+               QdotBK (:,i,k)= QdotBK (:,i,k)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(2)) % v(j,BACK  )
+            end do
+         end do                   ; end do
+
+         !$acc loop vector collapse(2)
+         do j = 0, self % Nxyz(2) ; do i = 0, self % Nxyz(1)
+            QdotBOT(:,i,j)= self % storage % Qdot(:,i,j,0)* NodalStorage(self % Nxyz(3)) % v(0,BOTTOM)
+            QdotT  (:,i,j)= self % storage % Qdot(:,i,j,0)* NodalStorage(self % Nxyz(3)) % v(0,TOP   )
+            !$acc loop seq
+            do k = 1, self % Nxyz(3)
+               QdotBOT(:,i,j)= QdotBOT(:,i,j)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(3)) % v(k,BOTTOM)
+               QdotT  (:,i,j)= QdotT  (:,i,j)+ self % storage % Qdot(:,i,j,k)* NodalStorage(self % Nxyz(3)) % v(k,TOP   )
+            end do
+         end do                   ; end do
+
+         call fL  % AdaptQdotToFace(nEqn, self % Nxyz(2), self % Nxyz(3), QdotL  , self % faceSide(ELEFT  ))
+         call fR  % AdaptQdotToFace(nEqn, self % Nxyz(2), self % Nxyz(3), QdotR  , self % faceSide(ERIGHT ))
+         call fFR % AdaptQdotToFace(nEqn, self % Nxyz(1), self % Nxyz(3), QdotFR , self % faceSide(EFRONT ))
+         call fBK % AdaptQdotToFace(nEqn, self % Nxyz(1), self % Nxyz(3), QdotBK , self % faceSide(EBACK  ))
+         call fBOT% AdaptQdotToFace(nEqn, self % Nxyz(1), self % Nxyz(2), QdotBOT, self % faceSide(EBOTTOM))
+         call fT  % AdaptQdotToFace(nEqn, self % Nxyz(1), self % Nxyz(2), QdotT  , self % faceSide(ETOP   ))
+
+      end subroutine HexElement_ProlongQdotToFaces
 
       subroutine HexElement_ProlongSolToFaces(self, nEqn, f_side, side)
          !$acc routine vector

@@ -28,6 +28,11 @@ module SurfaceIntegrals
    integer, parameter   :: USER_DEFINED = 99
    !$acc declare copyin(SURFACE, TOTAL_FORCE, PRESSURE_FORCE, VISCOUS_FORCE, MASS_FLOW, FLOW_RATE, PRESSURE_DISTRIBUTION, USER_DEFINED)
 !
+!  Pressure subtracted in all pressure integrals (0 = absolute pressure by default).
+!  Set by a logical flag in the constrol file. Value har set inside SurfaceMonitor_Initialization
+   real(kind=RP), public :: pGauge = 0.0_RP
+   !$acc declare create(pGauge)
+!
 !  ========
    contains
 !  ========
@@ -204,7 +209,7 @@ module SurfaceIntegrals
 !
 !           ***********************************
 !           Computes the pressure integral
-!              val = \int pdS
+!              val = \int (p - pGauge) dS
 !           ***********************************
 !
             !$acc loop vector collapse(2) reduction(+:val)
@@ -212,7 +217,7 @@ module SurfaceIntegrals
 !
 !              Compute the integral
 !              --------------------
-               p = Pressure(f % storage(1) % Q(:,i,j))
+               p = Pressure(f % storage(1) % Q(:,i,j)) - pGauge
                val = val + p * NodalStorage(f % Nf(1)) % w(i) &
                              * NodalStorage(f % Nf(2)) % w(j) &
                              * f % geom % jacobian(i,j)
@@ -230,7 +235,7 @@ module SurfaceIntegrals
 !
 !////////////////////////////////////////////////////////////////////////////////////////
 !
-      function VectorSurfaceIntegral(mesh, zoneID, integralType, iter) result(val)
+      function VectorSurfaceIntegral(mesh, zoneID, integralType, iter) result(final_val)
 !
 !        -----------------------------------------------------------
 !           This function computes scalar integrals, that is, those
@@ -249,7 +254,7 @@ module SurfaceIntegrals
          type(HexMesh),       intent(inout) :: mesh 
          integer,             intent(in)    :: zoneID
          integer,             intent(in)    :: integralType, iter
-         real(kind=RP)                      :: val(NDIM)
+         real(kind=RP)                      :: final_val(NDIM)
 !
 !        ---------------
 !        Local variables
@@ -257,6 +262,7 @@ module SurfaceIntegrals
 !
          integer  :: zonefID, fID, eID, i, j, ierr
          real(kind=RP)  :: localval(NDIM)
+         real(kind=RP)  :: val(NDIM)
          real(kind=RP)  :: valx, valy, valz
          real(kind=RP)  :: localx, localy, localz
          real(kind=RP)  :: p, tau(1:NDIM, 1:NDIM)
@@ -264,6 +270,7 @@ module SurfaceIntegrals
 !        Initialization
 !        --------------
          val = 0.0_RP
+         final_val = 0.0_RP
          localval = 0.0_RP
          valx = 0.0_RP
          valy = 0.0_RP
@@ -275,7 +282,7 @@ module SurfaceIntegrals
          case ( SURFACE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz)
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,val) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -313,7 +320,7 @@ module SurfaceIntegrals
          case ( TOTAL_FORCE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz)
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,p,tau) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -326,7 +333,7 @@ module SurfaceIntegrals
             !
             !           ************************************************
             !           Computes the total force experienced by the zone
-            !              F = \int p \vec{n}ds - \int tau'·\vec{n}ds
+            !              F = \int (p - pGauge) \vec{n}ds - \int tau'·\vec{n}ds
             !           ************************************************
             !
                         !$acc loop vector collapse(2) reduction(+:localx, localy, localz) private(tau, localval)
@@ -334,7 +341,7 @@ module SurfaceIntegrals
             !
             !              Compute the integral
             !              --------------------
-                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j))
+                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j)) - pGauge
                            call getStressTensor(mesh % faces(fid) % storage(1) % Q(:,i,j),  mesh % faces(fid) % storage(1) % U_x(:,i,j),&
                                                 mesh % faces(fid) % storage(1) % U_y(:,i,j),mesh % faces(fid) % storage(1) % U_z(:,i,j), tau)
             
@@ -358,7 +365,7 @@ module SurfaceIntegrals
          case ( PRESSURE_FORCE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz) 
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,p,val) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -371,7 +378,7 @@ module SurfaceIntegrals
             !
             !           ****************************************************
             !           Computes the pressure forces experienced by the zone
-            !              F = \int p \vec{n}ds
+            !              F = \int (p - pGauge) \vec{n}ds
             !           ****************************************************
             !           
                         !$acc loop vector collapse(2) reduction(+:localx, localy, localz) private(val)
@@ -379,7 +386,7 @@ module SurfaceIntegrals
             !
             !              Compute the integral
             !              --------------------
-                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j))
+                           p = Pressure(mesh % faces(fid) % storage(1) % Q(:,i,j)) - pGauge
             
                            val = ( p * mesh % faces(fid) % geom % normal(:,i,j) ) * mesh % faces(fid) % geom % jacobian(i,j) &
                                      * NodalStorage(mesh % faces(fid) % Nf(1)) % w(i) &
@@ -401,7 +408,7 @@ module SurfaceIntegrals
          case ( VISCOUS_FORCE )
 
 !$acc parallel loop gang present(mesh) num_gangs(mesh % zones(zoneID) % no_of_faces) reduction(+:valx, valy, valz)
-!$omp parallel do private(fID,localVal,localx,localy,localz) reduction(+:valx, valy, valz) schedule(runtime)
+!$omp parallel do private(fID,localVal,localx,localy,localz,tau,val) reduction(+:valx, valy, valz) schedule(runtime)
          do zonefID = 1, mesh % zones(zoneID) % no_of_faces
             !
             !           Face global ID
@@ -444,11 +451,11 @@ module SurfaceIntegrals
            
          end select
             
-         val(1:3) = [valx, valy, valz]
+         final_val(1:3) = [valx, valy, valz]
          
 #ifdef _HAS_MPI_
-         localVal = val
-         call mpi_allreduce(localVal, val, NDIM, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, ierr)
+         localVal = final_val
+         call mpi_allreduce(localVal, final_val, NDIM, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, ierr)
 #endif
 
       end function VectorSurfaceIntegral
@@ -898,7 +905,7 @@ module SurfaceIntegrals
                viscStress = matmul(tau,normal)
             end if
             
-            outvalue = -P * normal + viscStress   
+            outvalue = -(P - pGauge) * normal + viscStress   
                   
          case( PRESSURE_FORCE )
 
@@ -908,7 +915,7 @@ module SurfaceIntegrals
 
             P = pressure(Qi)
             
-            outvalue = -P * normal
+            outvalue = -(P - pGauge) * normal
             
          case( VISCOUS_FORCE )
 

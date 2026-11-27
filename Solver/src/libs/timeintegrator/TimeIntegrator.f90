@@ -18,7 +18,7 @@
       USE Physics
       USE ExplicitMethods
       USE IMEXMethods
-      use AutosaveClass                   , only: Autosave_t, AUTOSAVE_BY_TIME
+      use AutosaveClass                   , only: Autosave_t, AutosaveLambVector_t, AUTOSAVE_BY_TIME
       use StopwatchClass
       use MPI_Process_Info
       use TimeIntegratorDefinitions
@@ -50,6 +50,7 @@
          LOGICAL                                :: Compute_dt                    ! Is st computed from an inputted CFL number?
          type(Autosave_t)                       :: autosave
          class(pAdaptation_t), allocatable      :: pAdaptator
+         type(AutosaveLambVector_t)             :: lambSave
          type(MultiTauEstim_t)                  :: TauEstimator
          character(len=LINE_LENGTH)             :: integration_method
          integer                                :: RKStep_key
@@ -103,6 +104,9 @@
          logical                               :: limit
          real(RP)                              :: limiter_minimum
          integer                               :: adaptationType  ! 0 for Truncation Error and 1 for Reinforcement Learning (VI algorithm)
+         character(len=LINE_LENGTH)            :: simulationType
+         logical                               :: imexStepChanges
+         real(RP)                              :: nStepsToFinal
 !
 !        ----------------------------------------------------------------------------------
 !        Set time-stepping variables
@@ -219,7 +223,9 @@
 !        Integrator-dependent initializations
 !        ------------------------------------
 !
-         SELECT CASE (controlVariables % StringValueForKey("simulation type",LINE_LENGTH))
+         simulationType = controlVariables % StringValueForKey("simulation type",LINE_LENGTH)
+         call toLower(simulationType)
+         SELECT CASE (simulationType)
             CASE ('time-accurate')
                IF (controlVariables % containsKey("final time")) THEN
                   self % tFinal         = controlVariables % doublePrecisionValueForKey("final time")
@@ -227,6 +233,14 @@
                   self % tFinal         = huge(self % tFinal)
 !~                  error stop '"final time" keyword must be specified for time-accurate integrators'
                ENDIF
+!              Check that the final time is bigger than the initial time
+               if ( self % tFinal .lt. initial_time ) then
+                  if ( MPI_Process % isRoot ) then
+                     write(STD_OUT,'(A,ES12.5,A,ES12.5,A)') "*** ERROR: Final time (", self % tFinal, &
+                          ") is earlier than the initial/restart time (", initial_time, ")."
+                  end if
+                  error stop
+               end if
                self % integratorType = TIME_ACCURATE
             CASE DEFAULT ! Using 'steady-state' even if not specified in input file
                self % integratorType = STEADY_STATE
@@ -251,6 +265,33 @@
          call surfacesMesh % autosaveConfig (controlVariables, initial_time)      ! If not requested, the procedure returns only setting not save values
 
          call self % TauEstimator % construct(controlVariables, sem)
+
+         call self % lambSave % Configure(controlVariables, initial_time)
+
+!        The IMEX matrix is factorized for the first dt only, so nothing may change or shorten the step (see CorrectDt)
+         if ( self % integration_method == IMEX_SOLVER ) then
+            imexStepChanges = self % Compute_dt                                           .or. &
+                              self % autosave % mode           == AUTOSAVE_BY_TIME        .or. &
+                              surfacesMesh % autosave % mode   == AUTOSAVE_BY_TIME        .or. &
+                              self % lambSave % mode           == AUTOSAVE_BY_TIME        .or. &
+                              self % pAdaptator % adaptation_mode == ADAPT_DYNAMIC_TIME
+            if ( (.not. imexStepChanges) .and. (self % integratorType == TIME_ACCURATE) &
+                                         .and. (self % tFinal < huge(self % tFinal)) ) then
+               nStepsToFinal = (self % tFinal - initial_time) / self % dt
+               imexStepChanges = .not. AlmostEqual(nStepsToFinal, anint(nStepsToFinal), 1.0e-10_RP)
+            end if
+
+            if ( imexStepChanges ) then
+               if ( MPI_Process % isRoot ) then
+                  write(STD_OUT,'(A)') '*** ERROR: IMEX can only be used with a fixed time step. It requires:'
+                  write(STD_OUT,'(A)') '***    - "dt", without "cfl"'
+                  write(STD_OUT,'(A)') '***    - "autosave mode = iteration", and no time-based surface or Lamb vector saves'
+                  write(STD_OUT,'(A)') '***    - no time-based p-adaptation'
+                  write(STD_OUT,'(A)') '***    - "final time" - initial/restart time to be a multiple of "dt"'
+               end if
+               error stop
+            end if
+         end if
 
          if (.not. MPI_Process % isRoot ) return
 
@@ -489,7 +530,14 @@
       t = self % time
 
 #if defined(NAVIERSTOKES)
-      if( .not. sem % mesh % IBM % active ) call Initialize_WallConnection(controlVariables, sem % mesh)
+      if( .not. sem % mesh % IBM % active ) then
+         call Initialize_WallConnection(controlVariables, sem % mesh)
+!        The friction-velocity vector is only computed from the resolved velocity gradient
+!        (getU_tauInSurfaces), which is skipped when wall functions are active
+         if ( useWallFunc .and. surfacesMesh % active .and. surfacesMesh % saveUtauVector ) then
+            error stop "'surface save utau vector' is not supported together with wall functions"
+         end if
+      end if
       if (useTrip) call randomTrip % construct(sem % mesh, controlVariables)
       call initializeChannel(controlVariables)
 #endif
@@ -794,6 +842,12 @@
             end if
 #endif
          end if
+         ! Lamb vector autosave
+         if ( self % lambsave % Autosave(k+1) ) then
+            call Stopwatch % Pause("Solver")
+            call sem % mesh % SaveLambVector(k+1,t,SolutionFileName, controlVariables)
+            call Stopwatch % Start("Solver")
+         end if
 !
 !        Save surfaces solution
 !        ----------------------
@@ -966,8 +1020,9 @@
       integer, parameter :: DO_NOTHING  = 0
       integer, parameter :: AUTOSAVE    = 1
       integer, parameter :: ADAPT       = 2
-      integer, parameter :: SURFSAVE     = 3
-      integer, parameter :: DONT_KNOW   = 4
+      integer, parameter :: SURFSAVE    = 3
+      integer, parameter :: LAMBSAVE    = 4
+      integer, parameter :: DONT_KNOW   = 5
       integer, save :: next_time_will = DONT_KNOW
       !----------------------------------------------------------
 
@@ -977,6 +1032,7 @@
       self % pAdaptator % performPAdaptationT = .FALSE.
       self % autosave   % performAutosave = .FALSE.
       surfacesMesh % autosave % performAutosave = .FALSE.
+      self % lambsave   % performAutosave = .FALSE.
       dt_out = dt_in
 
 !
@@ -1013,7 +1069,7 @@
                end if
 
                self % autosave % nextAutosaveTime = self % autosave % nextAutosaveTime + self % autosave % time_interval
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
             end if
 
          case (ADAPT)
@@ -1033,7 +1089,7 @@
                end if
 
                self % pAdaptator % nextAdaptationTime = self % pAdaptator % nextAdaptationTime + self % pAdaptator % time_interval
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
             end if
 
          case (SURFSAVE)
@@ -1053,16 +1109,27 @@
                end if
 
                surfacesMesh % autosave % nextAutosaveTime = surfacesMesh % autosave % nextAutosaveTime + surfacesMesh % autosave % time_interval
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
+            end if
+
+         case (LAMBSAVE)
+
+            if ( self % lambsave % nextAutosaveTime < (t + dt_out) ) then
+               dt_out = self % lambsave % nextAutosaveTime - t
+               self % lambsave % performAutosave = .TRUE.
+
+               self % lambsave % nextAutosaveTime = self % lambsave % nextAutosaveTime + self % lambsave % time_interval
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
             end if
 
          case (DONT_KNOW)
 
             if (  self % pAdaptator % adaptation_mode == ADAPT_DYNAMIC_TIME .or. &
                   surfacesMesh % autosave % mode      == AUTOSAVE_BY_TIME .or. &
-                  self % autosave % mode              == AUTOSAVE_BY_TIME) then
+                  self % autosave % mode              == AUTOSAVE_BY_TIME .or. &
+                  self % lambsave % mode              == AUTOSAVE_BY_TIME) then
 
-               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime],1)
+               next_time_will = minloc([self % autosave % nextAutosaveTime, self % pAdaptator % nextAdaptationTime, surfacesMesh % autosave % nextAutosaveTime, self % lambsave % nextAutosaveTime],1)
                dt_temp = self % CorrectDt (t, dt_out)
                dt_out  = dt_temp
             else

@@ -608,7 +608,7 @@ module VolumeIntegrals
             case ( VELOCITY )
                 ! num_of_vars is equal to NDIM
 !$acc parallel loop gang present(mesh) num_gangs(9700) reduction(+:val1,val2,val3) async(1)
-!$omp parallel do reduction(+:val1,val2,val3) private(val) schedule(guided)
+!$omp parallel do reduction(+:val1,val2,val3) private(val,local1,local2,local3,invRHo) schedule(guided)
          do eID = 1, mesh % no_of_elements
 !
             local1 = 0.0_RP
@@ -652,7 +652,7 @@ module VolumeIntegrals
             case ( MOMENTUM )
                 ! num_of_vars is equal to NDIM
 !$acc parallel loop gang present(mesh) num_gangs(9700) reduction(+:val1,val2,val3)
-!$omp parallel do reduction(+:val1,val2,val3) private(val) schedule(guided)
+!$omp parallel do reduction(+:val1,val2,val3) private(val,local1,local2,local3) schedule(guided)
          do eID = 1, mesh % no_of_elements
 !
             local1 = 0.0_RP
@@ -731,7 +731,8 @@ module VolumeIntegrals
                 ! num_of_vars is equal to NCONS
 
 !$acc parallel loop gang present(mesh) num_gangs(9700) reduction(+:val1,val2,val3,val4,val5)
-!$omp parallel do reduction(+:val1,val2,val3,val4,val5) private(val) schedule(guided)
+!$omp parallel do reduction(+:val1,val2,val3,val4,val5) &
+!$omp private(val,local1,local2,local3,local4,local5) schedule(guided)
          do eID = 1, mesh % no_of_elements
 !
             local1 = 0.0_RP
@@ -948,7 +949,7 @@ module VolumeIntegrals
          minSensor =  huge(1.0_RP)/10.0_RP
          maxSensor = -huge(1.0_RP)/10.0_RP
 
-!$omp parallel do schedule(static) private(ielem)
+!$omp parallel do schedule(static) private(ielem) reduction(min:minSensor) reduction(max:maxSensor)
          do ielem = 1, mesh % no_of_elements
             minSensor = min(minSensor, mesh % elements(ielem) % storage % sensor)
             maxSensor = max(maxSensor, mesh % elements(ielem) % storage % sensor)

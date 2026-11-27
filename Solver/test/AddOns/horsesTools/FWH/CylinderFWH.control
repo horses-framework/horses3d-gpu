@@ -1,0 +1,67 @@
+!
+!  Short NS cylinder run with the Ffowcs Williams-Hawkings (FWH) acoustic analogy computed on the fly.
+!  It is used as the input of the horses.tools "fwh post" CI test:
+!     * RESULTS/CylinderFWH.<observer>.observer        -> acoustic pressure computed on the fly
+!     * MESH/CylinderFWH_fwh_0000000000.surf.hmesh     -> FWH surface mesh
+!     * RESULTS/surfaces/CylinderFWH_fwh_*.surf.hsol   -> FWH surface solution (Q and Qdot), one per step
+!  The post-processing (FWHPost.control) reads the surface solution and must reproduce the
+!  observers computed here.
+!
+Flow equations        = "NS"
+mesh file name        = "../../../TestMeshes/CylinderNSpol3.mesh"
+Polynomial order      = 3
+Number of time steps  = 50
+Output Interval       = 10
+Convergence tolerance = 1.d-10
+cfl                   = 0.3
+dcfl                  = 0.3
+mach number           = 0.3
+Reynolds number       = 200.0
+AOA theta             = 0.0
+AOA phi               = 90.0
+solution file name    = "RESULTS/CylinderFWH.hsol"
+save gradients with solution = .false.
+restart               = .false.
+restart file name     = "RESULTS/CylinderFWH.hsol"
+riemann solver        = roe
+Discretization nodes  = Gauss
+partitioning          = SFC   ! no METIS needed for the parallel run
+
+! -------------------------
+! FWH acoustic analogy
+! -------------------------
+! Solid (impermeable) surface on the cylinder wall. Without "acoustic save timestep"
+! the FWH integrals are computed and the surface is saved at every time step.
+acoustic analogy            = FWH
+acoustic analogy permeable  = .false.
+acoustic solid surface      = [InnerCylinder]
+acoustic surface mesh save  = .true.
+acoustic solution save      = .true.
+! Flush the observers several times during the run
+observers flush interval    = 20
+
+#define acoustic observer 1
+   name     = side
+   position = [10.0, 0.5, 0.0]
+#end
+
+#define acoustic observer 2
+   name     = upstream
+   position = [0.0, 0.5, -10.0]
+#end
+
+#define boundary InnerCylinder
+  type = NoSlipWall
+#end
+
+#define boundary bottom__top
+  type = FreeSlipWall
+#end
+
+#define boundary back__left__front
+  type = Inflow
+#end
+
+#define boundary right
+  type = Outflow
+#end

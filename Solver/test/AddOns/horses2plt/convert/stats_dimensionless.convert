@@ -1,0 +1,8 @@
+!
+!  horses2plt CI: volumetric statistics, dimensionless (reference for the legacy statistics steps)
+!
+hmesh file       = MESH/Cylinder_0000000000.hmesh
+hsol file        = RESULTS/Cylinder.stats.hsol
+has gradients    = .true.
+dimensionless    = .true.
+output variables = umean,vmean,wmean,Sxx,Syy,Szz,Sxy,Sxz,Syz

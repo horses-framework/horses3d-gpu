@@ -39,6 +39,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./Euler/UniformFlow \
             ./Euler/JFNK \
             ./Euler/TaylorGreenKEPEC \
+            ./Euler/IsentropicVortex \
             ./Euler/Cylinder_ErrorEstimation_pAdaptationRL \
             ./NavierStokes/UniformFlow \
             ./NavierStokes/Convergence \
@@ -80,6 +81,8 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/ForwardFacingStep_SSPRK43 \
             ./NavierStokes/LimiterTest \
             ./NavierStokes/TaylorGreenSVVLES \
+            ./NavierStokes/LambVector \
+            ./NavierStokes/LambVectorCube \
             ./NavierStokes/ManufacturedSolutionsSA \
             ./NavierStokes/FlatPlateSA \
             ./NavierStokes/BIRK5NumJac \
@@ -95,6 +98,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/Cylinder_AdaptiveTimeStep_pAdaptationRL \
             ./NavierStokes/ABLBoundaryMapping \
             ./NavierStokes/ActuatorLineController \
+            ./NavierStokes/RotaryPeriodic \
             ./NavierStokes/Channel \
             ./NavierStokes/Channel64 \
             ./IncompressibleNS/Convergence \
@@ -137,6 +141,11 @@ COMPONENTS_TEST_CASES="FacePatches \
 ADDONS="./AddOns/horsesConverter/MappingResult \
         ./AddOns/horsesConverter/HorsesMesh2OF \
         ./AddOns/horsesConverter/OF2Horses"
+
+POSTPROCESSING_TESTS="./AddOns/horses2plt \
+                      ./AddOns/mergeStatistics"
+
+TOOLS_TESTS="./AddOns/horsesTools/FWH"
 
 cp -vf ../utils/modulefile/horses/dev-default ../utils/modulefile/horses/dev
 sed -i -e "s#@HORSES_HOME_DIR#$PWD#g" ../utils/modulefile/horses/dev
@@ -190,6 +199,22 @@ done
 
 for subdir in $ADDONS; do
 	ln -fsv $PWD/bin/horsesConverter ./test/$subdir
+done
+
+for subdir in $POSTPROCESSING_TESTS; do
+	mkdir -p ./test/$subdir/MESH
+	mkdir -p ./test/$subdir/RESULTS
+	ln -fsv $PWD/bin/horses3d.ns ./test/$subdir
+	ln -fsv $PWD/bin/horses2plt ./test/$subdir
+	ln -fsv $PWD/bin/horses.mergeStats ./test/$subdir
+done
+
+for subdir in $TOOLS_TESTS; do
+	mkdir -p ./test/$subdir/MESH
+	mkdir -p ./test/$subdir/RESULTS
+	ln -fsv $PWD/bin/horses3d.ns ./test/$subdir
+	ln -fsv $PWD/bin/horses.tools ./test/$subdir
+	ln -fsv $PWD/bin/horses2plt ./test/$subdir
 done
 
 # Comment gradients as it is outdated
