@@ -1,0 +1,11 @@
+!
+!  horses2plt: wall variables of the FWH surface merged with the BCs (CylinderFWHMerged.control).
+!  The file also has Qdot (FWH), that horses2plt skips. Wall distance and yplus are zero if the
+!  wall distance is not computed on the merged surface.
+!
+hmesh file           = MESH/CylinderFWHMerged_fwh_0000000000.surf.hmesh
+hsol file            = RESULTS/surfaces/CylinderFWHMerged_fwh_0000000050.surf.hsol
+has gradients        = .true.
+additional variables = "[u_tau, u_tau_vector, turb]"
+output mode          = FE
+output variables     = u_tau,tau,tau_x,tau_y,tau_z,Cf,mu_ns,wall_distance,yplus,rho,p

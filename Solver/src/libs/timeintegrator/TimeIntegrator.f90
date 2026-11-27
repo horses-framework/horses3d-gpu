@@ -104,6 +104,9 @@
          logical                               :: limit
          real(RP)                              :: limiter_minimum
          integer                               :: adaptationType  ! 0 for Truncation Error and 1 for Reinforcement Learning (VI algorithm)
+         character(len=LINE_LENGTH)            :: simulationType
+         logical                               :: imexStepChanges
+         real(RP)                              :: nStepsToFinal
 !
 !        ----------------------------------------------------------------------------------
 !        Set time-stepping variables
@@ -220,7 +223,9 @@
 !        Integrator-dependent initializations
 !        ------------------------------------
 !
-         SELECT CASE (controlVariables % StringValueForKey("simulation type",LINE_LENGTH))
+         simulationType = controlVariables % StringValueForKey("simulation type",LINE_LENGTH)
+         call toLower(simulationType)
+         SELECT CASE (simulationType)
             CASE ('time-accurate')
                IF (controlVariables % containsKey("final time")) THEN
                   self % tFinal         = controlVariables % doublePrecisionValueForKey("final time")
@@ -228,6 +233,14 @@
                   self % tFinal         = huge(self % tFinal)
 !~                  error stop '"final time" keyword must be specified for time-accurate integrators'
                ENDIF
+!              Check that the final time is bigger than the initial time
+               if ( self % tFinal .lt. initial_time ) then
+                  if ( MPI_Process % isRoot ) then
+                     write(STD_OUT,'(A,ES12.5,A,ES12.5,A)') "*** ERROR: Final time (", self % tFinal, &
+                          ") is earlier than the initial/restart time (", initial_time, ")."
+                  end if
+                  error stop
+               end if
                self % integratorType = TIME_ACCURATE
             CASE DEFAULT ! Using 'steady-state' even if not specified in input file
                self % integratorType = STEADY_STATE
@@ -254,6 +267,31 @@
          call self % TauEstimator % construct(controlVariables, sem)
 
          call self % lambSave % Configure(controlVariables, initial_time)
+
+!        The IMEX matrix is factorized for the first dt only, so nothing may change or shorten the step (see CorrectDt)
+         if ( self % integration_method == IMEX_SOLVER ) then
+            imexStepChanges = self % Compute_dt                                           .or. &
+                              self % autosave % mode           == AUTOSAVE_BY_TIME        .or. &
+                              surfacesMesh % autosave % mode   == AUTOSAVE_BY_TIME        .or. &
+                              self % lambSave % mode           == AUTOSAVE_BY_TIME        .or. &
+                              self % pAdaptator % adaptation_mode == ADAPT_DYNAMIC_TIME
+            if ( (.not. imexStepChanges) .and. (self % integratorType == TIME_ACCURATE) &
+                                         .and. (self % tFinal < huge(self % tFinal)) ) then
+               nStepsToFinal = (self % tFinal - initial_time) / self % dt
+               imexStepChanges = .not. AlmostEqual(nStepsToFinal, anint(nStepsToFinal), 1.0e-10_RP)
+            end if
+
+            if ( imexStepChanges ) then
+               if ( MPI_Process % isRoot ) then
+                  write(STD_OUT,'(A)') '*** ERROR: IMEX can only be used with a fixed time step. It requires:'
+                  write(STD_OUT,'(A)') '***    - "dt", without "cfl"'
+                  write(STD_OUT,'(A)') '***    - "autosave mode = iteration", and no time-based surface or Lamb vector saves'
+                  write(STD_OUT,'(A)') '***    - no time-based p-adaptation'
+                  write(STD_OUT,'(A)') '***    - "final time" - initial/restart time to be a multiple of "dt"'
+               end if
+               error stop
+            end if
+         end if
 
          if (.not. MPI_Process % isRoot ) return
 

@@ -1,0 +1,58 @@
+!
+!  horses.tools "fwh post" for CylinderFWHMerged.control (FWH surface merged with the BCs).
+!  The surface keys (boundaries to save, surface save ...) must be the same as in the simulation,
+!  they set the layout of the surface files. It must be run in serial.
+!
+tool type             = fwh post
+acoustic files pattern = RESULTS/surfaces/CylinderFWHMerged_fwh_*.surf.hsol
+has gradients         = .true.
+
+Flow equations        = "NS"
+mesh file name        = "../../../TestMeshes/CylinderNSpol3.mesh"
+Polynomial order      = 3
+mach number           = 0.3
+Reynolds number       = 200.0
+AOA theta             = 0.0
+AOA phi               = 90.0
+solution file name    = "RESULTS/FWHPostMerged.hsol"
+restart               = .false.
+riemann solver        = roe
+Discretization nodes  = Gauss
+
+acoustic analogy            = FWH
+acoustic analogy permeable  = .false.
+acoustic solid surface      = [InnerCylinder]
+observers flush interval    = 20
+
+! same surface keys as CylinderFWHMerged.control
+boundaries to save       = [InnerCylinder]
+surface save gradients   = .true.
+surface save utau        = .true.
+surface save utau vector = .true.
+surface save turbulent   = .true.
+
+#define acoustic observer 1
+   name     = side
+   position = [10.0, 0.5, 0.0]
+#end
+
+#define acoustic observer 2
+   name     = upstream
+   position = [0.0, 0.5, -10.0]
+#end
+
+#define boundary InnerCylinder
+  type = NoSlipWall
+#end
+
+#define boundary bottom__top
+  type = FreeSlipWall
+#end
+
+#define boundary back__left__front
+  type = Inflow
+#end
+
+#define boundary right
+  type = Outflow
+#end

@@ -322,12 +322,13 @@ module NoSlipWallBCClass
             real(kind=RP) :: qNorm, pressure_aux
             real(kind=RP) :: Q(NCONS)
             integer       :: i,j,zonefID,fID
+            real(kind=RP) :: e_int, invRho
    
    
             !$acc parallel loop gang present(mesh, zone, self % vWall, self % Twall, self % wallType) async(1) 
             do zonefID = 1, zone % no_of_faces
                fID = zone % faces(zonefID)
-               !$acc loop vector private(Q)            
+               !$acc loop vector private(Q, e_int, invRho)            
                do j = 0, mesh % faces(fID) % Nf(2)  ; do i = 0, mesh % faces(fID) % Nf(1)
                   
                   Q = mesh % faces(fID) % storage(1) % Q(:,i,j)
@@ -335,11 +336,18 @@ module NoSlipWallBCClass
 #if defined (SPALARTALMARAS)
                   Q(IRHOTHETA)   = -Q(IRHOTHETA)
 #endif
+                  ! internal energy BEFORE overwriting the momentum
+                  invRho = 1.0_RP / Q(IRHO)
+                  e_int  = invRho*(Q(IRHOE) - 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW))))
+
                   Q(IRHOU:IRHOW) = 2.0_RP * Q(IRHO)*self % vWall  - Q(IRHOU:IRHOW) 
          !        This boundary condition should be
          !        ---------------------------------
                   !Q(IRHOU:IRHOW) = Q(IRHOU:IRHOW) - 2.0_RP * sum(Q(IRHOU:IRHOW)*nHat)*nHat
-         
+
+                  ! rebuild total energy from the PRESERVED internal energy + the new kinetic energy
+                  Q(IRHOE) = Q(IRHO)*e_int + 0.5_RP*invRho*(POW2(Q(IRHOU))+POW2(Q(IRHOV))+POW2(Q(IRHOW)))
+
                   !Isothermal BC
                   Q(IRHOE) = Q(IRHOE) + self % wallType * (Q(IRHO) * self % Twall / (refValues % T * dimensionless % gammaM2 * thermodynamics % gammaMinus1) - Q(IRHOE))
    
