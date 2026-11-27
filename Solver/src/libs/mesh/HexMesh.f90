@@ -3756,8 +3756,8 @@ slavecoord:             DO l = 1, 4
 !
          implicit none
          type(Element), intent(in)  :: e
-         real(kind=RP), intent(in)  :: L(1:NDIM, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3))
-         real(kind=RP), intent(out) :: divL(1, 0:e % Nxyz(1), 0:e % Nxyz(2), 0:e % Nxyz(3))
+         real(kind=RP), intent(in)  :: L(1:, 0:, 0:, 0:)
+         real(kind=RP), intent(out) :: divL(1:, 0:, 0:, 0:)
 !
 !        ---------------
 !        Local variables
